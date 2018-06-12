@@ -75,7 +75,7 @@ type ChannelHop struct {
 // included within the Sphinx packet.
 type Hop struct {
 	// Channel is the active payment channel edge that this hop will travel
-	// along.
+	// along. This is the _incoming_ channel to this hop.
 	Channel *ChannelHop
 
 	// OutgoingTimeLock is the timelock value that should be used when
@@ -269,11 +269,6 @@ func newRoute(amtToSend, feeLimit lnwire.MilliSatoshi, sourceVertex Vertex,
 	// information for the first hop so the mapping is sound.
 	route.nextHopMap[sourceVertex] = pathEdges[0]
 
-	// The running amount is the total amount of satoshis required at this
-	// point in the route. We start this value at the amount we want to
-	// send to the destination. This value will then get successively
-	// larger as we compute the fees going backwards.
-	runningAmt := amtToSend
 	pathLength := len(pathEdges)
 	for i := pathLength - 1; i >= 0; i-- {
 		edge := pathEdges[i]
@@ -298,7 +293,7 @@ func newRoute(amtToSend, feeLimit lnwire.MilliSatoshi, sourceVertex Vertex,
 		// If this is the last hop, then we send the exact amount and
 		// pay no fee, as we're paying directly to the receiver, and
 		// there're no additional hops.
-		amtToForward := runningAmt
+		amtToForward := amtToSend
 		fee := lnwire.MilliSatoshi(0)
 
 		// If this isn't the last hop, to add enough funds to pay for
@@ -306,26 +301,17 @@ func newRoute(amtToSend, feeLimit lnwire.MilliSatoshi, sourceVertex Vertex,
 		if i != len(pathEdges)-1 {
 			// We'll grab the edge policy and per-hop payload of
 			// the prior hop so we can calculate fees properly.
-			prevEdge := pathEdges[i+1]
-			prevHop := route.Hops[i+1]
+			nextHop := route.Hops[i+1]
 
-			// The fee for this hop, will be based on how much the
-			// prior hop carried, as we'll need to increase the
-			// amount of satoshis incoming into this hop to
-			// properly pay the required fees.
-			prevAmount := prevHop.AmtToForward
-			fee = computeFee(prevAmount, prevEdge.ChannelEdgePolicy)
+			// The amount that this hop needs to forward is based
+			// on how much the prior hop carried plus the fee
+			// that needs to be paid to the prior hop
+			amtToForward = nextHop.AmtToForward + nextHop.Fee
 
-			// With the fee computed, we increment the total amount
-			// as we need to pay this fee. This value represents
-			// the amount of funds that will come _into_ this edge.
-			runningAmt += fee
-
-			// Otherwise, for a node to forward an HTLC, then
-			// following inequality most hold true:
-			//
-			//     * amt_in - fee >= amt_to_forward
-			amtToForward = runningAmt - fee
+			// The fee that needs to be paid to this hop is based
+			// on the amount that this hop needs to forward and
+			// its policy for the outgoing channel
+			fee = computeFee(amtToForward, nextHop.Channel.ChannelEdgePolicy)
 		}
 
 		// Now we create the hop struct for this point in the route.
@@ -346,10 +332,13 @@ func newRoute(amtToSend, feeLimit lnwire.MilliSatoshi, sourceVertex Vertex,
 			return nil, newErrf(ErrFeeLimitExceeded, err)
 		}
 
-		// As a sanity check, we ensure that the selected channel has
-		// enough capacity to forward the required amount which
-		// includes the fee dictated at each hop.
-		if nextHop.AmtToForward.ToSatoshis() > nextHop.Channel.Capacity {
+		// As a sanity check, we ensure that the incoming channel has
+		// enough capacity to carry the required amount which
+		// includes the fee dictated at each hop. Make the comparison
+		// in msat to prevent rounding errors.
+		if nextHop.AmtToForward + fee > lnwire.NewMSatFromSatoshis(
+			nextHop.Channel.Capacity) {
+
 			err := fmt.Sprintf("channel graph has insufficient "+
 				"capacity for the payment: need %v, have %v",
 				nextHop.AmtToForward.ToSatoshis(),
@@ -393,9 +382,10 @@ func newRoute(amtToSend, feeLimit lnwire.MilliSatoshi, sourceVertex Vertex,
 		route.prevHopMap[vertex] = hop.Channel
 	}
 
-	// The total amount required for this route will be the value the
-	// source extends to the first hop in the route.
-	route.TotalAmount = runningAmt
+	// The total amount required for this route will be the value
+	// that the first hop needs to forward plus the fee that
+	// the first hop charges for this.
+	route.TotalAmount = route.Hops[0].AmtToForward + route.Hops[0].Fee
 
 	return route, nil
 }

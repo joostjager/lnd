@@ -616,6 +616,124 @@ func TestKShortestPathFinding(t *testing.T) {
 	assertExpectedPath(t, paths[1], "roasbeef", "satoshi", "luoji")
 }
 
+func TestNewRoute(t *testing.T) {
+
+	var sourceKey [33]byte
+	sourceVertex := Vertex(sourceKey)
+
+	const (
+		startingHeight = 100
+		finalHopCLTV   = 1
+	)
+
+
+	createHop := func(feeRate lnwire.MilliSatoshi, 
+		capacity btcutil.Amount) (*ChannelHop) {
+
+		return &ChannelHop {
+			ChannelEdgePolicy: &channeldb.ChannelEdgePolicy {
+				Node: &channeldb.LightningNode{},
+				FeeProportionalMillionths: feeRate,
+			},
+			Capacity: capacity,
+		}
+	}
+
+	testCases := []struct { 
+		name 		    string
+		hops 	    	    []*ChannelHop
+		paymentAmount 	    lnwire.MilliSatoshi
+		expectedTotalAmount lnwire.MilliSatoshi
+		expectError	    bool
+		expectedErrorCode   errorCode
+	} {
+	{
+		// For a single hop payment, no fees are expected to be paid
+		name: "single hop", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(1000, 1000),
+		},
+		expectedTotalAmount: 100000,
+	}, {
+		// For a two hop payment, only the fee for the first hop
+		// needs to be paid
+		name: "two hop", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(1000, 1000), 
+			createHop(1000, 1000),
+		},
+		expectedTotalAmount: 100100,
+	}, {
+		// Insufficient capacity in first channel when fees are added
+		name: "two hop insufficient", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(1000, 100), 
+			createHop(1000, 1000),
+		},
+		expectError: true,
+		expectedErrorCode: ErrInsufficientCapacity,
+	}, {
+		// A three hop payment where the first and second hop
+		// will both charge 1 msat. The fee for the first hop
+		// is actually slightly higher than 1, because the amount 
+		// t0 fwd also includes the fee for the second hop. This
+		// gets rounded down to 1.
+		name: "three hop", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(10, 1000), 
+			createHop(10, 1000), 
+			createHop(10, 1000),
+		},
+		expectedTotalAmount: 100002,
+	}, {
+		// A three hop payment where the fee of the first hop
+		// is slightly higher (11) than the fee at the second hop,
+		// because of the increase amount to forward.
+		name: "three hop with fee carry over", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(10000, 1000), 
+			createHop(10000, 1000), 
+			createHop(10000, 1000),
+		},
+		expectedTotalAmount: 102010,
+	} }
+
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			route, err := newRoute(testCase.paymentAmount, 
+				noFeeLimit,
+				sourceVertex, testCase.hops, startingHeight,
+				finalHopCLTV)
+
+			if testCase.expectError {
+				expectedCode := testCase.expectedErrorCode
+				if err == nil || !IsError(err, expectedCode) {
+					t.Fatalf("expected newRoute to fail " + 
+						 "with error code %v", 
+						 expectedCode)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unable to create path: %v", err)
+				}
+
+				if route.TotalAmount != testCase.expectedTotalAmount {
+					t.Fatalf("Expected total amount is be %v" + 
+						", but got %v instead",
+						testCase.expectedTotalAmount,
+						route.TotalAmount)
+				}
+			}
+		})
+	}
+}
+
 func TestNewRoutePathTooLong(t *testing.T) {
 	t.Skip()
 
