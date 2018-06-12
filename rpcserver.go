@@ -3221,7 +3221,7 @@ func marshallRoute(route *routing.Route) *lnrpc.Route {
 	for i, hop := range route.Hops {
 		resp.Hops[i] = &lnrpc.Hop{
 			ChanId:           hop.Channel.ChannelID,
-			ChanCapacity:     int64(hop.Channel.Capacity),
+			ChanCapacity:     int64(hop.Channel.Bandwidth.ToSatoshis()),
 			AmtToForward:     int64(hop.AmtToForward.ToSatoshis()),
 			AmtToForwardMsat: int64(hop.AmtToForward),
 			Fee:              int64(hop.Fee.ToSatoshis()),
@@ -3271,7 +3271,8 @@ func unmarshallRoute(rpcroute *lnrpc.Route,
 
 		routingHop := &routing.ChannelHop{
 			ChannelEdgePolicy: channelEdgePolicy,
-			Capacity:          btcutil.Amount(hop.ChanCapacity),
+			Bandwidth:         lnwire.NewMSatFromSatoshis(
+				btcutil.Amount(hop.ChanCapacity)),
 			Chain:             edgeInfo.ChainHash,
 		}
 

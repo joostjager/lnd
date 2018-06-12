@@ -14,7 +14,6 @@ import (
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
-	"github.com/roasbeef/btcutil"
 )
 
 const (
@@ -55,9 +54,12 @@ type HopHint struct {
 // the particular edge, as well as the total capacity, and origin chain of the
 // channel itself.
 type ChannelHop struct {
-	// Capacity is the total capacity of the channel being traversed. This
-	// value is expressed for stability in satoshis.
-	Capacity btcutil.Amount
+	// Bandwidth is an estimate of the bandwidth of the channel being
+	// traversed. This property currently only exists to facilitate sanity
+	// checking of the routing algorithm. This value is in msat, because
+	// msat-based pending amounts are subtracted from the on-chain capacity
+	// in sat.
+	Bandwidth lnwire.MilliSatoshi
 
 	// Chain is a 32-byte has that denotes the base blockchain network of
 	// the channel. The 32-byte hash is the "genesis" block of the
@@ -343,15 +345,13 @@ func newRoute(amtToSend, feeLimit lnwire.MilliSatoshi, sourceVertex Vertex,
 
 		// As a sanity check, we ensure that the incoming channel has
 		// enough capacity to carry the required amount which
-		// includes the fee dictated at each hop. Make the comparison
-		// in msat to prevent rounding errors.
-		if nextHop.AmtToForward + fee > lnwire.NewMSatFromSatoshis(
-			nextHop.Channel.Capacity) {
+		// includes the fee dictated at each hop.
+		if nextHop.AmtToForward + fee > nextHop.Channel.Bandwidth {
 
 			err := fmt.Sprintf("channel graph has insufficient "+
 				"capacity for the payment: need %v, have %v",
-				nextHop.AmtToForward.ToSatoshis(),
-				nextHop.Channel.Capacity)
+				nextHop.AmtToForward + fee,
+				nextHop.Channel.Bandwidth)
 
 			return nil, newErrf(ErrInsufficientCapacity, err)
 		}
@@ -589,7 +589,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 
 			next[fromVertex] = &ChannelHop{
 				ChannelEdgePolicy: edge,
-				Capacity:          bandwidth.ToSatoshis(),
+				Bandwidth:         bandwidth,
 			}
 
 			// Add this new node to our heap as we'd like to further
