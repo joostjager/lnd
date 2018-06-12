@@ -137,6 +137,9 @@ type Config struct {
 	// TODO(roasbeef): make into an interface
 	Graph *channeldb.ChannelGraph
 
+	// NodeHistory keeps track of various node fitness metrics
+	NodeHistory *channeldb.NodeHistory
+
 	// Chain is the router's source to the most up-to-date blockchain data.
 	// All incoming advertised channels will be checked against the chain
 	// to ensure that the channels advertised are still open.
@@ -1924,6 +1927,16 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 				return preImage, nil, sendError
 			}
 		}
+
+		log.Info("Updating metrics")
+		for _, hop := range route.Hops {
+			key, _ := hop.Channel.Node.PubKey()
+			err := r.cfg.NodeHistory.IncreaseSuccessfulRoutesCount(key)
+			if err != nil {
+				log.Errorf("Metrics error: %v", err)
+			}
+		}
+
 
 		return preImage, route, nil
 	}

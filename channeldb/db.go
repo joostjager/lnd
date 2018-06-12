@@ -630,6 +630,11 @@ func (d *DB) ChannelGraph() *ChannelGraph {
 	return &ChannelGraph{d}
 }
 
+// NodeHistory returns a new instance of the node fitness metrics store
+func (d *DB) NodeHistory() *NodeHistory {
+	return &NodeHistory{d}
+}
+
 func getLatestDBVersion(versions []version) uint32 {
 	return versions[len(versions)-1].number
 }

@@ -384,6 +384,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	}
 	s.chanRouter, err = routing.New(routing.Config{
 		Graph:     chanGraph,
+		NodeHistory: chanDB.NodeHistory(),
 		Chain:     cc.chainIO,
 		ChainView: cc.chainView,
 		SendToSwitch: func(firstHopPub [33]byte,
