@@ -455,7 +455,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	additionalEdges map[Vertex][]*channeldb.ChannelEdgePolicy,
 	sourceNode *channeldb.LightningNode, target *btcec.PublicKey,
 	ignoredNodes map[Vertex]struct{}, ignoredEdges map[uint64]struct{},
-	amt lnwire.MilliSatoshi,
+	amt lnwire.MilliSatoshi, feeLimit lnwire.MilliSatoshi,
 	bandwidthHints map[uint64]lnwire.MilliSatoshi) ([]*ChannelHop, error) {
 
 	var err error
@@ -512,6 +512,8 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		}
 	}
 
+	sourceVertex := Vertex(sourceNode.PubKeyBytes)
+
 	// We can't always assume that the end destination is publicly
 	// advertised to the network and included in the graph.ForEachNode call
 	// above, so we'll manually include the target node. The target
@@ -562,7 +564,22 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 
 		// Compute fee based on the amount that needs to be send to the
 		// next node.
-		fee := computeFee(amountToSend, edge)
+		var fee lnwire.MilliSatoshi
+		if fromVertex != sourceVertex {
+			fee = computeFee(amountToSend, edge)
+		} else {
+			// Source node has no precedessor to pay fee
+			// and fee should therefore also not be included in
+			// fee limit check and edge weight.
+			fee = 0
+		}
+
+		// Check if accumulated fees would exceed fee limit when
+		// this node would be added to the path.
+		totalFee := amountToSend + fee - amt
+		if totalFee > feeLimit {
+			return
+		}
 
 		// Compute the tentative distance to this new channel/edge which
 		// is the distance from our toNode to the target node plus the 
@@ -578,7 +595,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		if tempDist < distance[fromVertex].dist && bandwidth >= amountToSend &&
 			amountToSend >= edge.MinHTLC && edge.TimeLockDelta != 0 {
 
-			amountToReceive := amountToSend + nodeInfo.fee
+			amountToReceive := amountToSend + fee
 
 			distance[fromVertex] = nodeWithDist{
 				dist:            tempDist,
@@ -601,7 +618,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	// TODO(roasbeef): also add path caching
 	//  * similar to route caching, but doesn't factor in the amount
 
-	sourceVertex := Vertex(sourceNode.PubKeyBytes)
+	
 
 	// To start, our target node will the sole item within our distance
 	// heap.
@@ -711,7 +728,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 // algorithm in a block box manner.
 func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	source *channeldb.LightningNode, target *btcec.PublicKey,
-	amt lnwire.MilliSatoshi, numPaths uint32,
+	amt lnwire.MilliSatoshi, feeLimit lnwire.MilliSatoshi, numPaths uint32,
 	bandwidthHints map[uint64]lnwire.MilliSatoshi) ([][]*ChannelHop, error) {
 
 	ignoredEdges := make(map[uint64]struct{})
@@ -729,7 +746,7 @@ func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	// satoshis along the path before fees are calculated.
 	startingPath, err := findPath(
 		tx, graph, nil, source, target, ignoredVertexes, ignoredEdges,
-		amt, bandwidthHints,
+		amt, feeLimit, bandwidthHints,
 	)
 	if err != nil {
 		log.Errorf("Unable to find path: %v", err)
@@ -803,7 +820,7 @@ func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 			// shortest path from the spur node to the destination.
 			spurPath, err := findPath(
 				tx, graph, nil, spurNode, target,
-				ignoredVertexes, ignoredEdges, amt,
+				ignoredVertexes, ignoredEdges, amt, feeLimit,
 				bandwidthHints,
 			)
 
