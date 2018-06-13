@@ -333,7 +333,8 @@ var basicGraphPathFindingTests = []basicGraphPathFindingTestCase{
 	       {alias: "phamnuwen", fwdAmount: 100000200, fee: 10010020, timeLock: 102},
 	       {alias: "sophon", fwdAmount: 100000000, fee: 200, timeLock: 101},
 	       {alias: "elst", fwdAmount: 100000000, fee: 0, timeLock: 101},
-        }}}
+	}}}
+	// TODO(joostjager): Add findPath test for fee limit
 
 func TestBasicGraphPathFinding(t *testing.T) {
 	t.Parallel()
@@ -634,14 +635,14 @@ func TestNewRoute(t *testing.T) {
 
 
 	createHop := func(feeRate lnwire.MilliSatoshi, 
-		capacity btcutil.Amount) (*ChannelHop) {
+		bandwidth lnwire.MilliSatoshi) (*ChannelHop) {
 
 		return &ChannelHop {
 			ChannelEdgePolicy: &channeldb.ChannelEdgePolicy {
 				Node: &channeldb.LightningNode{},
 				FeeProportionalMillionths: feeRate,
 			},
-			Capacity: capacity,
+			Bandwidth: bandwidth,
 		}
 	}
 
@@ -652,33 +653,37 @@ func TestNewRoute(t *testing.T) {
 		expectedTotalAmount lnwire.MilliSatoshi
 		expectError	    bool
 		expectedErrorCode   errorCode
+		feeLimit	    lnwire.MilliSatoshi
 	} {
 	{
 		// For a single hop payment, no fees are expected to be paid
 		name: "single hop", 
 		paymentAmount: 100000,
 		hops: []*ChannelHop { 
-			createHop(1000, 1000),
+			createHop(1000, 1000000),
 		},
 		expectedTotalAmount: 100000,
+		feeLimit: noFeeLimit,
 	}, {
 		// For a two hop payment, only the fee for the first hop
 		// needs to be paid
 		name: "two hop", 
 		paymentAmount: 100000,
 		hops: []*ChannelHop { 
-			createHop(1000, 1000), 
-			createHop(1000, 1000),
+			createHop(1000, 1000000), 
+			createHop(1000, 1000000),
 		},
 		expectedTotalAmount: 100100,
+		feeLimit: noFeeLimit,
 	}, {
 		// Insufficient capacity in first channel when fees are added
 		name: "two hop insufficient", 
 		paymentAmount: 100000,
 		hops: []*ChannelHop { 
-			createHop(1000, 100), 
-			createHop(1000, 1000),
+			createHop(1000, 100000), 
+			createHop(1000, 1000000),
 		},
+		feeLimit: noFeeLimit,
 		expectError: true,
 		expectedErrorCode: ErrInsufficientCapacity,
 	}, {
@@ -690,11 +695,12 @@ func TestNewRoute(t *testing.T) {
 		name: "three hop", 
 		paymentAmount: 100000,
 		hops: []*ChannelHop { 
-			createHop(10, 1000), 
-			createHop(10, 1000), 
-			createHop(10, 1000),
+			createHop(10, 1000000), 
+			createHop(10, 1000000), 
+			createHop(10, 1000000),
 		},
 		expectedTotalAmount: 100002,
+		feeLimit: noFeeLimit,
 	}, {
 		// A three hop payment where the fee of the first hop
 		// is slightly higher (11) than the fee at the second hop,
@@ -702,18 +708,59 @@ func TestNewRoute(t *testing.T) {
 		name: "three hop with fee carry over", 
 		paymentAmount: 100000,
 		hops: []*ChannelHop { 
-			createHop(10000, 1000), 
-			createHop(10000, 1000), 
-			createHop(10000, 1000),
+			createHop(10000, 1000000), 
+			createHop(10000, 1000000), 
+			createHop(10000, 1000000),
 		},
 		expectedTotalAmount: 102010,
-	} }
+		feeLimit: noFeeLimit,
+	}, 
+	// Check fee limit behaviour
+	{
+		name: "two hop success with fee limit (greater)", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(1000, 1000000), 
+			createHop(1000, 1000000),
+		},
+		expectedTotalAmount: 100100,
+		feeLimit: 150,
+	},{
+		name: "two hop success with fee limit (equal)", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(1000, 1000000), 
+			createHop(1000, 1000000),
+		},
+		expectedTotalAmount: 100100,
+		feeLimit: 100,
+	},{
+		name: "two hop failure with fee limit (smaller)", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(1000, 1000000), 
+			createHop(1000, 1000000),
+		},
+		feeLimit: 50,
+		expectError: true,
+		expectedErrorCode: ErrFeeLimitExceeded,
+	},{
+		name: "two hop failure with fee limit (zero)", 
+		paymentAmount: 100000,
+		hops: []*ChannelHop { 
+			createHop(1000, 1000000), 
+			createHop(1000, 1000000),
+		},
+		feeLimit: 0,
+		expectError: true,
+		expectedErrorCode: ErrFeeLimitExceeded,
+	}, }
 
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			route, err := newRoute(testCase.paymentAmount, 
-				noFeeLimit,
+				testCase.feeLimit,
 				sourceVertex, testCase.hops, startingHeight,
 				finalHopCLTV)
 
@@ -721,8 +768,9 @@ func TestNewRoute(t *testing.T) {
 				expectedCode := testCase.expectedErrorCode
 				if err == nil || !IsError(err, expectedCode) {
 					t.Fatalf("expected newRoute to fail " + 
-						 "with error code %v", 
-						 expectedCode)
+						 "with error code %v but got " +
+						 "%v instead", 
+						 expectedCode, err)
 				}
 			} else {
 				if err != nil {
@@ -944,48 +992,6 @@ func TestRouteFailDisabledEdge(t *testing.T) {
 	)
 	if !IsError(err, ErrNoPathFound) {
 		t.Fatalf("graph shouldn't be able to support payment: %v", err)
-	}
-}
-
-// TestRouteExceededFeeLimit tests that routes respect the fee limit imposed.
-func TestRouteExceededFeeLimit(t *testing.T) {
-	t.Parallel()
-
-	graph, cleanUp, aliases, err := parseTestGraph(basicGraphFilePath)
-	defer cleanUp()
-	if err != nil {
-		t.Fatalf("unable to create graph: %v", err)
-	}
-
-	sourceNode, err := graph.SourceNode()
-	if err != nil {
-		t.Fatalf("unable to fetch source node: %v", err)
-	}
-	sourceVertex := Vertex(sourceNode.PubKeyBytes)
-
-	ignoredVertices := make(map[Vertex]struct{})
-	ignoredEdges := make(map[uint64]struct{})
-
-	// Find a path to send 100 satoshis from roasbeef to sophon.
-	target := aliases["sophon"]
-	amt := lnwire.NewMSatFromSatoshis(100)
-	path, err := findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertices,
-		ignoredEdges, amt, nil,
-	)
-	if err != nil {
-		t.Fatalf("unable to find path from roasbeef to phamnuwen for "+
-			"100 satoshis: %v", err)
-	}
-
-	// We'll now purposefully set a fee limit of 0 to trigger the exceeded
-	// fee limit error. This should work since the path retrieved spans
-	// multiple hops incurring a fee.
-	feeLimit := lnwire.NewMSatFromSatoshis(0)
-
-	_, err = newRoute(amt, feeLimit, sourceVertex, path, 100, 1)
-	if !IsError(err, ErrFeeLimitExceeded) {
-		t.Fatalf("route should've exceeded fee limit: %v", err)
 	}
 }
 
