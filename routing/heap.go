@@ -18,10 +18,10 @@ type nodeWithDist struct {
 
 	// amountToReceive is the amount that should be received by this node. 
 	// Either as final payment to the final node or as an intermediate 
-	// amoun that includes also the fees for subsequent hops
+	// amount that includes also the fees for subsequent hops.
 	amountToReceive lnwire.MilliSatoshi
 
-	// fee is the fee that this node is charging for forwarding
+	// fee is the fee that this node is charging for forwarding.
 	fee lnwire.MilliSatoshi
 }
 

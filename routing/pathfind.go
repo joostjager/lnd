@@ -54,11 +54,12 @@ type HopHint struct {
 // the particular edge, as well as the total capacity, and origin chain of the
 // channel itself.
 type ChannelHop struct {
-	// Bandwidth is an estimate of the bandwidth of the channel being
-	// traversed. This property currently only exists to facilitate sanity
-	// checking of the routing algorithm. This value is in msat, because
-	// msat-based pending amounts are subtracted from the on-chain capacity
-	// in sat.
+	// Bandwidth is an estimate of the maximum amount that can be sent
+	// through the channel in the direction indicated by ChannelEdgePolicy.
+	// It is based on the on-chain capacity of the channel, bandwidth
+	// hints passed in via SendRoute RPC and/or running amounts that
+	// represent pending payments. These running amounts have msat as
+	// unit. Therefore this property is expressed in msat too.
 	Bandwidth lnwire.MilliSatoshi
 
 	// Chain is a 32-byte has that denotes the base blockchain network of
@@ -99,7 +100,6 @@ type Hop struct {
 // of a channel edge. ChannelEdgePolicy only contains to destination node
 // of the edge.
 type edgePolicyWithSource struct {
-	// sourceNode
 	sourceNode *channeldb.LightningNode
 	edge       *channeldb.ChannelEdgePolicy
 }
@@ -473,7 +473,9 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	var nodeHeap distanceHeap
 
 	// For each node in the graph, we create an entry in the distance
-	// map for the node set with a distance of "infinity".
+	// map for the node set with a distance of "infinity". graph.ForEachNode
+	// also returns the source node, so there is no need to add the source
+	// node explictly.
 	distance := make(map[Vertex]nodeWithDist)
 	if err := graph.ForEachNode(tx, func(_ *bolt.Tx, node *channeldb.LightningNode) error {
 		// TODO(roasbeef): with larger graph can just use disk seeks
@@ -498,7 +500,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		}
 
 		// Build reverse lookup to find incoming edges. Needed
-		// because search is taken place from target to source
+		// because search is taken place from target to source.
 		for _, outgoingEdgePolicy := range outgoingEdgePolicies {
 			toVertex := outgoingEdgePolicy.Node.PubKeyBytes
 			incomingEdgePolicy := &edgePolicyWithSource{
@@ -562,17 +564,16 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 
 		amountToSend := nodeInfo.amountToReceive
 
-		// Compute fee based on the amount that needs to be send to the
-		// next node.
+		// Compute fee that fromNode is charging. It is based on the 
+		// amount that needs to be sent to the next node in the route.
+
+		// Source node has no precedessor to pay a fee. Therefore set
+		// fee to zero, because it should not be included in the
+		// fee limit check and edge weight.
 		var fee lnwire.MilliSatoshi
 		if fromVertex != sourceVertex {
 			fee = computeFee(amountToSend, edge)
-		} else {
-			// Source node has no precedessor to pay fee
-			// and fee should therefore also not be included in
-			// fee limit check and edge weight.
-			fee = 0
-		}
+		} 
 
 		// Check if accumulated fees would exceed fee limit when
 		// this node would be added to the path.
@@ -586,15 +587,47 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		// weight of this edge.
 		tempDist := nodeInfo.dist + edgeWeight(fee, edge.TimeLockDelta)
 
-		// If this new tentative distance is better than the current
-		// best known distance to this node, then we record the new
-		// better distance, and also populate our "next hop" map with
-		// this edge. We'll also shave off irrelevant edges by adding
-		// the sufficient capacity of an edge and clearing their
-		// min-htlc amount to our relaxation condition.
+
+		// If this new tentative distance is not better than the current
+		// best known distance to this node, return. 
+		if tempDist >= distance[fromVertex].dist {
+			return
+		} 
+		
+		// If the estimated band width of the channel edge is not able
+		// to carry the amount that needs to be send, return.
+		if bandwidth < amountToSend {
+			return
+		}
+
+		// If the amountToSend is less than the minimum required amount,
+		// return.
+		if amountToSend < edge.MinHTLC {
+			return	
+		} 
+		
+		// If the edge has no time lock delta, the payment will always
+		// fail, so return.
+		
+		// TODO(joostjager): Is this really true? Can't it be that
+		// nodes take this risk in exchange for a extraordinary high
+		// fee?
+		if edge.TimeLockDelta == 0 {
+			return
+		}
+
+		// All conditions are met and this new tentative distance is 
+		// better than the current best known distance to this node.
+		// The new better distance is recorded, and also our 
+		// "next hop" map is populated with this edge. 
 		if tempDist < distance[fromVertex].dist && bandwidth >= amountToSend &&
 			amountToSend >= edge.MinHTLC && edge.TimeLockDelta != 0 {
 
+			// amountReceive is the amount that the node that
+			// is added to the distance map needs to receive from
+			// a (to be found) previous node in the route. That
+			// previous node will need to pay the amount that this
+			// node forwards plus the fee it charges.
 			amountToReceive := amountToSend + fee
 
 			distance[fromVertex] = nodeWithDist{
@@ -643,7 +676,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		pivot := Vertex(bestNode.PubKeyBytes)
 		err := bestNode.ForEachChannel(tx, func(tx *bolt.Tx,
 			edgeInfo *channeldb.ChannelEdgeInfo,
-			outEdge *channeldb.ChannelEdgePolicy, inEdge *channeldb.ChannelEdgePolicy) error {
+			outEdge, inEdge *channeldb.ChannelEdgePolicy) error {
 
 			// We'll query the lower layer to see if we can obtain
 			// any more up to date information concerning the
@@ -687,8 +720,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 			"destination")
 	}
 
-	// If the potential route is below the max hop limit, then we'll use
-	// the nextHop map to unravel the path.
+	// Use the nextHop map to unravel the forward path from source to target.
 	pathEdges := make([]*ChannelHop, 0, len(next))
 	currentNode := sourceVertex
 	for currentNode != targetVertex { // TODO(roasbeef): assumes no cycles

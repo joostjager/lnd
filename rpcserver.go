@@ -3272,7 +3272,7 @@ func unmarshallRoute(rpcroute *lnrpc.Route,
 		routingHop := &routing.ChannelHop{
 			ChannelEdgePolicy: channelEdgePolicy,
 			Bandwidth:         lnwire.NewMSatFromSatoshis(
-				btcutil.Amount(hop.ChanCapacity)),
+						btcutil.Amount(hop.ChanCapacity)),
 			Chain:             edgeInfo.ChainHash,
 		}
 

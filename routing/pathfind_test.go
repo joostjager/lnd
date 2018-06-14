@@ -306,21 +306,23 @@ type basicGraphPathFindingTestCase struct {
 }
 
 var basicGraphPathFindingTests = []basicGraphPathFindingTestCase{
-	// Basic route with one intermediate hop
+	// Basic route with one intermediate hop.
 	{target: "sophon", paymentAmt: 100, feeLimit: noFeeLimit,
 		expectedTotalTimeLock: 102, expectedTotalAmt: 100110,
 		expectedHops: []expectedHop{
 			{alias: "songoku", fwdAmount: 100000, fee: 110, timeLock: 101},
 			{alias: "sophon", fwdAmount: 100000, fee: 0, timeLock: 101},
 		}},
-	// Basic direct (one hop) route
+
+	// Basic direct (one hop) route.
 	{target: "luoji", paymentAmt: 100, feeLimit: noFeeLimit,
 		expectedTotalTimeLock: 101, expectedTotalAmt: 100000,
 		expectedHops: []expectedHop{
 			{alias: "luoji", fwdAmount: 100000, fee: 0, timeLock: 101},
 		}},
+
 	// Three hop route where fees need to be added in to the forwarding amount.
-	// The high fee hop phamnewun should be avoided
+	// The high fee hop phamnewun should be avoided.
 	{target: "elst", paymentAmt: 50000, feeLimit: noFeeLimit,
 		expectedTotalTimeLock: 103, expectedTotalAmt: 50050210,
 		expectedHops: []expectedHop{
@@ -328,6 +330,7 @@ var basicGraphPathFindingTests = []basicGraphPathFindingTestCase{
 			{alias: "sophon", fwdAmount: 50000000, fee: 200, timeLock: 101},
 			{alias: "elst", fwdAmount: 50000000, fee: 0, timeLock: 101},
 		}},
+
 	// Three hop route where fees need to be added in to the forwarding amount.
 	// However this time the fwdAmount becomes too large for the roasbeef <->
 	// songoku channel. Then there is no other option than to choose the
@@ -340,7 +343,8 @@ var basicGraphPathFindingTests = []basicGraphPathFindingTestCase{
 			{alias: "sophon", fwdAmount: 100000000, fee: 200, timeLock: 101},
 			{alias: "elst", fwdAmount: 100000000, fee: 0, timeLock: 101},
 		}},
-	// Basic route with fee limit
+		
+	// Basic route with fee limit.
 	{target: "sophon", paymentAmt: 100, feeLimit: 50,
 		expectFailureNoPath: true,
 	}}
@@ -453,7 +457,7 @@ func testBasicGraphPathFindingCase(t *testing.T, graph *channeldb.ChannelGraph,
 			exitHop[:], hopPayloads[lastHopIndex].NextAddress)
 	}
 
-	var expectedTotalFee lnwire.MilliSatoshi = 0
+	var expectedTotalFee lnwire.MilliSatoshi
 	for i := 0; i < expectedHopCount; i++ {
 		// We'll ensure that the amount to forward, and fees
 		// computed for each hop are correct.
