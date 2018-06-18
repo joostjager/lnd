@@ -659,7 +659,13 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		pivot := channeldb.Vertex(bestNode.PubKeyBytes)
 		err := bestNode.ForEachChannel(tx, func(tx *bolt.Tx,
 			edgeInfo *channeldb.ChannelEdgeInfo,
-			outEdge, inEdge *channeldb.ChannelEdgePolicy) error {
+			_, inEdge *channeldb.ChannelEdgePolicy) error {
+
+			// If there is no edge policy for this candidate
+			// node, skip.
+			if inEdge == nil {
+				return nil
+			}
 
 			// We'll query the lower layer to see if we can obtain
 			// any more up to date information concerning the
@@ -674,7 +680,19 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 				)
 			}
 
-			processEdge(outEdge.Node, inEdge, edgeBandwidth, pivot)
+			channelSourcePubKeyBytes := edgeInfo.OtherNodeKeyBytes(pivot[:])
+			channelSourcePubKey, err := btcec.ParsePubKey(
+				channelSourcePubKeyBytes[:], btcec.S256())
+			if err != nil {
+				return err
+			}
+		
+			channelSource, err := graph.FetchLightningNode(channelSourcePubKey)
+			if err != nil {
+				return err
+			}
+	
+			processEdge(channelSource, inEdge, edgeBandwidth, pivot)
 
 			// TODO(roasbeef): return min HTLC as error in end?
 

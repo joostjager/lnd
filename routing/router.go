@@ -2127,6 +2127,11 @@ func (r *ChannelRouter) ForAllOutgoingChannels(cb func(*channeldb.ChannelEdgeInf
 
 	return r.selfNode.ForEachChannel(nil, func(_ *bolt.Tx, c *channeldb.ChannelEdgeInfo,
 		e, _ *channeldb.ChannelEdgePolicy) error {
+		
+		// Skip channels with unknown policy
+		if e == nil {
+			return nil
+		}
 
 		return cb(c, e)
 	})
