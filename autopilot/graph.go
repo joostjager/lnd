@@ -85,6 +85,11 @@ func (d dbNode) ForEachChannel(cb func(ChannelEdge) error) error {
 	return d.node.ForEachChannel(d.tx, func(tx *bolt.Tx,
 		ei *channeldb.ChannelEdgeInfo, ep, _ *channeldb.ChannelEdgePolicy) error {
 
+		// Skip channels for which no outgoing edge policy is available.
+		if ep == nil {
+			return nil
+		}
+
 		pubkey, _ := ep.Node.PubKey()
 		edge := ChannelEdge{
 			Channel: Channel{

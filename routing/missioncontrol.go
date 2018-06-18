@@ -193,18 +193,18 @@ func (m *missionControl) NewPaymentSession(routeHints [][]HopHint,
 			// we'll need to look at the next hint's start node. If
 			// we've reached the end of the hints list, we can
 			// assume we've reached the destination.
-			endNode := &channeldb.LightningNode{}
+			var key *btcec.PublicKey
 			if i != len(routeHint)-1 {
-				endNode.AddPubKey(routeHint[i+1].NodeID)
+				key = routeHint[i+1].NodeID
 			} else {
-				endNode.AddPubKey(target)
+				key = target
 			}
 
 			// Finally, create the channel edge from the hop hint
 			// and add it to list of edges corresponding to the node
 			// at the start of the channel.
 			edge := &channeldb.ChannelEdgePolicy{
-				Node:      endNode,
+				Node:      channeldb.NewVertex(key),
 				ChannelID: hopHint.ChannelID,
 				FeeBaseMSat: lnwire.MilliSatoshi(
 					hopHint.FeeBaseMSat,
@@ -372,7 +372,7 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	// to our destination, respecting the recommendations from
 	// missionControl.
 	path, err := findPath(
-		nil, p.mc.graph, p.additionalEdges, p.mc.selfNode,
+		nil, p.mc.graph, p.additionalEdges, p.mc.selfNode.PubKeyBytes,
 		payment.Target, pruneView.vertexes, pruneView.edges,
 		payment.Amount, payment.FeeLimit, p.bandwidthHints,
 	)
