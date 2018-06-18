@@ -1794,7 +1794,7 @@ func (r *rpcServer) savePayment(route *routing.Route,
 
 	paymentPath := make([][33]byte, len(route.Hops))
 	for i, hop := range route.Hops {
-		hopPub := hop.Channel.Node.PubKeyBytes
+		hopPub := hop.Channel.Node
 		copy(paymentPath[i][:], hopPub[:])
 	}
 
@@ -3078,15 +3078,11 @@ func (r *rpcServer) GetNodeInfo(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	pubKey, err := btcec.ParsePubKey(pubKeyBytes, btcec.S256())
-	if err != nil {
-		return nil, err
-	}
 
 	// With the public key decoded, attempt to fetch the node corresponding
 	// to this public key. If the node cannot be found, then an error will
 	// be returned.
-	node, err := graph.FetchLightningNode(pubKey)
+	node, err := graph.FetchLightningNode(pubKeyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -3259,12 +3255,10 @@ func unmarshallRoute(rpcroute *lnrpc.Route,
 		var channelEdgePolicy *channeldb.ChannelEdgePolicy
 
 		switch {
-		case bytes.Equal(node.PubKeyBytes[:], c1.Node.PubKeyBytes[:]):
+		case bytes.Equal(node.PubKeyBytes[:], c1.Node[:]):
 			channelEdgePolicy = c2
-			node = c2.Node
-		case bytes.Equal(node.PubKeyBytes[:], c2.Node.PubKeyBytes[:]):
+		case bytes.Equal(node.PubKeyBytes[:], c2.Node[:]):
 			channelEdgePolicy = c1
-			node = c1.Node
 		default:
 			return nil, fmt.Errorf("could not find channel edge for hop=%d", i)
 		}
@@ -3689,6 +3683,12 @@ func (r *rpcServer) FeeReport(ctx context.Context,
 	var feeReports []*lnrpc.ChannelFeeReport
 	err = selfNode.ForEachChannel(nil, func(_ *bolt.Tx, chanInfo *channeldb.ChannelEdgeInfo,
 		edgePolicy, _ *channeldb.ChannelEdgePolicy) error {
+
+		// Self node should always have policies for its channels.
+		if edgePolicy == nil {
+			return fmt.Errorf("no policy for outgoing channel %v ",
+				chanInfo.ChannelID)
+		}
 
 		// We'll compute the effective fee rate by converting from a
 		// fixed point fee rate to a floating point fee rate. The fee

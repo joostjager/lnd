@@ -98,6 +98,8 @@ type ChannelGraphSource interface {
 	// graph.
 	ForEachChannel(func(chanInfo *channeldb.ChannelEdgeInfo,
 		e1, e2 *channeldb.ChannelEdgePolicy) error) error
+
+	FetchLightningNode(pub []byte) (*channeldb.LightningNode, error)
 }
 
 // FeeSchema is the set fee configuration for a Lightning Node on the network.
@@ -1388,14 +1390,14 @@ func (r *ChannelRouter) FindRoutes(target *btcec.PublicKey,
 	// we'll execute our KSP algorithm to find the k-shortest paths from
 	// our source to the destination.
 	shortestPaths, err := findPaths(
-		tx, r.cfg.Graph, r.selfNode, target, amt, feeLimit, numPaths,
+		tx, r.cfg.Graph, r.selfNode.PubKeyBytes, target, amt, feeLimit, numPaths,
 		bandwidthHints,
 	)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-
+	
 	tx.Rollback()
 
 	// Now that we have a set of paths, we'll need to turn them into
@@ -1440,16 +1442,11 @@ func generateSphinxPacket(route *Route, paymentHash []byte) ([]byte,
 		// We create a new instance of the public key to avoid possibly
 		// mutating the curve parameters, which are unset in a higher
 		// level in order to avoid spamming the logs.
-		nodePub, err := hop.Channel.Node.PubKey()
+		pub, err := btcec.ParsePubKey(hop.Channel.Node[:], btcec.S256())
 		if err != nil {
 			return nil, nil, err
 		}
-		pub := btcec.PublicKey{
-			Curve: btcec.S256(),
-			X:     nodePub.X,
-			Y:     nodePub.Y,
-		}
-		nodes[i] = &pub
+		nodes[i] = pub
 	}
 
 	// Next we generate the per-hop payload which gives each node within
@@ -1707,7 +1704,7 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 		// Attempt to send this payment through the network to complete
 		// the payment. If this attempt fails, then we'll continue on
 		// to the next available route.
-		firstHop := route.Hops[0].Channel.Node.PubKeyBytes
+		firstHop := route.Hops[0].Channel.Node
 		preImage, sendError = r.cfg.SendToSwitch(
 			firstHop, htlcAdd, circuit,
 		)
@@ -2128,6 +2125,11 @@ func (r *ChannelRouter) ForAllOutgoingChannels(cb func(*channeldb.ChannelEdgeInf
 	return r.selfNode.ForEachChannel(nil, func(_ *bolt.Tx, c *channeldb.ChannelEdgeInfo,
 		e, _ *channeldb.ChannelEdgePolicy) error {
 
+		// Skip channels with unknown policy
+		if e == nil {
+			return nil
+		}
+
 		return cb(c, e)
 	})
 }
@@ -2216,4 +2218,13 @@ func (r *ChannelRouter) IsStaleEdgePolicy(chanID lnwire.ShortChannelID,
 	}
 
 	return false
+}
+
+// FetchLightningNode retrieves full node information based on a public key.
+//
+// NOTE: This method is part of the ChannelGraphSource interface.
+func (r *ChannelRouter) FetchLightningNode(pub []byte) (
+	*channeldb.LightningNode, error) {
+
+	return r.cfg.Graph.FetchLightningNode(pub)
 }

@@ -29,6 +29,7 @@ type testCtx struct {
 	graph *channeldb.ChannelGraph
 
 	aliases map[string]*btcec.PublicKey
+	nodeMap map[channeldb.Vertex]string
 
 	chain *mockChain
 
@@ -78,6 +79,7 @@ func createTestCtx(startingHeight uint32, testGraph ...string) (*testCtx, func()
 	var (
 		graph      *channeldb.ChannelGraph
 		sourceNode *channeldb.LightningNode
+		nodeMap	   map[channeldb.Vertex]string
 		cleanup    func()
 		err        error
 	)
@@ -105,7 +107,7 @@ func createTestCtx(startingHeight uint32, testGraph ...string) (*testCtx, func()
 	} else {
 		// Otherwise, we'll attempt to locate and parse out the file
 		// that encodes the graph that our tests should be run against.
-		graph, cleanup, aliasMap, err = parseTestGraph(testGraph[0])
+		graph, cleanup, aliasMap, nodeMap, err = parseTestGraph(testGraph[0])
 		if err != nil {
 			return nil, nil, fmt.Errorf("unable to create test graph: %v", err)
 		}
@@ -143,6 +145,7 @@ func createTestCtx(startingHeight uint32, testGraph ...string) (*testCtx, func()
 		router:    router,
 		graph:     graph,
 		aliases:   aliasMap,
+		nodeMap:   nodeMap,
 		chain:     chain,
 		chainView: chainView,
 	}
@@ -255,9 +258,9 @@ func TestFindRoutesWithFeeLimit(t *testing.T) {
 		t.Fatalf("expected 2 hops, got %d", len(hops))
 	}
 
-	if hops[0].Channel.Node.Alias != "songoku" {
+	if ctx.nodeMap[hops[0].Channel.Node] != "songoku" {
 		t.Fatalf("expected first hop through songoku, got %s",
-			hops[0].Channel.Node.Alias)
+			ctx.nodeMap[hops[0].Channel.Node])
 	}
 }
 
@@ -333,10 +336,10 @@ func TestSendPaymentRouteFailureFallback(t *testing.T) {
 	}
 
 	// The route should have satoshi as the first hop.
-	if route.Hops[0].Channel.Node.Alias != "satoshi" {
+	if ctx.nodeMap[route.Hops[0].Channel.Node] != "satoshi" {
 		t.Fatalf("route should go through satoshi as first hop, "+
 			"instead passes through: %v",
-			route.Hops[0].Channel.Node.Alias)
+			ctx.nodeMap[route.Hops[0].Channel.Node])
 	}
 }
 
@@ -431,10 +434,10 @@ func TestSendPaymentErrorRepeatedFeeInsufficient(t *testing.T) {
 	}
 
 	// The route should have pham nuwen as the first hop.
-	if route.Hops[0].Channel.Node.Alias != "phamnuwen" {
+	if ctx.nodeMap[route.Hops[0].Channel.Node] != "phamnuwen" {
 		t.Fatalf("route should go through satoshi as first hop, "+
 			"instead passes through: %v",
-			route.Hops[0].Channel.Node.Alias)
+			ctx.nodeMap[route.Hops[0].Channel.Node])
 	}
 }
 
@@ -526,10 +529,10 @@ func TestSendPaymentErrorNonFinalTimeLockErrors(t *testing.T) {
 		}
 
 		// The route should have satoshi as the first hop.
-		if route.Hops[0].Channel.Node.Alias != "phamnuwen" {
+		if ctx.nodeMap[route.Hops[0].Channel.Node] != "phamnuwen" {
 			t.Fatalf("route should go through phamnuwen as first hop, "+
 				"instead passes through: %v",
-				route.Hops[0].Channel.Node.Alias)
+				ctx.nodeMap[route.Hops[0].Channel.Node])
 		}
 	}
 
@@ -690,10 +693,10 @@ func TestSendPaymentErrorPathPruning(t *testing.T) {
 		t.Fatalf("incorrect preimage used: expected %x got %x",
 			preImage[:], paymentPreImage[:])
 	}
-	if route.Hops[0].Channel.Node.Alias != "satoshi" {
+	if ctx.nodeMap[route.Hops[0].Channel.Node] != "satoshi" {
 		t.Fatalf("route should go through satoshi as first hop, "+
 			"instead passes through: %v",
-			route.Hops[0].Channel.Node.Alias)
+			ctx.nodeMap[route.Hops[0].Channel.Node])
 	}
 
 	ctx.router.missionControl.ResetHistory()
@@ -734,10 +737,10 @@ func TestSendPaymentErrorPathPruning(t *testing.T) {
 	}
 
 	// The route should have satoshi as the first hop.
-	if route.Hops[0].Channel.Node.Alias != "satoshi" {
+	if ctx.nodeMap[route.Hops[0].Channel.Node] != "satoshi" {
 		t.Fatalf("route should go through satoshi as first hop, "+
 			"instead passes through: %v",
-			route.Hops[0].Channel.Node.Alias)
+			ctx.nodeMap[route.Hops[0].Channel.Node])
 	}
 }
 
@@ -1085,7 +1088,8 @@ func TestAddEdgeUnknownVertexes(t *testing.T) {
 		t.Fatalf("expected to find 2 route, found: %v", len(routes))
 	}
 
-	copy1, err := ctx.graph.FetchLightningNode(priv1.PubKey())
+	copy1, err := ctx.graph.FetchLightningNode(priv1.PubKey().
+		SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to fetch node: %v", err)
 	}
@@ -1094,7 +1098,8 @@ func TestAddEdgeUnknownVertexes(t *testing.T) {
 		t.Fatalf("fetched node not equal to original")
 	}
 
-	copy2, err := ctx.graph.FetchLightningNode(priv2.PubKey())
+	copy2, err := ctx.graph.FetchLightningNode(priv2.PubKey().
+		SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to fetch node: %v", err)
 	}
@@ -1686,7 +1691,7 @@ func TestFindPathFeeWeighting(t *testing.T) {
 	// the edge weighting, we should select the direct path over the 2 hop
 	// path even though the direct path has a higher potential time lock.
 	path, err := findPath(
-		nil, ctx.graph, nil, sourceNode, target, ignoreVertex,
+		nil, ctx.graph, nil, sourceNode.PubKeyBytes, target, ignoreVertex,
 		ignoreEdge, amt, noFeeLimit, nil,
 	)
 	if err != nil {
@@ -1698,8 +1703,8 @@ func TestFindPathFeeWeighting(t *testing.T) {
 	if len(path) != 1 {
 		t.Fatalf("expected path length of 1, instead was: %v", len(path))
 	}
-	if path[0].Node.Alias != "luoji" {
-		t.Fatalf("wrong node: %v", path[0].Node.Alias)
+	if ctx.nodeMap[path[0].Node] != "luoji" {
+		t.Fatalf("wrong node: %v", ctx.nodeMap[path[0].Node])
 	}
 }
 

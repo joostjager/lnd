@@ -129,13 +129,16 @@ func makeTestGraph() (*channeldb.ChannelGraph, func(), error) {
 // provided in order to allow easily look up from the human memorable alias
 // to an exact node's public key.
 type aliasMap map[string]*btcec.PublicKey
+type nodeMap map[channeldb.Vertex]string
 
 // parseTestGraph returns a fully populated ChannelGraph given a path to a JSON
 // file which encodes a test graph.
-func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, error) {
+func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, 
+	nodeMap, error) {
+
 	graphJSON, err := ioutil.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// First unmarshal the JSON graph into an instance of the testGraph
@@ -143,7 +146,7 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 	// will be properly parsed into the struct above.
 	var g testGraph
 	if err := json.Unmarshal(graphJSON, &g); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// We'll use this fake address for the IP address of all the nodes in
@@ -152,24 +155,25 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 	var testAddrs []net.Addr
 	testAddr, err := net.ResolveTCPAddr("tcp", "192.0.0.1:8888")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	testAddrs = append(testAddrs, testAddr)
 
 	// Next, create a temporary graph database for usage within the test.
 	graph, cleanUp, err := makeTestGraph()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	aliasMap := make(map[string]*btcec.PublicKey)
+	nodeMap := make(map[channeldb.Vertex]string)
 	var source *channeldb.LightningNode
 
 	// First we insert all the nodes within the graph as vertexes.
 	for _, node := range g.Nodes {
 		pubBytes, err := hex.DecodeString(node.PubKey)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		dbNode := &channeldb.LightningNode{
@@ -185,18 +189,19 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 		// We require all aliases within the graph to be unique for our
 		// tests.
 		if _, ok := aliasMap[node.Alias]; ok {
-			return nil, nil, nil, errors.New("aliases for nodes " +
+			return nil, nil, nil, nil, errors.New("aliases for nodes " +
 				"must be unique!")
 		}
 
 		pub, err := btcec.ParsePubKey(pubBytes, btcec.S256())
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		// If the alias is unique, then add the node to the
 		// alias map for easy lookup.
 		aliasMap[node.Alias] = pub
+		nodeMap[dbNode.PubKeyBytes] = node.Alias
 
 		// If the node is tagged as the source, then we create a
 		// pointer to is so we can mark the source in the graph
@@ -207,7 +212,7 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 			// iteration, then the JSON has an error as only ONE
 			// node can be the source in the graph.
 			if source != nil {
-				return nil, nil, nil, errors.New("JSON is invalid " +
+				return nil, nil, nil, nil, errors.New("JSON is invalid " +
 					"multiple nodes are tagged as the source")
 			}
 
@@ -217,14 +222,14 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 		// With the node fully parsed, add it as a vertex within the
 		// graph.
 		if err := graph.AddLightningNode(dbNode); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 
 	if source != nil {
 		// Set the selected source node
 		if err := graph.SetSourceNode(source); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 
@@ -233,18 +238,18 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 	for _, edge := range g.Edges {
 		node1Bytes, err := hex.DecodeString(edge.Node1)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		node2Bytes, err := hex.DecodeString(edge.Node2)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		fundingTXID := strings.Split(edge.ChannelPoint, ":")[0]
 		txidBytes, err := chainhash.NewHashFromStr(fundingTXID)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		fundingPoint := wire.OutPoint{
 			Hash:  *txidBytes,
@@ -267,7 +272,7 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 
 		err = graph.AddChannelEdge(&edgeInfo)
 		if err != nil && err != channeldb.ErrEdgeAlreadyExist {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		edgePolicy := &channeldb.ChannelEdgePolicy{
@@ -281,11 +286,11 @@ func parseTestGraph(path string) (*channeldb.ChannelGraph, func(), aliasMap, err
 			FeeProportionalMillionths: lnwire.MilliSatoshi(edge.FeeRate),
 		}
 		if err := graph.UpdateEdgePolicy(edgePolicy); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 
-	return graph, cleanUp, aliasMap, nil
+	return graph, cleanUp, aliasMap, nodeMap, nil
 }
 
 type expectedHop struct {
@@ -352,7 +357,7 @@ var basicGraphPathFindingTests = []basicGraphPathFindingTestCase{
 func TestBasicGraphPathFinding(t *testing.T) {
 	t.Parallel()
 
-	graph, cleanUp, aliases, err := parseTestGraph(basicGraphFilePath)
+	graph, cleanUp, aliases, nodeMap, err := parseTestGraph(basicGraphFilePath)
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -365,13 +370,14 @@ func TestBasicGraphPathFinding(t *testing.T) {
 
 	for _, testCase := range basicGraphPathFindingTests {
 		t.Run(testCase.target, func(subT *testing.T) {
-			testBasicGraphPathFindingCase(subT, graph, aliases, &testCase)
+			testBasicGraphPathFindingCase(subT, graph, aliases, 
+				nodeMap, &testCase)
 		})
 	}
 }
 
 func testBasicGraphPathFindingCase(t *testing.T, graph *channeldb.ChannelGraph,
-	aliases aliasMap, test *basicGraphPathFindingTestCase) {
+	aliases aliasMap, nodeMap nodeMap, test *basicGraphPathFindingTestCase) {
 
 	expectedHops := test.expectedHops
 	expectedHopCount := len(expectedHops)
@@ -393,7 +399,7 @@ func testBasicGraphPathFindingCase(t *testing.T, graph *channeldb.ChannelGraph,
 	paymentAmt := lnwire.NewMSatFromSatoshis(test.paymentAmt)
 	target := aliases[test.target]
 	path, err := findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertexes,
+		nil, graph, nil, sourceNode.PubKeyBytes, target, ignoredVertexes,
 		ignoredEdges, paymentAmt, test.feeLimit, nil,
 	)
 	if test.expectFailureNoPath {
@@ -421,11 +427,11 @@ func testBasicGraphPathFindingCase(t *testing.T, graph *channeldb.ChannelGraph,
 
 	// Check hop nodes
 	for i := 0; i < len(expectedHops); i++ {
-		if !bytes.Equal(route.Hops[i].Channel.Node.PubKeyBytes[:],
+		if !bytes.Equal(route.Hops[i].Channel.Node[:],
 			aliases[expectedHops[i].alias].SerializeCompressed()) {
 
 			t.Fatalf("%v-th hop should be %v, is instead: %v",
-				i, expectedHops[i], route.Hops[i].Channel.Node.Alias)
+				i, expectedHops[i], nodeMap[route.Hops[i].Channel.Node])
 		}
 	}
 
@@ -530,7 +536,7 @@ func testBasicGraphPathFindingCase(t *testing.T, graph *channeldb.ChannelGraph,
 func TestPathFindingWithAdditionalEdges(t *testing.T) {
 	t.Parallel()
 
-	graph, cleanUp, aliases, err := parseTestGraph(basicGraphFilePath)
+	graph, cleanUp, aliases, nodeMap, err := parseTestGraph(basicGraphFilePath)
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -557,15 +563,14 @@ func TestPathFindingWithAdditionalEdges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to parse public key from bytes: %v", err)
 	}
+	dogeVertex := channeldb.NewVertex(dogePubKey)
 
-	doge := &channeldb.LightningNode{}
-	doge.AddPubKey(dogePubKey)
-	doge.Alias = "doge"
+	nodeMap[dogeVertex] = "doge"
 
 	// Create the channel edge going from songoku to doge and include it in
 	// our map of additional edges.
 	songokuToDoge := &channeldb.ChannelEdgePolicy{
-		Node:                      doge,
+		Node:                      dogeVertex,
 		ChannelID:                 1337,
 		FeeBaseMSat:               1,
 		FeeProportionalMillionths: 1000,
@@ -578,8 +583,8 @@ func TestPathFindingWithAdditionalEdges(t *testing.T) {
 
 	// We should now be able to find a path from roasbeef to doge.
 	path, err := findPath(
-		nil, graph, additionalEdges, sourceNode, dogePubKey, nil, nil,
-		paymentAmt, noFeeLimit, nil,
+		nil, graph, additionalEdges, sourceNode.PubKeyBytes, dogePubKey, 
+		nil, nil, paymentAmt, noFeeLimit, nil,
 	)
 	if err != nil {
 		t.Fatalf("unable to find private path to doge: %v", err)
@@ -587,13 +592,13 @@ func TestPathFindingWithAdditionalEdges(t *testing.T) {
 
 	// The path should represent the following hops:
 	//	roasbeef -> songoku -> doge
-	assertExpectedPath(t, path, "songoku", "doge")
+	assertExpectedPath(t, nodeMap, path, "songoku", "doge")
 }
 
 func TestKShortestPathFinding(t *testing.T) {
 	t.Parallel()
 
-	graph, cleanUp, aliases, err := parseTestGraph(basicGraphFilePath)
+	graph, cleanUp, aliases, nodeMap, err := parseTestGraph(basicGraphFilePath)
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -615,8 +620,8 @@ func TestKShortestPathFinding(t *testing.T) {
 	paymentAmt := lnwire.NewMSatFromSatoshis(100)
 	target := aliases["luoji"]
 	paths, err := findPaths(
-		nil, graph, sourceNode, target, paymentAmt, noFeeLimit, 100,
-		nil,
+		nil, graph, sourceNode.PubKeyBytes, target, paymentAmt, 
+		noFeeLimit, 100, nil,
 	)
 	if err != nil {
 		t.Fatalf("unable to find paths between roasbeef and "+
@@ -636,10 +641,10 @@ func TestKShortestPathFinding(t *testing.T) {
 	}
 
 	// The first route should be a direct route to luo ji.
-	assertExpectedPath(t, paths[0], "roasbeef", "luoji")
+	assertExpectedPath(t, nodeMap, paths[0], "roasbeef", "luoji")
 
 	// The second route should be a route to luo ji via satoshi.
-	assertExpectedPath(t, paths[1], "roasbeef", "satoshi", "luoji")
+	assertExpectedPath(t, nodeMap, paths[1], "roasbeef", "satoshi", "luoji")
 }
 
 func TestNewRoute(t *testing.T) {
@@ -658,7 +663,6 @@ func TestNewRoute(t *testing.T) {
 
 		return &ChannelHop {
 			ChannelEdgePolicy: &channeldb.ChannelEdgePolicy {
-				Node: &channeldb.LightningNode{},
 				FeeProportionalMillionths: feeRate,
 			},
 			Bandwidth: bandwidth,
@@ -812,7 +816,9 @@ func TestNewRoutePathTooLong(t *testing.T) {
 
 	// Ensure that potential paths which are over the maximum hop-limit are
 	// rejected.
-	graph, cleanUp, aliases, err := parseTestGraph(excessiveHopsGraphFilePath)
+	graph, cleanUp, aliases, _, err := 
+		parseTestGraph(excessiveHopsGraphFilePath)
+
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -832,7 +838,7 @@ func TestNewRoutePathTooLong(t *testing.T) {
 	// Alice should be able to find a valid route to ursula.
 	target := aliases["ursula"]
 	_, err = findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertexes,
+		nil, graph, nil, sourceNode.PubKeyBytes, target, ignoredVertexes,
 		ignoredEdges, paymentAmt, noFeeLimit, nil,
 	)
 	if err != nil {
@@ -843,7 +849,7 @@ func TestNewRoutePathTooLong(t *testing.T) {
 	// presented to Alice.
 	target = aliases["vincent"]
 	path, err := findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertexes,
+		nil, graph, nil, sourceNode.PubKeyBytes, target, ignoredVertexes,
 		ignoredEdges, paymentAmt, noFeeLimit, nil,
 	)
 	if err == nil {
@@ -857,7 +863,7 @@ func TestNewRoutePathTooLong(t *testing.T) {
 func TestPathNotAvailable(t *testing.T) {
 	t.Parallel()
 
-	graph, cleanUp, _, err := parseTestGraph(basicGraphFilePath)
+	graph, cleanUp, _, _, err := parseTestGraph(basicGraphFilePath)
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -885,8 +891,8 @@ func TestPathNotAvailable(t *testing.T) {
 	}
 
 	_, err = findPath(
-		nil, graph, nil, sourceNode, unknownNode, ignoredVertexes,
-		ignoredEdges, 100, noFeeLimit, nil,
+		nil, graph, nil, sourceNode.PubKeyBytes, unknownNode, 
+		ignoredVertexes, ignoredEdges, 100, noFeeLimit, nil,
 	)
 	if !IsError(err, ErrNoPathFound) {
 		t.Fatalf("path shouldn't have been found: %v", err)
@@ -896,7 +902,7 @@ func TestPathNotAvailable(t *testing.T) {
 func TestPathInsufficientCapacity(t *testing.T) {
 	t.Parallel()
 
-	graph, cleanUp, aliases, err := parseTestGraph(basicGraphFilePath)
+	graph, cleanUp, aliases, _, err := parseTestGraph(basicGraphFilePath)
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -921,7 +927,7 @@ func TestPathInsufficientCapacity(t *testing.T) {
 
 	payAmt := lnwire.NewMSatFromSatoshis(btcutil.SatoshiPerBitcoin)
 	_, err = findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertexes,
+		nil, graph, nil, sourceNode.PubKeyBytes, target, ignoredVertexes,
 		ignoredEdges, payAmt, noFeeLimit, nil,
 	)
 	if !IsError(err, ErrNoPathFound) {
@@ -934,7 +940,7 @@ func TestPathInsufficientCapacity(t *testing.T) {
 func TestRouteFailMinHTLC(t *testing.T) {
 	t.Parallel()
 
-	graph, cleanUp, aliases, err := parseTestGraph(basicGraphFilePath)
+	graph, cleanUp, aliases, _, err := parseTestGraph(basicGraphFilePath)
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -953,7 +959,7 @@ func TestRouteFailMinHTLC(t *testing.T) {
 	target := aliases["songoku"]
 	payAmt := lnwire.MilliSatoshi(10)
 	_, err = findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertexes,
+		nil, graph, nil, sourceNode.PubKeyBytes, target, ignoredVertexes,
 		ignoredEdges, payAmt, noFeeLimit, nil,
 	)
 	if !IsError(err, ErrNoPathFound) {
@@ -967,7 +973,7 @@ func TestRouteFailMinHTLC(t *testing.T) {
 func TestRouteFailDisabledEdge(t *testing.T) {
 	t.Parallel()
 
-	graph, cleanUp, aliases, err := parseTestGraph(basicGraphFilePath)
+	graph, cleanUp, aliases, _, err := parseTestGraph(basicGraphFilePath)
 	defer cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -985,7 +991,7 @@ func TestRouteFailDisabledEdge(t *testing.T) {
 	target := aliases["sophon"]
 	payAmt := lnwire.NewMSatFromSatoshis(105000)
 	_, err = findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertexes,
+		nil, graph, nil, sourceNode.PubKeyBytes, target, ignoredVertexes,
 		ignoredEdges, payAmt, noFeeLimit, nil,
 	)
 	if err != nil {
@@ -1006,7 +1012,7 @@ func TestRouteFailDisabledEdge(t *testing.T) {
 	// Now, if we attempt to route through that edge, we should get a
 	// failure as it is no longer eligible.
 	_, err = findPath(
-		nil, graph, nil, sourceNode, target, ignoredVertexes,
+		nil, graph, nil, sourceNode.PubKeyBytes, target, ignoredVertexes,
 		ignoredEdges, payAmt, noFeeLimit, nil,
 	)
 	if !IsError(err, ErrNoPathFound) {
@@ -1048,7 +1054,7 @@ func TestPathFindSpecExample(t *testing.T) {
 	// Carol, so we set "B" as the source node so path finding starts from
 	// Bob.
 	bob := ctx.aliases["B"]
-	bobNode, err := ctx.graph.FetchLightningNode(bob)
+	bobNode, err := ctx.graph.FetchLightningNode(bob.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to find bob: %v", err)
 	}
@@ -1101,7 +1107,8 @@ func TestPathFindSpecExample(t *testing.T) {
 	// Next, we'll set A as the source node so we can assert that we create
 	// the proper route for any queries starting with Alice.
 	alice := ctx.aliases["A"]
-	aliceNode, err := ctx.graph.FetchLightningNode(alice)
+	aliceNode, err := ctx.graph.FetchLightningNode(
+		alice.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to find alice: %v", err)
 	}
@@ -1245,15 +1252,15 @@ func TestPathFindSpecExample(t *testing.T) {
 	}
 }
 
-func assertExpectedPath(t *testing.T, path []*ChannelHop, nodeAliases ...string) {
+func assertExpectedPath(t *testing.T, nodeMap nodeMap, path []*ChannelHop, nodeAliases ...string) {
 	if len(path) != len(nodeAliases) {
 		t.Fatal("number of hops and number of aliases do not match")
 	}
 
 	for i, hop := range path {
-		if hop.Node.Alias != nodeAliases[i] {
+		if nodeMap[hop.Node] != nodeAliases[i] {
 			t.Fatalf("expected %v to be pos #%v in hop, instead "+
-				"%v was", nodeAliases[i], i, hop.Node.Alias)
+				"%v was", nodeAliases[i], i, nodeMap[hop.Node])
 		}
 	}
 }

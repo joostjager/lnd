@@ -85,8 +85,7 @@ func migrateNodeAndEdgeUpdateIndex(tx *bolt.Tx) error {
 		edgePolicyReader := bytes.NewReader(edgePolicyBytes)
 
 		edgePolicy, err := deserializeChanEdgePolicy(
-			edgePolicyReader, nodes,
-		)
+			edgePolicyReader)
 		if err != nil {
 			return err
 		}

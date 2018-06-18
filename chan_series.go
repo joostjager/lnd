@@ -214,12 +214,19 @@ func (c *chanSeries) FetchChanAnns(chain chainhash.Hash,
 		if edge1 != nil {
 			chanAnns = append(chanAnns, edge1)
 
+			node1, err := c.graph.FetchLightningNode(
+				channel.Policy1.Node[:])
+
+			if err != nil {
+				return nil, err
+			}
+
 			// If this edge has a validated node announcement, that
 			// we haven't yet sent, then we'll send that as well.
-			nodePub := channel.Policy1.Node.PubKeyBytes
-			hasNodeAnn := channel.Policy1.Node.HaveNodeAnnouncement
+			nodePub := channel.Policy1.Node
+			hasNodeAnn := node1.HaveNodeAnnouncement
 			if _, ok := nodePubsSent[nodePub]; !ok && hasNodeAnn {
-				nodeAnn, err := makeNodeAnn(channel.Policy1.Node)
+				nodeAnn, err := makeNodeAnn(node1)
 				if err != nil {
 					return nil, err
 				}
@@ -231,12 +238,19 @@ func (c *chanSeries) FetchChanAnns(chain chainhash.Hash,
 		if edge2 != nil {
 			chanAnns = append(chanAnns, edge2)
 
+			node2, err := c.graph.FetchLightningNode(
+				channel.Policy2.Node[:])
+
+			if err != nil {
+				return nil, err
+			}
+
 			// If this edge has a validated node announcement, that
 			// we haven't yet sent, then we'll send that as well.
-			nodePub := channel.Policy2.Node.PubKeyBytes
-			hasNodeAnn := channel.Policy2.Node.HaveNodeAnnouncement
+			nodePub := channel.Policy2.Node
+			hasNodeAnn := node2.HaveNodeAnnouncement
 			if _, ok := nodePubsSent[nodePub]; !ok && hasNodeAnn {
-				nodeAnn, err := makeNodeAnn(channel.Policy2.Node)
+				nodeAnn, err := makeNodeAnn(node2)
 				if err != nil {
 					return nil, err
 				}

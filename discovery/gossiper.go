@@ -306,17 +306,24 @@ func (d *AuthenticatedGossiper) SynchronizeNode(syncPeer lnpeer.Peer) error {
 				return err
 			}
 
+			
+
 			announceMessages = append(announceMessages, chanAnn)
 			if e1Ann != nil {
 				announceMessages = append(announceMessages, e1Ann)
 
+				node1, err := d.cfg.Router.FetchLightningNode(e1.Node[:])
+				if err != nil {
+					return err
+				}
+				
 				// If this edge has a validated node
 				// announcement, that we haven't yet sent, then
 				// we'll send that as well.
-				nodePub := e1.Node.PubKeyBytes
-				hasNodeAnn := e1.Node.HaveNodeAnnouncement
+				nodePub := e1.Node
+				hasNodeAnn := node1.HaveNodeAnnouncement
 				if _, ok := nodePubsSent[nodePub]; !ok && hasNodeAnn {
-					nodeAnn, err := makeNodeAnn(e1.Node)
+					nodeAnn, err := makeNodeAnn(node1)
 					if err != nil {
 						return err
 					}
@@ -332,13 +339,18 @@ func (d *AuthenticatedGossiper) SynchronizeNode(syncPeer lnpeer.Peer) error {
 			if e2Ann != nil {
 				announceMessages = append(announceMessages, e2Ann)
 
+				node2, err := d.cfg.Router.FetchLightningNode(e2.Node[:])
+				if err != nil {
+					return err
+				}
+
 				// If this edge has a validated node
 				// announcement, that we haven't yet sent, then
 				// we'll send that as well.
-				nodePub := e2.Node.PubKeyBytes
-				hasNodeAnn := e2.Node.HaveNodeAnnouncement
+				nodePub := e2.Node
+				hasNodeAnn := node2.HaveNodeAnnouncement
 				if _, ok := nodePubsSent[nodePub]; !ok && hasNodeAnn {
-					nodeAnn, err := makeNodeAnn(e2.Node)
+					nodeAnn, err := makeNodeAnn(node2)
 					if err != nil {
 						return err
 					}
@@ -1690,7 +1702,7 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []n
 				nMsg.err <- err
 				return nil
 			}
-
+			
 			// If the proof checks out, then we'll save the proof
 			// itself to the database so we can fetch it later when
 			// gossiping with other nodes.
