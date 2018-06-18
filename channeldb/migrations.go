@@ -112,3 +112,60 @@ func migrateNodeAndEdgeUpdateIndex(tx *bolt.Tx) error {
 
 	return nil
 }
+
+// migrateEdgePolicies is a migration function that will update the
+// database from version 1 to version 2. In version 2, every channel will
+// always have two entries in the nodes bucket. In this function, all missing
+// policies in the edges bucket will be added with the unknown policy value.
+func migrateEdgePolicies(tx *bolt.Tx) error {
+	nodes := tx.Bucket(nodeBucket)
+	if nodes == nil {
+		return ErrGraphNotFound
+	}
+
+	edges := tx.Bucket(edgeBucket)
+	if edges == nil {
+		return ErrGraphNoEdgesFound
+	}
+	edgeIndex := edges.Bucket(edgeIndexBucket)
+	if edgeIndex == nil {
+		return ErrGraphNoEdgesFound
+	}
+
+	checkKey := func(channelId uint64, keyBytes [33]byte) {
+		var channelID [8]byte
+		byteOrder.PutUint64(channelID[:], channelId)
+
+		_, err := fetchChanEdgePolicy(edges, 
+			channelID[:], keyBytes[:], nodes)
+
+		if err == ErrEdgeNotFound {
+			// todo: Tracef
+			log.Infof("Adding unknown edge policy present for node %x, channel %v", 
+				keyBytes, channelId)
+
+			putChanEdgePolicyUnknown(edges, channelId, keyBytes[:])
+		}
+	}
+
+	err := edgeIndex.ForEach(func(chanID, edgeInfoBytes []byte) error {
+		infoReader := bytes.NewReader(edgeInfoBytes)
+		edgeInfo, err := deserializeChanEdgeInfo(infoReader)
+		if err != nil {
+			return err
+		}
+
+		checkKey(edgeInfo.ChannelID, edgeInfo.NodeKey1Bytes)
+		checkKey(edgeInfo.ChannelID, edgeInfo.NodeKey2Bytes)
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("unable to update edge policies: %v", err)
+	}
+
+	log.Infof("Migration of edge policies complete!")
+
+	return nil
+}
