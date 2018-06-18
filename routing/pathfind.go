@@ -676,7 +676,15 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		pivot := Vertex(bestNode.PubKeyBytes)
 		err := bestNode.ForEachChannel(tx, func(tx *bolt.Tx,
 			edgeInfo *channeldb.ChannelEdgeInfo,
-			outEdge, inEdge *channeldb.ChannelEdgePolicy) error {
+			_, inEdge *channeldb.ChannelEdgePolicy) error {
+
+			// If there is no edge policy for this candidate
+			// node, skip. Note that we are searching backwards
+			// so this node would have come prior to the pivot
+			// node in the route.
+			if inEdge == nil {
+				return nil
+			}
 
 			// We'll query the lower layer to see if we can obtain
 			// any more up to date information concerning the
@@ -691,7 +699,27 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 				)
 			}
 
-			processEdge(outEdge.Node, inEdge, edgeBandwidth, pivot)
+			// Lookup the source node at the other side of the 
+			// channel via edgeInfo. This is necessary because this
+			// information is not present in inEdge.
+			channelSourcePubKeyBytes := edgeInfo.OtherNodeKeyBytes(pivot[:])
+			channelSourcePubKey, err := btcec.ParsePubKey(
+				channelSourcePubKeyBytes[:], btcec.S256())
+			if err != nil {
+				return err
+			}
+		
+			// Lookup the full node details in order to be able to
+			// later iterate over all incoming edges of the source
+			// node.
+			channelSource, err := graph.FetchLightningNode(channelSourcePubKey)
+			if err != nil {
+				return err
+			}
+	
+			// Check if this candidate node is better than what
+			// we already have.
+			processEdge(channelSource, inEdge, edgeBandwidth, pivot)
 
 			// TODO(roasbeef): return min HTLC as error in end?
 
