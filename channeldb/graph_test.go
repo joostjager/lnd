@@ -913,13 +913,17 @@ func TestGraphTraversal(t *testing.T) {
 
 		// Each should indicate that it's outgoing (pointed
 		// towards the second node).
-		if !bytes.Equal(outEdge.Node.PubKeyBytes[:], secondNode.PubKeyBytes[:]) {
+		if outEdge != nil && 
+			!bytes.Equal(outEdge.Node.PubKeyBytes[:], secondNode.PubKeyBytes[:]) {
+
 			return fmt.Errorf("wrong outgoing edge")
 		}
 
 		// The incoming edge should also indicate that it's pointing to
 		// the origin node.
-		if !bytes.Equal(inEdge.Node.PubKeyBytes[:], firstNode.PubKeyBytes[:]) {
+		if inEdge != nil && 
+			!bytes.Equal(inEdge.Node.PubKeyBytes[:], firstNode.PubKeyBytes[:]) {
+				
 			return fmt.Errorf("wrong outgoing edge")
 		}
 

@@ -93,7 +93,56 @@ func Open(dbPath string) (*DB, error) {
 		return nil, err
 	}
 
+	checkIntegrity(chanDB)
+
 	return chanDB, nil
+}
+
+func checkIntegrity(db *DB) error {
+	graph := db.ChannelGraph()
+	
+	return db.Update(func(tx *bolt.Tx) error {
+	
+		nodes := tx.Bucket(nodeBucket)
+		if nodes == nil {
+			return ErrGraphNotFound
+		}
+
+		edges := tx.Bucket(edgeBucket)
+		if edges == nil {
+			return ErrGraphNoEdgesFound
+		}
+		edgeIndex := edges.Bucket(edgeIndexBucket)
+		if edgeIndex == nil {
+			return ErrGraphNoEdgesFound
+		}
+
+		checkKey := func(channelId uint64, keyBytes [33]byte) {
+			_, err := fetchChanEdgePolicyUint64(edges, 
+				channelId, keyBytes[:], nodes)
+
+			if err == ErrEdgeNotFound {
+				log.Infof("No edge policy present for node %x, channel %v", 
+					keyBytes, channelId)
+
+				putChanEdgePolicyUnknown(edges, channelId, keyBytes[:])
+
+				policy, fetchErr := fetchChanEdgePolicyUint64(edges, channelId, keyBytes[:], nodes)
+
+				
+				log.Infof("%v %v", policy, fetchErr)
+			}
+		}
+
+		return graph.ForEachChannel(func(edgeInfo *ChannelEdgeInfo,
+			_, _ *ChannelEdgePolicy) error {
+
+			checkKey(edgeInfo.ChannelID, edgeInfo.NodeKey1Bytes)
+			checkKey(edgeInfo.ChannelID, edgeInfo.NodeKey2Bytes)
+
+			return nil
+		})
+	})
 }
 
 // Path returns the file path to the channel database.
