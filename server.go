@@ -1359,7 +1359,12 @@ func (s *server) establishPersistentConnections() error {
 		_ *channeldb.ChannelEdgeInfo,
 		policy, _ *channeldb.ChannelEdgePolicy) error {
 
-		pubStr := string(policy.Node.PubKeyBytes[:])
+		node, err := chanGraph.FetchLightningNode(policy.Node[:])
+		if err != nil {
+			return err
+		}
+
+		pubStr := string(node.PubKeyBytes[:])
 
 		// Add addresses from channel graph/NodeAnnouncements to the
 		// list of addresses we'll connect to. If there are duplicates
@@ -1380,7 +1385,7 @@ func (s *server) establishPersistentConnections() error {
 				}
 
 				var addrMatched bool
-				for _, polAddress := range policy.Node.Addresses {
+				for _, polAddress := range node.Addresses {
 					switch addr := polAddress.(type) {
 					case *net.TCPAddr:
 						if addr.IP.String() == addrHost {
@@ -1399,7 +1404,7 @@ func (s *server) establishPersistentConnections() error {
 				}
 			}
 		} else {
-			for _, addr := range policy.Node.Addresses {
+			for _, addr := range node.Addresses {
 				switch addr.(type) {
 				case *net.TCPAddr, *tor.OnionAddr:
 					addrs = append(addrs, addr)
@@ -1410,7 +1415,7 @@ func (s *server) establishPersistentConnections() error {
 		n := &nodeAddresses{
 			addresses: addrs,
 		}
-		n.pubKey, err = policy.Node.PubKey()
+		n.pubKey, err = node.PubKey()
 		if err != nil {
 			return err
 		}
@@ -2566,7 +2571,9 @@ func computeNextBackoff(currBackoff time.Duration) time.Duration {
 
 // fetchNodeAdvertisedAddr attempts to fetch an advertised address of a node.
 func (s *server) fetchNodeAdvertisedAddr(pub *btcec.PublicKey) (net.Addr, error) {
-	node, err := s.chanDB.ChannelGraph().FetchLightningNode(pub)
+	node, err := s.chanDB.ChannelGraph().FetchLightningNode(
+		pub.SerializeCompressed())
+		
 	if err != nil {
 		return nil, err
 	}

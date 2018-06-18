@@ -2014,7 +2014,7 @@ func fetchLastChanUpdate(s *server,
 		// means the second edge is our policy. Otherwise, the first
 		// edge is our policy.
 		var local *channeldb.ChannelEdgePolicy
-		if bytes.Equal(edge1.Node.PubKeyBytes[:], pubKey[:]) {
+		if bytes.Equal(edge1.Node[:], pubKey[:]) {
 			local = edge2
 		} else {
 			local = edge1

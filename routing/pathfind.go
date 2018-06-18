@@ -650,7 +650,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		// examine all the incoming edges (channels) from this node to
 		// further our graph traversal.
 		pivot := bestNode
-		err := bestNode.ForEachChannel(tx, func(tx *bolt.Tx,
+		err := bestNode.ForEachChannelOfVertex(tx, func(tx *bolt.Tx,
 			edgeInfo *channeldb.ChannelEdgeInfo,
 			outEdge, inEdge *channeldb.ChannelEdgePolicy) error {
 

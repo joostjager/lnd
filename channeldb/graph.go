@@ -1513,9 +1513,8 @@ func (l *LightningNode) AddPubKey(key *btcec.PublicKey) {
 // FetchLightningNode attempts to look up a target node by its identity public
 // key. If the node isn't found in the database, then ErrGraphNodeNotFound is
 // returned.
-func (c *ChannelGraph) FetchLightningNode(pub *btcec.PublicKey) (*LightningNode, error) {
+func (c *ChannelGraph) FetchLightningNode(nodePub []byte) (*LightningNode, error) {
 	var node *LightningNode
-	nodePub := pub.SerializeCompressed()
 	err := c.db.View(func(tx *bolt.Tx) error {
 		// First grab the nodes bucket which stores the mapping from
 		// pubKey to node information.
@@ -1598,7 +1597,17 @@ func (c *ChannelGraph) HasLightningNode(nodePub [33]byte) (time.Time, bool, erro
 	return updateTime, exists, nil
 }
 
+
+
 // ForEachChannel iterates through all the outgoing channel edges from this
+// node, executing the passed callback with each edge as its sole argument.
+func (l *LightningNode) ForEachChannel(tx *bolt.Tx,
+	cb func(*bolt.Tx, *ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy) error) error {
+
+	return Vertex(l.PubKeyBytes).ForEachChannelOfVertex(tx, cb)
+}
+
+// ForEachChannelOfVertex iterates through all the outgoing channel edges from this
 // node, executing the passed callback with each edge as its sole argument. The
 // first edge policy is the outgoing edge *to* the connecting node, while the
 // second is the incoming edge *from* the connecting node. If the callback
@@ -1609,104 +1618,7 @@ func (c *ChannelGraph) HasLightningNode(nodePub [33]byte) (time.Time, bool, erro
 // should be passed as the first argument.  Otherwise the first argument should
 // be nil and a fresh transaction will be created to execute the graph
 // traversal.
-func (l *LightningNode) ForEachChannel(tx *bolt.Tx,
-	cb func(*bolt.Tx, *ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy) error) error {
-
-	nodePub := l.PubKeyBytes[:]
-
-	traversal := func(tx *bolt.Tx) error {
-		nodes := tx.Bucket(nodeBucket)
-		if nodes == nil {
-			return ErrGraphNotFound
-		}
-		edges := tx.Bucket(edgeBucket)
-		if edges == nil {
-			return ErrGraphNotFound
-		}
-		edgeIndex := edges.Bucket(edgeIndexBucket)
-		if edgeIndex == nil {
-			return ErrGraphNoEdgesFound
-		}
-
-		// In order to reach all the edges for this node, we take
-		// advantage of the construction of the key-space within the
-		// edge bucket. The keys are stored in the form: pubKey ||
-		// chanID. Therefore, starting from a chanID of zero, we can
-		// scan forward in the bucket, grabbing all the edges for the
-		// node. Once the prefix no longer matches, then we know we're
-		// done.
-		var nodeStart [33 + 8]byte
-		copy(nodeStart[:], nodePub)
-		copy(nodeStart[33:], chanStart[:])
-
-		// Starting from the key pubKey || 0, we seek forward in the
-		// bucket until the retrieved key no longer has the public key
-		// as its prefix. This indicates that we've stepped over into
-		// another node's edges, so we can terminate our scan.
-		edgeCursor := edges.Cursor()
-		for nodeEdge, edgePolicyBytes := edgeCursor.Seek(nodeStart[:]); bytes.HasPrefix(nodeEdge, nodePub); nodeEdge, edgePolicyBytes = edgeCursor.Next() {
-			// If the prefix still matches, then the value is the
-			// raw edge information. So we can now deserialize the
-			// edge policy and fetch the channel destination node in
-			// order to retrieve the full channel edge.
-
-			var toEdgePolicy *ChannelEdgePolicy
-
-			if !bytes.Equal(edgePolicyBytes, unknownPolicy) {
-				edgeReader := bytes.NewReader(edgePolicyBytes)
-				toEdgePolicy, err := deserializeChanEdgePolicy(edgeReader, nodes)
-				if err != nil {
-					return err
-				}
-				toEdgePolicy.db = l.db
-			}
-
-			chanID := nodeEdge[33:]
-			edgeInfo, err := fetchChanEdgeInfo(edgeIndex, chanID)
-			if err != nil {
-				return err
-			}
-
-			// Determine destination node of this channel's edge.
-			// Do not use toEdgePolicy for this, because it may
-			// be unknown.
-			var incomingNode = edgeInfo.OtherNodeKeyBytes(nodePub)
-
-			// We'll also fetch the incoming edge policy so this
-			// information can be available to the caller.
-			fromEdgePolicy, err := fetchChanEdgePolicy(
-				edges, chanID, incomingNode[:], nodes,
-			)
-			if err != nil && err != ErrEdgeNotFound &&
-				err != ErrGraphNodeNotFound {
-				return err
-			}
-			if fromEdgePolicy != nil {
-				fromEdgePolicy.db = l.db
-			}
-
-			// Finally, we execute the callback.
-			err = cb(tx, &edgeInfo, toEdgePolicy, fromEdgePolicy)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
-
-	// If no transaction was provided, then we'll create a new transaction
-	// to execute the transaction within.
-	if tx == nil {
-		return l.db.View(traversal)
-	}
-
-	// Otherwise, we re-use the existing transaction to execute the graph
-	// traversal.
-	return traversal(tx)
-}
-
-func (v Vertex) forEachChannelOfVertex(tx *bolt.Tx,
+func (v Vertex) ForEachChannelOfVertex(tx *bolt.Tx,
 	cb func(*bolt.Tx, *ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy) error) error {
 
 	traversal := func(tx *bolt.Tx) error {
@@ -1749,11 +1661,11 @@ func (v Vertex) forEachChannelOfVertex(tx *bolt.Tx,
 
 			if !bytes.Equal(edgePolicyBytes, unknownPolicy) {
 				edgeReader := bytes.NewReader(edgePolicyBytes)
-				toEdgePolicy, err := deserializeChanEdgePolicy(edgeReader, nodes)
+				var err error
+				toEdgePolicy, err = deserializeChanEdgePolicy(edgeReader)
 				if err != nil {
 					return err
 				}
-				toEdgePolicy.db = l.db
 			}
 
 			chanID := nodeEdge[33:]
@@ -1765,19 +1677,15 @@ func (v Vertex) forEachChannelOfVertex(tx *bolt.Tx,
 			// Determine destination node of this channel's edge.
 			// Do not use toEdgePolicy for this, because it may
 			// be unknown.
-			var incomingNode = edgeInfo.OtherNodeKeyBytes(nodePub)
+			var incomingNode = edgeInfo.OtherNodeKeyBytes(v[:])
 
 			// We'll also fetch the incoming edge policy so this
 			// information can be available to the caller.
 			fromEdgePolicy, err := fetchChanEdgePolicy(
 				edges, chanID, incomingNode[:], nodes,
 			)
-			if err != nil && err != ErrEdgeNotFound &&
-				err != ErrGraphNodeNotFound {
+			if err != nil {
 				return err
-			}
-			if fromEdgePolicy != nil {
-				fromEdgePolicy.db = l.db
 			}
 
 			// Finally, we execute the callback.
@@ -1788,12 +1696,6 @@ func (v Vertex) forEachChannelOfVertex(tx *bolt.Tx,
 		}
 
 		return nil
-	}
-
-	// If no transaction was provided, then we'll create a new transaction
-	// to execute the transaction within.
-	if tx == nil {
-		return l.db.View(traversal)
 	}
 
 	// Otherwise, we re-use the existing transaction to execute the graph
@@ -2141,8 +2043,6 @@ type ChannelEdgePolicy struct {
 	// Node is the LightningNode that this directed edge leads to. Using
 	// this pointer the channel graph can further be traversed.
 	Node Vertex
-
-	db *DB
 }
 
 // Signature is a channel announcement signature, which is needed for proper
@@ -2343,7 +2243,7 @@ func (c *ChannelGraph) ChannelView() ([]wire.OutPoint, error) {
 
 // NewChannelEdgePolicy returns a new blank ChannelEdgePolicy.
 func (c *ChannelGraph) NewChannelEdgePolicy() *ChannelEdgePolicy {
-	return &ChannelEdgePolicy{db: c.db}
+	return &ChannelEdgePolicy{}
 }
 
 func putLightningNode(nodeBucket *bolt.Bucket, aliasBucket *bolt.Bucket,
@@ -2851,7 +2751,7 @@ func fetchChanEdgePolicy(edges *bolt.Bucket, chanID []byte,
 	}
 	edgeReader := bytes.NewReader(edgeBytes)
 
-	return deserializeChanEdgePolicy(edgeReader, nodes)
+	return deserializeChanEdgePolicy(edgeReader)
 }
 
 func fetchChanEdgePolicies(edgeIndex *bolt.Bucket, edges *bolt.Bucket,
@@ -2872,12 +2772,6 @@ func fetchChanEdgePolicies(edgeIndex *bolt.Bucket, edges *bolt.Bucket,
 		return nil, nil, err
 	}
 
-	// As we may have a single direction of the edge but not the other,
-	// only fill in the database pointers if the edge is found.
-	if edge1 != nil {
-		edge1.db = db
-	}
-
 	// Similarly, the second node is contained within the latter
 	// half of the edge information.
 	node2Pub := edgeInfo[33:67]
@@ -2886,15 +2780,10 @@ func fetchChanEdgePolicies(edgeIndex *bolt.Bucket, edges *bolt.Bucket,
 		return nil, nil, err
 	}
 
-	if edge2 != nil {
-		edge2.db = db
-	}
-
 	return edge1, edge2, nil
 }
 
-func deserializeChanEdgePolicy(r io.Reader,
-	nodes *bolt.Bucket) (*ChannelEdgePolicy, error) {
+func deserializeChanEdgePolicy(r io.Reader) (*ChannelEdgePolicy, error) {
 
 	edge := &ChannelEdgePolicy{}
 

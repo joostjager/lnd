@@ -50,7 +50,7 @@ func ChannelGraphFromDatabase(db *channeldb.ChannelGraph) ChannelGraph {
 // interface.
 type dbNode struct {
 	tx *bolt.Tx
-
+	db *channeldb.ChannelGraph
 	node *channeldb.LightningNode
 }
 
@@ -90,7 +90,14 @@ func (d dbNode) ForEachChannel(cb func(ChannelEdge) error) error {
 			return nil
 		}
 
-		pubkey, _ := ep.Node.PubKey()
+		pubkey, _ := btcec.ParsePubKey(ep.Node[:], btcec.S256())
+
+		// With the pubKey of the source node retrieved, we're able to
+		// fetch the full node information.
+		node, err := d.db.FetchLightningNode(ep.Node[:])
+		if err != nil {
+			return err
+		}
 		edge := ChannelEdge{
 			Channel: Channel{
 				ChanID:    lnwire.NewShortChanIDFromInt(ep.ChannelID),
@@ -99,8 +106,9 @@ func (d dbNode) ForEachChannel(cb func(ChannelEdge) error) error {
 				Node:      NewNodeID(pubkey),
 			},
 			Peer: dbNode{
+				db:   d.db, 
 				tx:   tx,
-				node: ep.Node,
+				node: node,
 			},
 		}
 
@@ -124,6 +132,7 @@ func (d *databaseChannelGraph) ForEachNode(cb func(Node) error) error {
 		}
 
 		node := dbNode{
+			db:   d.db,
 			tx:   tx,
 			node: n,
 		}
@@ -139,7 +148,7 @@ func (d *databaseChannelGraph) addRandChannel(node1, node2 *btcec.PublicKey,
 
 	fetchNode := func(pub *btcec.PublicKey) (*channeldb.LightningNode, error) {
 		if pub != nil {
-			dbNode, err := d.db.FetchLightningNode(pub)
+			dbNode, err := d.db.FetchLightningNode(pub.SerializeCompressed())
 			switch {
 			case err == channeldb.ErrGraphNodeNotFound:
 				fallthrough
@@ -250,6 +259,7 @@ func (d *databaseChannelGraph) addRandChannel(node1, node2 *btcec.PublicKey,
 				Capacity: capacity,
 			},
 			Peer: dbNode{
+				db:   d.db,
 				node: vertex1,
 			},
 		},
@@ -259,6 +269,7 @@ func (d *databaseChannelGraph) addRandChannel(node1, node2 *btcec.PublicKey,
 				Capacity: capacity,
 			},
 			Peer: dbNode{
+				db:   d.db,
 				node: vertex2,
 			},
 		},

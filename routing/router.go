@@ -98,6 +98,8 @@ type ChannelGraphSource interface {
 	// graph.
 	ForEachChannel(func(chanInfo *channeldb.ChannelEdgeInfo,
 		e1, e2 *channeldb.ChannelEdgePolicy) error) error
+
+	FetchLightningNode(pub []byte) (*channeldb.LightningNode, error)
 }
 
 // FeeSchema is the set fee configuration for a Lightning Node on the network.
@@ -1395,7 +1397,7 @@ func (r *ChannelRouter) FindRoutes(target *btcec.PublicKey,
 		tx.Rollback()
 		return nil, err
 	}
-
+	
 	tx.Rollback()
 
 	// Now that we have a set of paths, we'll need to turn them into
@@ -2216,4 +2218,13 @@ func (r *ChannelRouter) IsStaleEdgePolicy(chanID lnwire.ShortChannelID,
 	}
 
 	return false
+}
+
+// FetchLightningNode retrieves full node information based on a public key.
+//
+// NOTE: This method is part of the ChannelGraphSource interface.
+func (r *ChannelRouter) FetchLightningNode(pub []byte) (
+	*channeldb.LightningNode, error) {
+
+	return r.cfg.Graph.FetchLightningNode(pub)
 }
