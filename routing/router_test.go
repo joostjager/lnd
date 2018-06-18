@@ -1672,7 +1672,7 @@ func TestFindPathFeeWeighting(t *testing.T) {
 		t.Fatalf("unable to fetch source node: %v", err)
 	}
 
-	ignoreVertex := make(map[Vertex]struct{})
+	ignoreVertex := make(map[channeldb.Vertex]struct{})
 	ignoreEdge := make(map[uint64]struct{})
 
 	amt := lnwire.MilliSatoshi(100)

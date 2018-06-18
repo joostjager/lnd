@@ -65,7 +65,7 @@ type ChannelGraphSource interface {
 	// for the target node with a more recent timestamp. This method will
 	// also return true if we don't have an active channel announcement for
 	// the target node.
-	IsStaleNode(node Vertex, timestamp time.Time) bool
+	IsStaleNode(node channeldb.Vertex, timestamp time.Time) bool
 
 	// IsKnownEdge returns true if the graph source already knows of the
 	// passed channel ID.
@@ -871,7 +871,7 @@ func (r *ChannelRouter) networkHandler() {
 // timestamp. ErrIgnored will be returned if we already have the node, and
 // ErrOutdated will be returned if we have a timestamp that's after the new
 // timestamp.
-func (r *ChannelRouter) assertNodeAnnFreshness(node Vertex,
+func (r *ChannelRouter) assertNodeAnnFreshness(node channeldb.Vertex,
 	msgTimestamp time.Time) error {
 
 	// If we are not already aware of this node, it means that we don't
@@ -1216,7 +1216,7 @@ type routingMsg struct {
 
 // pruneNodeFromRoutes accepts set of routes, and returns a new set of routes
 // with the target node filtered out.
-func pruneNodeFromRoutes(routes []*Route, skipNode Vertex) []*Route {
+func pruneNodeFromRoutes(routes []*Route, skipNode channeldb.Vertex) []*Route {
 
 	// TODO(roasbeef): pass in slice index?
 
@@ -1258,7 +1258,7 @@ func pruneChannelFromRoutes(routes []*Route, skipChan uint64) []*Route {
 // fee information attached. The set of routes returned may be less than the
 // initial set of paths as it's possible we drop a route if it can't handle the
 // total payment flow after fees are calculated.
-func pathsToFeeSortedRoutes(source Vertex, paths [][]*ChannelHop,
+func pathsToFeeSortedRoutes(source channeldb.Vertex, paths [][]*ChannelHop,
 	finalCLTVDelta uint16, amt, feeLimit lnwire.MilliSatoshi,
 	currentHeight uint32) ([]*Route, error) {
 
@@ -1353,7 +1353,7 @@ func (r *ChannelRouter) FindRoutes(target *btcec.PublicKey,
 
 	// We can short circuit the routing by opportunistically checking to
 	// see if the target vertex event exists in the current graph.
-	targetVertex := NewVertex(target)
+	targetVertex := channeldb.NewVertex(target)
 	if _, exists, err := r.cfg.Graph.HasLightningNode(targetVertex); err != nil {
 		return nil, err
 	} else if !exists {
@@ -1403,7 +1403,7 @@ func (r *ChannelRouter) FindRoutes(target *btcec.PublicKey,
 	// each path. During this process, some paths may be discarded if they
 	// aren't able to support the total satoshis flow once fees have been
 	// factored in.
-	sourceVertex := Vertex(r.selfNode.PubKeyBytes)
+	sourceVertex := channeldb.Vertex(r.selfNode.PubKeyBytes)
 	validRoutes, err := pathsToFeeSortedRoutes(
 		sourceVertex, shortestPaths, finalCLTVDelta, amt, feeLimit,
 		uint32(currentHeight),
@@ -1945,7 +1945,7 @@ func pruneVertexFailure(paySession *paymentSession, route *Route,
 
 	// By default, we'll try to prune the node that actually sent us the
 	// error.
-	errNode := NewVertex(errSource)
+	errNode := channeldb.NewVertex(errSource)
 
 	// If this failure indicates that the node _after_ the source of the
 	// error was not found. As a result, we'll locate the vertex for that
@@ -2162,7 +2162,7 @@ func (r *ChannelRouter) AddProof(chanID lnwire.ShortChannelID,
 // target node with a more recent timestamp.
 //
 // NOTE: This method is part of the ChannelGraphSource interface.
-func (r *ChannelRouter) IsStaleNode(node Vertex, timestamp time.Time) bool {
+func (r *ChannelRouter) IsStaleNode(node channeldb.Vertex, timestamp time.Time) bool {
 	// If our attempt to assert that the node announcement is fresh fails,
 	// then we know that this is actually a stale announcement.
 	return r.assertNodeAnnFreshness(node, timestamp) != nil

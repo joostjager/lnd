@@ -1470,7 +1470,7 @@ func (s *server) establishPersistentConnections() error {
 // messages to all peers other than the one specified by the `skips` parameter.
 //
 // NOTE: This function is safe for concurrent access.
-func (s *server) BroadcastMessage(skips map[routing.Vertex]struct{},
+func (s *server) BroadcastMessage(skips map[channeldb.Vertex]struct{},
 	msgs ...lnwire.Message) error {
 
 	srvrLog.Debugf("Broadcasting %v messages", len(msgs))

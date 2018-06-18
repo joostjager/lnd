@@ -92,7 +92,7 @@ type Config struct {
 	// that the daemon is connected to. If supplied, the exclude parameter
 	// indicates that the target peer should be excluded from the
 	// broadcast.
-	Broadcast func(skips map[routing.Vertex]struct{},
+	Broadcast func(skips map[channeldb.Vertex]struct{},
 		msg ...lnwire.Message) error
 
 	// SendToPeer is a function which allows the service to send a set of
@@ -216,7 +216,7 @@ type AuthenticatedGossiper struct {
 	// directly to their gossiper, rather than broadcasting them. With this
 	// change, we ensure we filter out all updates properly.
 	syncerMtx   sync.RWMutex
-	peerSyncers map[routing.Vertex]*gossipSyncer
+	peerSyncers map[channeldb.Vertex]*gossipSyncer
 
 	sync.Mutex
 }
@@ -240,7 +240,7 @@ func New(cfg Config, selfKey *btcec.PublicKey) (*AuthenticatedGossiper, error) {
 		waitingProofs:           storage,
 		channelMtx:              multimutex.NewMutex(),
 		recentRejects:           make(map[uint64]struct{}),
-		peerSyncers:             make(map[routing.Vertex]*gossipSyncer),
+		peerSyncers:             make(map[channeldb.Vertex]*gossipSyncer),
 	}, nil
 }
 
@@ -280,7 +280,7 @@ func (d *AuthenticatedGossiper) SynchronizeNode(syncPeer lnpeer.Peer) error {
 	// We'll use this map to ensure we don't send the same node
 	// announcement more than one time as one node may have many channel
 	// anns we'll need to send.
-	nodePubsSent := make(map[routing.Vertex]struct{})
+	nodePubsSent := make(map[channeldb.Vertex]struct{})
 
 	// As peers are expecting channel announcements before node
 	// announcements, we first retrieve the initial announcement, as well as
@@ -529,14 +529,14 @@ type msgWithSenders struct {
 	msg lnwire.Message
 
 	// sender is the set of peers that sent us this message.
-	senders map[routing.Vertex]struct{}
+	senders map[channeldb.Vertex]struct{}
 }
 
 // mergeSyncerMap is used to merge the set of senders of a particular message
 // with peers that we have an active gossipSyncer with. We do this to ensure
 // that we don't broadcast messages to any peers that we have active gossip
 // syncers for.
-func (m *msgWithSenders) mergeSyncerMap(syncers map[routing.Vertex]*gossipSyncer) {
+func (m *msgWithSenders) mergeSyncerMap(syncers map[channeldb.Vertex]*gossipSyncer) {
 	for peerPub := range syncers {
 		m.senders[peerPub] = struct{}{}
 	}
@@ -557,7 +557,7 @@ type deDupedAnnouncements struct {
 	channelUpdates map[channelUpdateID]msgWithSenders
 
 	// nodeAnnouncements are identified by the Vertex field.
-	nodeAnnouncements map[routing.Vertex]msgWithSenders
+	nodeAnnouncements map[channeldb.Vertex]msgWithSenders
 
 	sync.Mutex
 }
@@ -579,7 +579,7 @@ func (d *deDupedAnnouncements) reset() {
 	// appropriate key points to the corresponding lnwire.Message.
 	d.channelAnnouncements = make(map[lnwire.ShortChannelID]msgWithSenders)
 	d.channelUpdates = make(map[channelUpdateID]msgWithSenders)
-	d.nodeAnnouncements = make(map[routing.Vertex]msgWithSenders)
+	d.nodeAnnouncements = make(map[channeldb.Vertex]msgWithSenders)
 }
 
 // addMsg adds a new message to the current batch. If the message is already
@@ -597,13 +597,13 @@ func (d *deDupedAnnouncements) addMsg(message networkMsg) {
 	// Channel announcements are identified by the short channel id field.
 	case *lnwire.ChannelAnnouncement:
 		deDupKey := msg.ShortChannelID
-		sender := routing.NewVertex(message.source)
+		sender := channeldb.NewVertex(message.source)
 
 		mws, ok := d.channelAnnouncements[deDupKey]
 		if !ok {
 			mws = msgWithSenders{
 				msg:     msg,
-				senders: make(map[routing.Vertex]struct{}),
+				senders: make(map[channeldb.Vertex]struct{}),
 			}
 			mws.senders[sender] = struct{}{}
 
@@ -619,7 +619,7 @@ func (d *deDupedAnnouncements) addMsg(message networkMsg) {
 	// Channel updates are identified by the (short channel id, flags)
 	// tuple.
 	case *lnwire.ChannelUpdate:
-		sender := routing.NewVertex(message.source)
+		sender := channeldb.NewVertex(message.source)
 		deDupKey := channelUpdateID{
 			msg.ShortChannelID,
 			msg.Flags,
@@ -645,7 +645,7 @@ func (d *deDupedAnnouncements) addMsg(message networkMsg) {
 		if oldTimestamp < msg.Timestamp {
 			mws = msgWithSenders{
 				msg:     msg,
-				senders: make(map[routing.Vertex]struct{}),
+				senders: make(map[channeldb.Vertex]struct{}),
 			}
 
 			// We'll mark the sender of the message in the
@@ -668,8 +668,8 @@ func (d *deDupedAnnouncements) addMsg(message networkMsg) {
 	// Node announcements are identified by the Vertex field.  Use the
 	// NodeID to create the corresponding Vertex.
 	case *lnwire.NodeAnnouncement:
-		sender := routing.NewVertex(message.source)
-		deDupKey := routing.Vertex(msg.NodeID)
+		sender := channeldb.NewVertex(message.source)
+		deDupKey := channeldb.Vertex(msg.NodeID)
 
 		// We do the same for node announcements as we did for channel
 		// updates, as they also carry a timestamp.
@@ -688,7 +688,7 @@ func (d *deDupedAnnouncements) addMsg(message networkMsg) {
 		if oldTimestamp < msg.Timestamp {
 			mws = msgWithSenders{
 				msg:     msg,
-				senders: make(map[routing.Vertex]struct{}),
+				senders: make(map[channeldb.Vertex]struct{}),
 			}
 
 			mws.senders[sender] = struct{}{}
@@ -886,7 +886,7 @@ func (d *AuthenticatedGossiper) resendAnnounceSignatures() error {
 // incoming message. If a gossip syncer isn't found, then one will be created
 // for the target peer.
 func (d *AuthenticatedGossiper) findGossipSyncer(pub *btcec.PublicKey) (*gossipSyncer, error) {
-	target := routing.NewVertex(pub)
+	target := channeldb.NewVertex(pub)
 
 	// First, we'll try to find an existing gossiper for this peer.
 	d.syncerMtx.RLock()
@@ -1161,7 +1161,7 @@ func (d *AuthenticatedGossiper) networkHandler() {
 			// syncers, we'll collect their pubkeys so we can avoid
 			// sending them the full message blast below.
 			d.syncerMtx.RLock()
-			syncerPeers := make(map[routing.Vertex]*gossipSyncer)
+			syncerPeers := make(map[channeldb.Vertex]*gossipSyncer)
 			for peerPub, syncer := range d.peerSyncers {
 				syncerPeers[peerPub] = syncer
 			}
@@ -1229,7 +1229,7 @@ func (d *AuthenticatedGossiper) InitSyncState(syncPeer lnpeer.Peer, recvUpdates 
 
 	// If we already have a syncer, then we'll exit early as we don't want
 	// to override it.
-	nodeID := routing.Vertex(syncPeer.PubKey())
+	nodeID := channeldb.Vertex(syncPeer.PubKey())
 	if _, ok := d.peerSyncers[nodeID]; ok {
 		return
 	}
@@ -1262,7 +1262,7 @@ func (d *AuthenticatedGossiper) PruneSyncState(peer *btcec.PublicKey) {
 	log.Infof("Removing gossipSyncer for peer=%x",
 		peer.SerializeCompressed())
 
-	vertex := routing.NewVertex(peer)
+	vertex := channeldb.NewVertex(peer)
 	syncer, ok := d.peerSyncers[vertex]
 	if !ok {
 		return

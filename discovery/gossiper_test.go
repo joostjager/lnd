@@ -202,7 +202,7 @@ func (r *mockGraphSource) GetChannelByID(chanID lnwire.ShortChannelID) (
 
 // IsStaleNode returns true if the graph source has a node announcement for the
 // target node with a more recent timestamp.
-func (r *mockGraphSource) IsStaleNode(nodePub routing.Vertex, timestamp time.Time) bool {
+func (r *mockGraphSource) IsStaleNode(nodePub channeldb.Vertex, timestamp time.Time) bool {
 	for _, node := range r.nodes {
 		if node.PubKeyBytes == nodePub {
 			return node.LastUpdate.After(timestamp) ||
@@ -521,7 +521,7 @@ func createTestCtx(startHeight uint32) (*testCtx, func(), error) {
 	broadcastedMessage := make(chan msgWithSenders, 10)
 	gossiper, err := New(Config{
 		Notifier: notifier,
-		Broadcast: func(senders map[routing.Vertex]struct{},
+		Broadcast: func(senders map[channeldb.Vertex]struct{},
 			msgs ...lnwire.Message) error {
 
 			for _, msg := range msgs {
@@ -581,7 +581,7 @@ func TestProcessAnnouncement(t *testing.T) {
 	defer cleanup()
 
 	assertSenderExistence := func(sender *btcec.PublicKey, msg msgWithSenders) {
-		if _, ok := msg.senders[routing.NewVertex(sender)]; !ok {
+		if _, ok := msg.senders[channeldb.NewVertex(sender)]; !ok {
 			t.Fatalf("sender=%x not present in %v",
 				sender.SerializeCompressed(), spew.Sdump(msg))
 		}
@@ -1902,7 +1902,7 @@ func TestDeDuplicatedAnnouncements(t *testing.T) {
 	if len(announcements.nodeAnnouncements) != 2 {
 		t.Fatal("node announcement not replaced in batch")
 	}
-	nodeID := routing.NewVertex(nodeKeyPriv2.PubKey())
+	nodeID := channeldb.NewVertex(nodeKeyPriv2.PubKey())
 	stored, ok := announcements.nodeAnnouncements[nodeID]
 	if !ok {
 		t.Fatalf("node announcement not found in batch")

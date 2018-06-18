@@ -119,6 +119,23 @@ var (
 	nodeBloomKey = []byte("node-bloom")
 )
 
+// Vertex is a simple alias for the serialization of a compressed Bitcoin
+// public key.
+type Vertex [33]byte
+
+// NewVertex returns a new Vertex given a public key.
+func NewVertex(pub *btcec.PublicKey) Vertex {
+	var v Vertex
+	copy(v[:], pub.SerializeCompressed())
+	return v
+}
+
+// String returns a human readable version of the Vertex which is the
+// hex-encoding of the serialized compressed public key.
+func (v Vertex) String() string {
+	return fmt.Sprintf("%x", v[:])
+}
+
 // ChannelGraph is a persistent, on-disk graph representation of the Lightning
 // Network. This struct can be used to implement path finding algorithms on top
 // of, and also to update a node's view based on information received from the

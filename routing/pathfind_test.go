@@ -380,10 +380,10 @@ func testBasicGraphPathFindingCase(t *testing.T, graph *channeldb.ChannelGraph,
 	if err != nil {
 		t.Fatalf("unable to fetch source node: %v", err)
 	}
-	sourceVertex := Vertex(sourceNode.PubKeyBytes)
+	sourceVertex := channeldb.Vertex(sourceNode.PubKeyBytes)
 
 	ignoredEdges := make(map[uint64]struct{})
-	ignoredVertexes := make(map[Vertex]struct{})
+	ignoredVertexes := make(map[channeldb.Vertex]struct{})
 
 	const (
 		startingHeight = 100
@@ -572,8 +572,8 @@ func TestPathFindingWithAdditionalEdges(t *testing.T) {
 		TimeLockDelta:             9,
 	}
 
-	additionalEdges := map[Vertex][]*channeldb.ChannelEdgePolicy{
-		NewVertex(aliases["songoku"]): {songokuToDoge},
+	additionalEdges := map[channeldb.Vertex][]*channeldb.ChannelEdgePolicy{
+		channeldb.NewVertex(aliases["songoku"]): {songokuToDoge},
 	}
 
 	// We should now be able to find a path from roasbeef to doge.
@@ -645,7 +645,7 @@ func TestKShortestPathFinding(t *testing.T) {
 func TestNewRoute(t *testing.T) {
 
 	var sourceKey [33]byte
-	sourceVertex := Vertex(sourceKey)
+	sourceVertex := channeldb.Vertex(sourceKey)
 
 	const (
 		startingHeight = 100
@@ -824,7 +824,7 @@ func TestNewRoutePathTooLong(t *testing.T) {
 	}
 
 	ignoredEdges := make(map[uint64]struct{})
-	ignoredVertexes := make(map[Vertex]struct{})
+	ignoredVertexes := make(map[channeldb.Vertex]struct{})
 
 	paymentAmt := lnwire.NewMSatFromSatoshis(100)
 
@@ -869,7 +869,7 @@ func TestPathNotAvailable(t *testing.T) {
 	}
 
 	ignoredEdges := make(map[uint64]struct{})
-	ignoredVertexes := make(map[Vertex]struct{})
+	ignoredVertexes := make(map[channeldb.Vertex]struct{})
 
 	// With the test graph loaded, we'll test that queries for target that
 	// are either unreachable within the graph, or unknown result in an
@@ -907,7 +907,7 @@ func TestPathInsufficientCapacity(t *testing.T) {
 		t.Fatalf("unable to fetch source node: %v", err)
 	}
 	ignoredEdges := make(map[uint64]struct{})
-	ignoredVertexes := make(map[Vertex]struct{})
+	ignoredVertexes := make(map[channeldb.Vertex]struct{})
 
 	// Next, test that attempting to find a path in which the current
 	// channel graph cannot support due to insufficient capacity triggers
@@ -945,7 +945,7 @@ func TestRouteFailMinHTLC(t *testing.T) {
 		t.Fatalf("unable to fetch source node: %v", err)
 	}
 	ignoredEdges := make(map[uint64]struct{})
-	ignoredVertexes := make(map[Vertex]struct{})
+	ignoredVertexes := make(map[channeldb.Vertex]struct{})
 
 	// We'll not attempt to route an HTLC of 10 SAT from roasbeef to Son
 	// Goku. However, the min HTLC of Son Goku is 1k SAT, as a result, this
@@ -978,7 +978,7 @@ func TestRouteFailDisabledEdge(t *testing.T) {
 		t.Fatalf("unable to fetch source node: %v", err)
 	}
 	ignoredEdges := make(map[uint64]struct{})
-	ignoredVertexes := make(map[Vertex]struct{})
+	ignoredVertexes := make(map[channeldb.Vertex]struct{})
 
 	// First, we'll try to route from roasbeef -> sophon. This should
 	// succeed without issue, and return a single path via phamnuwen
