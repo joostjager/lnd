@@ -12,6 +12,8 @@ type nodeWithDist struct {
 	// node is the vertex itself. This pointer can be used to explore all
 	// the outgoing edges (channels) emanating from a node.
 	node *channeldb.LightningNode
+
+	failureChance float64
 }
 
 // distanceHeap is a min-distance heap that's used within our path finding

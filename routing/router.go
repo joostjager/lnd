@@ -1646,7 +1646,7 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 	}
 
 	timeoutChan := time.After(payAttemptTimeout)
-
+	
 	// We'll continue until either our payment succeeds, or we encounter a
 	// critical error during path finding.
 	for {
@@ -1939,6 +1939,8 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 			default:
 				return preImage, nil, sendError
 			}
+		} else {
+			paySession.ReportSuccess(route)
 		}
 
 		return preImage, route, nil

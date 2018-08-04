@@ -469,7 +469,7 @@ func edgeWeight(amt lnwire.MilliSatoshi, e *channeldb.ChannelEdgePolicy) int64 {
 func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	additionalEdges map[Vertex][]*channeldb.ChannelEdgePolicy,
 	sourceNode *channeldb.LightningNode, target *btcec.PublicKey,
-	ignoredNodes map[Vertex]struct{}, ignoredEdges map[uint64]struct{},
+	ignoredNodes map[Vertex]struct{}, edgeFailureChance map[uint64]float64,
 	amt lnwire.MilliSatoshi,
 	bandwidthHints map[uint64]lnwire.MilliSatoshi) ([]*ChannelHop, error) {
 
@@ -545,14 +545,19 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		if _, ok := ignoredNodes[v]; ok {
 			return
 		}
-		if _, ok := ignoredEdges[edge.ChannelID]; ok {
-			return
-		}
 
 		// Compute the tentative distance to this new channel/edge which
 		// is the distance to our pivot node plus the weight of this
 		// edge.
 		tempDist := distance[pivot].dist + edgeWeight(amt, edge)
+
+		// if edge failure chance not available, assume 0%
+		pathFailureChance := 1 - (1 - distance[pivot].failureChance) * 
+			(1 - edgeFailureChance[edge.ChannelID])
+
+		if pathFailureChance > 0.5 {
+			return
+		}
 
 		// If this new tentative distance is better than the current
 		// best known distance to this node, then we record the new
@@ -566,6 +571,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 			distance[v] = nodeWithDist{
 				dist: tempDist,
 				node: edge.Node,
+				failureChance: pathFailureChance,
 			}
 
 			prev[v] = edgeWithPrev{
@@ -592,6 +598,7 @@ func findPath(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	distance[sourceVertex] = nodeWithDist{
 		dist: 0,
 		node: sourceNode,
+		failureChance: 0,
 	}
 
 	// To start, our source node will the sole item within our distance
@@ -710,7 +717,7 @@ func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 	amt lnwire.MilliSatoshi, numPaths uint32,
 	bandwidthHints map[uint64]lnwire.MilliSatoshi) ([][]*ChannelHop, error) {
 
-	ignoredEdges := make(map[uint64]struct{})
+	ignoredEdges := make(map[uint64]float64)
 	ignoredVertexes := make(map[Vertex]struct{})
 
 	// TODO(roasbeef): modifying ordering within heap to eliminate final
@@ -758,7 +765,7 @@ func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 			// we'll exclude from the next path finding attempt.
 			// These are required to ensure the paths are unique
 			// and loopless.
-			ignoredEdges = make(map[uint64]struct{})
+			ignoredEdges = make(map[uint64]float64)
 			ignoredVertexes = make(map[Vertex]struct{})
 
 			// Our spur node is the i-th node in the prior shortest
@@ -777,7 +784,7 @@ func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 				// directly _after_ our spur node from the
 				// graph so we don't repeat paths.
 				if len(path) > i+1 && isSamePath(rootPath, path[:i+1]) {
-					ignoredEdges[path[i+1].ChannelID] = struct{}{}
+					ignoredEdges[path[i+1].ChannelID] = 1
 				}
 			}
 
