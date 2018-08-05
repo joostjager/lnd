@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/coreos/bbolt"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/btcsuite/btcd/btcec"
 )
 
 const (
@@ -303,6 +303,19 @@ func (p *paymentSession) ReportSuccess(route *Route) {
 	p.mc.Unlock()
 }
 
+func (p *paymentSession) ReportFailure(route *Route) {
+	log.Debugf("Reporting route failure to Mission Control")
+
+	p.mc.Lock()
+
+	for _, hop := range route.Hops {
+		chanID := hop.Channel.ChannelID
+		p.mc.failedEdges[chanID] = appendWithMax(p.mc.failedEdges[chanID], true)
+	}
+
+	p.mc.Unlock()
+}
+
 // ReportVertexFailure adds a vertex to the graph prune view after a client
 // reports a routing failure localized to the vertex. The time the vertex was
 // added is noted, as it'll be pruned from the shared view after a period of
@@ -339,7 +352,7 @@ func (p *paymentSession) ReportChannelFailure(e uint64) {
 	// with this new piece of information so it can be utilized for new
 	// payment sessions.
 	p.mc.Lock()
-	
+
 	p.mc.failedEdges[e] = appendWithMax(p.mc.failedEdges[e], true)
 
 	p.mc.Unlock()
@@ -347,7 +360,7 @@ func (p *paymentSession) ReportChannelFailure(e uint64) {
 
 func appendWithMax(list []bool, result bool) []bool {
 	if len(list) == 0 {
-		list = []bool {result}
+		list = []bool{result}
 	} else {
 		list = append(list[1:], result)
 	}

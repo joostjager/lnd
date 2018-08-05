@@ -1646,7 +1646,7 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 	}
 
 	timeoutChan := time.After(payAttemptTimeout)
-	
+
 	// We'll continue until either our payment succeeds, or we encounter a
 	// critical error during path finding.
 	for {
@@ -1712,6 +1712,18 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 		}
 		copy(htlcAdd.OnionBlob[:], onionBlob)
 
+		sendComplete := make(chan struct{})
+		go func() {
+			select {
+			case <-sendComplete:
+				return
+			case <-time.After(5 * time.Second):
+			}
+
+			log.Info("Timeout!")
+			paySession.ReportFailure(route)
+		}()
+
 		// Attempt to send this payment through the network to complete
 		// the payment. If this attempt fails, then we'll continue on
 		// to the next available route.
@@ -1719,6 +1731,8 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 		preImage, sendError = r.cfg.SendToSwitch(
 			firstHop, htlcAdd, circuit,
 		)
+		close(sendComplete)
+
 		if sendError != nil {
 			// An error occurred when attempting to send the
 			// payment, depending on the error type, we'll either
