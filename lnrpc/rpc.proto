@@ -1956,3 +1956,115 @@ message ForwardingHistoryResponse {
    /// The index of the last time in the set of returned forwarding events. Can be used to seek further, pagination style.
    uint32 last_offset_index = 2 [json_name = "last_offset_index"];
 }
+
+message NotifyHashMsg {
+    bytes pay_hash = 1;
+    int64 expiry_height = 2;
+}
+
+message NotifyHashResp {}
+
+message SatisfyHashMsg {
+    bytes pay_hash = 1;
+    bytes pre_image = 2;
+} 
+
+message SatisfyHashResp {}
+
+service HashResolver {
+   rpc NotifyHash(NotifyHashMsg) returns (NotifyHashResp);
+   rpc SatisfyHash(SatisfyHashMsg) returns (SatisfyHashResp);
+}
+
+message KeyReq {
+    int32 parent_finger_print = 1;
+    int32 key_family = 2;
+}
+message KeyLocator {
+    int32 key_family = 1;
+    int32 key_index = 2;
+}
+message KeyDescriptor {
+     bytes      raw_key_bytes = 1;
+     KeyLocator key_loc = 2;
+}
+message AddrRequest {
+ // no body as we always give it a n2pwkh 
+}
+message AddrResponse {
+    string addr = 1;
+}
+
+message TxRequest {
+    bytes tx_hex = 1;
+ 
+    // TODO(roasbeef): RBF stuff related to conf target, fee ceiling, etc
+}
+message PublishResponse {
+    string error = 1; 
+
+    // TODO(roasbeef): map to the concrete errors using an enum that we decide upon in the future for the wallet, etc
+}
+
+message SpendReport {
+    bool has_spend = 1; 
+    bytes raw_tx_hex = 2;
+}
+
+service WalletKit {
+    rpc DeriveNextKey(KeyReq)               returns (KeyDescriptor);
+    rpc DeriveKey(KeyLocator)               returns (KeyDescriptor);
+    rpc NextSweepAddr(AddrRequest)          returns (AddrResponse);
+    rpc PublishTransaction(TxRequest)       returns (PublishResponse);
+    rpc HasSpendingTx(ChannelPoint)        returns (SpendReport);
+}
+
+
+message ConfIntent {
+    bytes txid = 1;
+    bytes script = 2; 
+    int32 num_confs = 3; 
+}
+
+message TxConf {
+   bytes block_hash = 1; 
+   bytes block_heigt = 2; 
+   bytes tx_index = 3;
+   bytes raw_txn_bytes = 4; 
+}
+
+message NegativeConf {
+   int32 re_org_depth = 1;
+}
+
+message ConfEvent {
+    oneof conf_Type {
+        TxConf       conf = 1;
+        NegativeConf neg_conf =2;
+    }
+}
+
+message SpendIntent {
+    bytes txid = 1;
+    int32 output_index = 2;
+    bytes script = 3; 
+}
+
+message SpendEvent {
+    ChannelPoint spending_outpoint = 1; 
+    bytes spender_tx_hash = 2; 
+    bytes raw_spending_tx = 3; 
+    int32 spender_input_index = 4;
+    int32 spending_height = 5;   
+} 
+
+message BlockEpoch {}
+message BlockEpochEvent {}
+
+service ChainNotifier {
+    rpc RegisterConfirmationsNtfn(ConfIntent) returns (stream ConfEvent);
+
+    rpc RegisterSpendNtfn(SpendIntent) returns (stream SpendEvent);
+
+    rpc RegisterBlockEpochNtfn(BlockEpoch) returns (stream BlockEpochEvent);
+}
