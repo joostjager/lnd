@@ -1,20 +1,17 @@
 PKG := github.com/lightningnetwork/lnd
 ESCPKG := github.com\/lightningnetwork\/lnd
 
-DEP_PKG := github.com/golang/dep/cmd/dep
 BTCD_PKG := github.com/btcsuite/btcd
 GLIDE_PKG := github.com/Masterminds/glide
 GOVERALLS_PKG := github.com/mattn/goveralls
 LINT_PKG := gopkg.in/alecthomas/gometalinter.v2
 
 GO_BIN := ${GOPATH}/bin
-DEP_BIN := $(GO_BIN)/dep
 BTCD_BIN := $(GO_BIN)/btcd
 GLIDE_BIN := $(GO_BIN)/glide
 GOVERALLS_BIN := $(GO_BIN)/goveralls
 LINT_BIN := $(GO_BIN)/gometalinter.v2
 
-HAVE_DEP := $(shell command -v $(DEP_BIN) 2> /dev/null)
 HAVE_BTCD := $(shell command -v $(BTCD_BIN) 2> /dev/null)
 HAVE_GLIDE := $(shell command -v $(GLIDE_BIN) 2> /dev/null)
 HAVE_GOVERALLS := $(shell command -v $(GOVERALLS_BIN) 2> /dev/null)
@@ -93,10 +90,6 @@ all: scratch check install
 # DEPENDENCIES
 # ============
 
-$(DEP_BIN):
-	@$(call print, "Fetching dep.")
-	go get -u $(DEP_PKG)
-
 $(GLIDE_BIN):
 	@$(call print, "Fetching glide.")
 	go get -d $(GLIDE_PKG)
@@ -111,10 +104,6 @@ $(LINT_BIN):
 	@$(call print, "Fetching gometalinter.v2")
 	go get -u $(LINT_PKG)
 	$(GOINSTALL) $(LINT_PKG)
-
-dep: $(DEP_BIN)
-	@$(call print, "Compiling dependencies.")
-	dep ensure -v
 
 $(BTCD_DIR):
 	@$(call print, "Fetching btcd.")
@@ -141,7 +130,7 @@ install:
 	go install -v -tags="$(PROD_TAGS)" $(LDFLAGS) $(PKG)
 	go install -v -tags="$(PROD_TAGS)" $(LDFLAGS) $(PKG)/cmd/lncli
 
-scratch: dep build
+scratch: build
 
 
 # =======
@@ -186,23 +175,23 @@ flake-unit:
 # ======
 
 ifeq ($(RACE)$(USE_LINT), FALSETRUE)
-travis: dep lint build itest unit-cover $(GOVERALLS_BIN)
+travis: lint build itest unit-cover $(GOVERALLS_BIN)
 	@$(call print, "Sending coverage report.")
 	$(GOVERALLS_BIN) -coverprofile=profile.cov -service=travis-ci
 endif
 
 ifeq ($(RACE)$(USE_LINT), FALSEFALSE)
-travis: dep build itest unit-cover $(GOVERALLS_BIN)
+travis: build itest unit-cover $(GOVERALLS_BIN)
 	@$(call print, "Sending coverage report.")
 	$(GOVERALLS_BIN) -coverprofile=profile.cov -service=travis-ci
 endif
 
 ifeq ($(RACE)$(USE_LINT), TRUETRUE)
-travis: dep lint btcd unit-race
+travis: lint btcd unit-race
 endif
 
 ifeq ($(RACE)$(USE_LINT), TRUEFALSE)
-travis: dep btcd unit-race
+travis: btcd unit-race
 endif
 
 # =========
@@ -238,7 +227,6 @@ clean:
 .PHONY: all \
 	btcd \
 	default \
-	dep \
 	build \
 	install \
 	scratch \
