@@ -1568,6 +1568,9 @@
     "lnrpcDisconnectPeerResponse": {
       "type": "object"
     },
+    "lnrpcFailHashResp": {
+      "type": "object"
+    },
     "lnrpcFeeLimit": {
       "type": "object",
       "properties": {
@@ -2243,9 +2246,6 @@
           "type": "string"
         }
       }
-    },
-    "lnrpcNotifyHashResp": {
-      "type": "object"
     },
     "lnrpcOpenChannelRequest": {
       "type": "object",

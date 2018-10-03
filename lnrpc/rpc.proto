@@ -1957,23 +1957,25 @@ message ForwardingHistoryResponse {
    uint32 last_offset_index = 2 [json_name = "last_offset_index"];
 }
 
-message NotifyHashMsg {
+message FailHashMsg {
+    /// Payment hash of the hold invoice to fail. 
     bytes pay_hash = 1;
-    int64 expiry_height = 2;
-}
-
-message NotifyHashResp {}
+} 
+message FailHashResp {}
 
 message SatisfyHashMsg {
+    /// Payment hash of the hold invoice to settle. Not required in case pre-image is supplied.
     bytes pay_hash = 1;
+
+    /// Externally discovered pre-image that should be used to settle the hold invoice.
     bytes pre_image = 2;
 } 
-
 message SatisfyHashResp {}
 
 service HashResolver {
-   rpc NotifyHash(NotifyHashMsg) returns (NotifyHashResp);
+   rpc AddHoldInvoice(Invoice) returns (AddInvoiceResponse);
    rpc SatisfyHash(SatisfyHashMsg) returns (SatisfyHashResp);
+   rpc FailHash(FailHashMsg) returns (FailHashResp);
 }
 
 message KeyReq {
