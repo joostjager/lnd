@@ -2070,3 +2070,27 @@ service ChainNotifier {
 
     rpc RegisterBlockEpochNtfn(BlockEpoch) returns (stream BlockEpochEvent);
 }
+
+message SignDescriptor {
+    KeyDescriptor key_desc = 1;
+    bytes         single_tweak = 2;
+    bytes         double_tweak = 3;
+    bytes         witness_script = 4;
+    int32         output_value = 5;
+
+    // Use int32 because no byte type available in protobuf.    
+    int32         sighash = 6;
+    
+    int32         input_index = 7;
+}
+message SignReq {
+    bytes          raw_tx_bytes = 1;
+    repeated SignDescriptor sign_desc = 2; 
+}
+message SignResp {
+    bytes raw_fixed_sized_sig = 1;
+}
+
+service Signer {
+    rpc SignOutputRaw(SignReq) returns (SignResp);
+}

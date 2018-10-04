@@ -2787,6 +2787,15 @@
         }
       }
     },
+    "lnrpcSignResp": {
+      "type": "object",
+      "properties": {
+        "raw_fixed_sized_sig": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
     "lnrpcSpendEvent": {
       "type": "object",
       "properties": {
