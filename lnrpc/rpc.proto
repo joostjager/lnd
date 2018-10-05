@@ -1709,7 +1709,16 @@ message Invoice {
     here as well.
     */
     int64 amt_paid_msat = 20 [json_name = "amt_paid_msat"];
+
+    enum InvoiceState {
+        OPEN = 0;
+        ACCEPTED = 1;
+        SETTLED = 2;
+    }
+
+    InvoiceState state = 22;
 }
+
 message AddInvoiceResponse {
     bytes r_hash = 1 [json_name = "r_hash"];
 
