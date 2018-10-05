@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/invoices"
@@ -65,8 +66,14 @@ type AddInvoiceData struct {
 	Receipt []byte
 
 	// The preimage which will allow settling an incoming HTLC payable to
-	// this preimage.
+	// this preimage. If RPreimage is set, RHash should be nil. If both
+	// RPreimage and RHash are nil, a random preimage is generated.
 	Preimage *lnhash.Hash
+
+	// The hash of the preimage. If RHash is set, RPreimage should be nil.
+	// This condition indicates that we have a 'hold invoice' for which the
+	// htlc will be accepted and held until the preimage becomes known.
+	Hash *lnhash.Hash
 
 	// The value of this invoice in satoshis.
 	Value int64
@@ -91,19 +98,37 @@ type AddInvoiceData struct {
 }
 
 // AddInvoice attempts to add a new invoice to the invoice database. Any
-// duplicated invoices are rejected, therefore all invoices *must* have a unique
-// payment preimage. AddInvoice returns the payment hash and the invoice
-// structure as stored in the database.
+// duplicated invoices are rejected, therefore all invoices *must* have a
+// unique payment preimage.
 func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 	invoice *AddInvoiceData) (*lnhash.Hash, *channeldb.Invoice, error) {
 
-	var paymentPreimage lnhash.Hash
-	if invoice.Preimage == nil {
+	var paymentPreimage, paymentHash lnhash.Hash
+
+	switch {
+	case invoice.Preimage != nil && invoice.Hash != nil:
+		return nil, nil,
+			errors.New("preimage and hash both set")
+
+	case invoice.Preimage != nil &&
+		bytes.Equal(invoice.Preimage[:], channeldb.UnknownPreimage[:]):
+
+		return nil, nil,
+			fmt.Errorf("cannot use all zeroes as a preimage")
+
+	case invoice.Preimage == nil && invoice.Hash == nil:
 		if _, err := rand.Read(paymentPreimage[:]); err != nil {
 			return nil, nil, err
 		}
-	} else {
+		paymentHash = sha256.Sum256(paymentPreimage[:])
+
+	case invoice.Preimage == nil && invoice.Hash != nil:
+		paymentPreimage = channeldb.UnknownPreimage
+		paymentHash = *invoice.Hash
+
+	case invoice.Preimage != nil && invoice.Hash == nil:
 		paymentPreimage = *invoice.Preimage
+		paymentHash = sha256.Sum256(invoice.Preimage[:])
 	}
 
 	// The size of the memo, receipt and description hash attached must not
@@ -138,10 +163,6 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 			cfg.MaxPaymentMSat.ToSatoshis(),
 		)
 	}
-
-	// Next, generate the payment hash itself from the preimage. This will
-	// be used by clients to query for the state of a particular invoice.
-	rHash := lnhash.Hash(sha256.Sum256(paymentPreimage[:]))
 
 	// We also create an encoded payment request which allows the
 	// caller to compactly send the invoice to the payer. We'll create a
@@ -344,7 +365,7 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 	// Create and encode the payment request as a bech32 (zpay32) string.
 	creationDate := time.Now()
 	payReq, err := zpay32.NewInvoice(
-		cfg.ChainParams, rHash, creationDate, options...,
+		cfg.ChainParams, paymentHash, creationDate, options...,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -377,10 +398,10 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 	)
 
 	// With all sanity checks passed, write the invoice to the database.
-	_, err = cfg.InvoiceRegistry.AddInvoice(newInvoice, rHash)
+	_, err = cfg.InvoiceRegistry.AddInvoice(newInvoice, paymentHash)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return &rHash, newInvoice, nil
+	return &paymentHash, newInvoice, nil
 }
