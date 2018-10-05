@@ -739,7 +739,7 @@
     },
     "/v1/invoices/subscribe": {
       "get": {
-        "summary": "*\nSubscribeInvoices returns a uni-directional stream (server -\u003e client) for\nnotifying the client of newly added/settled invoices. The caller can\noptionally specify the add_index and/or the settle_index. If the add_index\nis specified, then we'll first start by sending add invoice events for all\ninvoices with an add_index greater than the specified value.  If the\nsettle_index is specified, the next, we'll send out all settle events for\ninvoices with a settle_index greater than the specified value.  One or both\nof these fields can be set. If no fields are set, then we'll only send out\nthe latest add/settle events.",
+        "summary": "*\nSubscribeInvoices returns a uni-directional stream (server -\u003e client) for\nnotifying the client of newly added/accepted/settled invoices. The caller can\noptionally specify the add_index, accept_index and/or the settle_index. If \nthe add_index is specified, then we'll first start by sending add \ninvoice events for all invoices with an add_index greater than the specified \nvalue.  If the settle_index is specified, the next, we'll send out all \nsettle events for invoices with a settle_index greater than the specified \nvalue. Same for accept_index. Multiple of those fields can be set. If no \nfields are set, then we'll only send out the latest add/accept/settle events.",
         "operationId": "SubscribeInvoices",
         "responses": {
           "200": {
@@ -753,6 +753,14 @@
           {
             "name": "add_index",
             "description": "*\nIf specified (non-zero), then we'll first start by sending out\nnotifications for all added indexes with an add_index greater than this\nvalue. This allows callers to catch up on any events they missed while they\nweren't connected to the streaming RPC.",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "accept_index",
+            "description": "*\nIf specified (non-zero), then we'll first start by sending out\nnotifications for all accepted indexes with an accept_index greater than\nthis value. This allows callers to catch up on any events they missed while\nthey weren't connected to the streaming RPC.",
             "in": "query",
             "required": false,
             "type": "string",
@@ -2040,6 +2048,11 @@
           "format": "int64",
           "title": "/ When this invoice was created"
         },
+        "accept_date": {
+          "type": "string",
+          "format": "int64",
+          "title": "/ When this invoice was accepted"
+        },
         "settle_date": {
           "type": "string",
           "format": "int64",
@@ -2084,6 +2097,11 @@
           "type": "string",
           "format": "uint64",
           "description": "*\nThe \"add\" index of this invoice. Each newly created invoice will increment\nthis index making it monotonically increasing. Callers to the\nSubscribeInvoices call can use this to instantly get notified of all added\ninvoices with an add_index greater than this one."
+        },
+        "accept_index": {
+          "type": "string",
+          "format": "uint64",
+          "description": "*\nThe \"accept\" index of this invoice. Each newly accepted invoice will\nincrement this index making it monotonically increasing. Callers to the\nSubscribeInvoices call can use this to instantly get notified of all\naccepted invoices with an accept_index greater than this one."
         },
         "settle_index": {
           "type": "string",
