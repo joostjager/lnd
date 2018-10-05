@@ -2464,6 +2464,22 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			}
 
 			preimage := invoice.Terms.PaymentPreimage
+
+			// Reject invoices with unknown preimages.
+			if preimage == channeldb.UnknownPreimage {
+				log.Errorf("rejecting htlc because preimage is " +
+					"unknown")
+
+				failure := lnwire.FailUnknownPaymentHash{}
+				l.sendHTLCError(
+					pd.HtlcIndex, failure, obfuscator,
+					pd.SourceRef,
+				)
+
+				needUpdate = true
+				continue
+			}
+
 			err = l.channel.SettleHTLC(
 				preimage, pd.HtlcIndex, pd.SourceRef, nil, nil,
 			)

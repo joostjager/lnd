@@ -33,9 +33,9 @@ import (
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lncfg"
-	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/macaroons"
@@ -3107,10 +3107,10 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		ChanDB:            r.server.chanDB,
 	}
 
-	var preimage *lntypes.Hash
+	var preimage *lntypes.Preimage
 	if invoice.RPreimage != nil {
 		var err error
-		preimage, err = lntypes.NewHash(invoice.RPreimage)
+		preimage, err = lntypes.NewPreimage(invoice.RPreimage)
 		if err != nil {
 			return nil, err
 		}
