@@ -56,6 +56,10 @@ const (
 	DefaultMaxLinkFeeUpdateTimeout = 60 * time.Minute
 )
 
+var (
+	unknownPreimage [32]byte
+)
+
 // ForwardingPolicy describes the set of constraints that a given ChannelLink
 // is to adhere to when forwarding HTLC's. For each incoming HTLC, this set of
 // constraints will be consulted in order to ensure that adequate fees are
@@ -2338,7 +2342,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// TODO(conner): track ownership of settlements to
 			// properly recover from failures? or add batch invoice
 			// settlement
-			if invoice.Terms.Settled {
+			if invoice.Terms.State != channeldb.ContractOpen {
 				log.Warnf("Accepting duplicate payment for "+
 					"hash=%x", pd.RHash[:])
 			}
