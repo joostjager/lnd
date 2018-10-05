@@ -2815,6 +2815,35 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	}, nil
 }
 
+func (r *rpcServer) SatisfyHash(ctx context.Context,
+	in *lnrpc.SatisfyHashMsg) (*lnrpc.SatisfyHashResp, error) {
+
+	if len(in.PreImage) != 32 {
+		return nil, fmt.Errorf("invalid preimage length")
+	}
+
+	paymentHash := chainhash.Hash(sha256.Sum256(in.PreImage[:]))
+
+	invoice, _, err := r.server.invoices.LookupInvoice(
+		paymentHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query invoice registry: "+
+			" %v", err)
+	}
+
+	if invoice.Terms.State == channeldb.ContractSettled {
+		return nil, fmt.Errorf("invoice already settled")
+	}
+
+	// TODO: safe handoff?
+	r.server.witnessBeacon.AddPreimage(in.PreImage)
+
+	// TODO: update preimage in invoice?
+
+	return &lnrpc.SatisfyHashResp{}, nil
+}
+
 // createRPCInvoice creates an *lnrpc.Invoice from the *channeldb.Invoice.
 func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 	paymentRequest := string(invoice.PaymentRequest)

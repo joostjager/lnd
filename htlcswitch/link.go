@@ -869,6 +869,9 @@ func (l *channelLink) htlcManager() {
 		go l.fwdPkgGarbager()
 	}
 
+	preimageSubscription := l.cfg.PreimageCache.SubscribeUpdates()
+	defer preimageSubscription.CancelSubscription()
+
 out:
 	for {
 		// We must always check if we failed at some point processing
@@ -1021,6 +1024,52 @@ out:
 		// for us, or part of a multi-hop HTLC circuit.
 		case msg := <-l.upstream:
 			l.handleUpstreamMsg(msg)
+
+		case preimage := <-preimageSubscription.WitnessUpdates:
+			paymentHash := sha256.Sum256(preimage)
+			pds := l.channel.GetIncomingHtlcs(paymentHash[:])
+			var needUpdate bool
+			for _, pd := range pds {
+				var preimageArray [32]byte
+				copy(preimageArray[:], preimage)
+
+				err := l.channel.SettleHTLC(
+					preimageArray, pd.HtlcIndex, pd.SourceRef, nil, nil,
+				)
+				if err != nil {
+					l.fail(LinkFailureError{code: ErrInternalError},
+						"unable to settle htlc: %v", err)
+					break out
+				}
+
+				// Notify the invoiceRegistry of the invoices we just
+				// settled (with the amount accepted at settle time)
+				// with this latest commitment update.
+				err = l.cfg.Registry.SettleInvoice(
+					paymentHash, pd.Amount,
+				)
+				if err != nil {
+					l.warnf("cannot find invoice to mark settled")
+				}
+
+				l.infof("settling %x as exit hop", pd.RHash)
+
+				// HTLC was successfully settled locally send
+				// notification about it remote peer.
+				l.cfg.Peer.SendMessage(false, &lnwire.UpdateFulfillHTLC{
+					ChanID:          l.ChanID(),
+					ID:              pd.HtlcIndex,
+					PaymentPreimage: preimageArray,
+				})
+				needUpdate = true
+			}
+			if needUpdate {
+				if err := l.updateCommitTx(); err != nil {
+					l.fail(LinkFailureError{code: ErrInternalError},
+						"unable to update commitment: %v", err)
+					break out
+				}
+			}
 
 		case <-l.quit:
 			break out

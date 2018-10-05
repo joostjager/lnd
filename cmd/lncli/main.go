@@ -271,6 +271,7 @@ func main() {
 		payInvoiceCommand,
 		sendToRouteCommand,
 		addInvoiceCommand,
+		satisfyHashCommand,
 		lookupInvoiceCommand,
 		listInvoicesCommand,
 		subscribeInvoicesCommand,

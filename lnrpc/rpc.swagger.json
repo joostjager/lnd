@@ -2619,6 +2619,9 @@
         }
       }
     },
+    "lnrpcSatisfyHashResp": {
+      "type": "object"
+    },
     "lnrpcSendCoinsRequest": {
       "type": "object",
       "properties": {

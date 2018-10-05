@@ -6260,3 +6260,23 @@ func (lc *LightningChannel) RemoteCommitHeight() uint64 {
 func (lc *LightningChannel) FwdMinHtlc() lnwire.MilliSatoshi {
 	return lc.localChanCfg.MinHTLC
 }
+
+// GetIncomingHtlcs retrieves all acked incoming htlcs.
+func (lc *LightningChannel) GetIncomingHtlcs(paymentHash []byte) []*PaymentDescriptor {
+
+	remoteACKedIndex := lc.localCommitChain.tip().theirMessageIndex
+
+	var theirHTLCs []*PaymentDescriptor
+	for e := lc.remoteUpdateLog.Front(); e != nil; e = e.Next() {
+		htlc := e.Value.(*PaymentDescriptor)
+
+		// If this is an incoming HTLC, then it is only active from
+		// this point-of-view if the index of the HTLC addition in
+		// their log is below the specified view index.
+		if htlc.LogIndex < remoteACKedIndex &&
+			bytes.Equal(htlc.RHash[:], paymentHash) {
+			theirHTLCs = append(theirHTLCs, htlc)
+		}
+	}
+	return theirHTLCs
+}

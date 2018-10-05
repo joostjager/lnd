@@ -449,6 +449,8 @@ service Lightning {
         };
     }
 
+    rpc SatisfyHash(SatisfyHashMsg) returns (SatisfyHashResp);
+
     /** lncli: `listinvoices`
     ListInvoices returns a list of all the invoices currently stored within the
     database. Any active debug invoices are ignored. It has full support for
@@ -1985,3 +1987,10 @@ message ForwardingHistoryResponse {
    /// The index of the last time in the set of returned forwarding events. Can be used to seek further, pagination style.
    uint32 last_offset_index = 2 [json_name = "last_offset_index"];
 }
+
+message SatisfyHashMsg {
+    /// Externally discovered pre-image that should be used to settle the hold invoice.
+    bytes pre_image = 1;
+} 
+message SatisfyHashResp {}
+
