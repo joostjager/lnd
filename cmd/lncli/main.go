@@ -271,6 +271,8 @@ func main() {
 		payInvoiceCommand,
 		sendToRouteCommand,
 		addInvoiceCommand,
+		settleInvoiceCommand,
+		cancelInvoiceCommand,
 		lookupInvoiceCommand,
 		listInvoicesCommand,
 		subscribeInvoicesCommand,
