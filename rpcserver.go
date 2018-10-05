@@ -2930,6 +2930,11 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 		settleDate = invoice.SettleDate.Unix()
 	}
 
+	acceptDate := int64(0)
+	if !invoice.AcceptDate.IsZero() {
+		acceptDate = invoice.AcceptDate.Unix()
+	}
+
 	// Expiry time will default to 3600 seconds if not specified
 	// explicitly.
 	expiry := int64(decoded.Expiry().Seconds())
@@ -2944,6 +2949,18 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 	satAmt := invoice.Terms.Value.ToSatoshis()
 	satAmtPaid := invoice.AmtPaid.ToSatoshis()
 
+	var state lnrpc.Invoice_InvoiceState
+	switch invoice.Terms.State {
+	case channeldb.ContractOpen:
+		state = lnrpc.Invoice_OPEN
+	case channeldb.ContractAccepted:
+		state = lnrpc.Invoice_ACCEPTED
+	case channeldb.ContractSettled:
+		state = lnrpc.Invoice_SETTLED
+	default:
+		return nil, fmt.Errorf("unknown invoice state")
+	}
+
 	return &lnrpc.Invoice{
 		Memo:            string(invoice.Memo[:]),
 		Receipt:         invoice.Receipt[:],
@@ -2951,8 +2968,9 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 		RPreimage:       preimage[:],
 		Value:           int64(satAmt),
 		CreationDate:    invoice.CreationDate.Unix(),
+		AcceptDate:      acceptDate,
 		SettleDate:      settleDate,
-		Settled:         invoice.Terms.Settled,
+		Settled:         invoice.Terms.State == channeldb.ContractSettled,
 		PaymentRequest:  paymentRequest,
 		DescriptionHash: descHash,
 		Expiry:          expiry,
@@ -2960,10 +2978,12 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 		FallbackAddr:    fallbackAddr,
 		RouteHints:      routeHints,
 		AddIndex:        invoice.AddIndex,
+		AcceptIndex:     invoice.AcceptIndex,
 		SettleIndex:     invoice.SettleIndex,
 		AmtPaidSat:      int64(satAmtPaid),
 		AmtPaidMsat:     int64(invoice.AmtPaid),
 		AmtPaid:         int64(invoice.AmtPaid),
+		State:           state,
 	}, nil
 }
 
@@ -3094,7 +3114,7 @@ func (r *rpcServer) SubscribeInvoices(req *lnrpc.InvoiceSubscription,
 	updateStream lnrpc.Lightning_SubscribeInvoicesServer) error {
 
 	invoiceClient := r.server.invoices.SubscribeNotifications(
-		req.AddIndex, req.SettleIndex,
+		req.AddIndex, req.AcceptIndex, req.SettleIndex,
 	)
 	defer invoiceClient.Cancel()
 
@@ -3102,6 +3122,15 @@ func (r *rpcServer) SubscribeInvoices(req *lnrpc.InvoiceSubscription,
 		select {
 		case newInvoice := <-invoiceClient.NewInvoices:
 			rpcInvoice, err := createRPCInvoice(newInvoice)
+			if err != nil {
+				return err
+			}
+
+			if err := updateStream.Send(rpcInvoice); err != nil {
+				return err
+			}
+		case acceptedInvoice := <-invoiceClient.AcceptedInvoices:
+			rpcInvoice, err := createRPCInvoice(acceptedInvoice)
 			if err != nil {
 				return err
 			}
