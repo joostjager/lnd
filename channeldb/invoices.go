@@ -2,7 +2,6 @@ package channeldb
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -190,7 +189,7 @@ func validateInvoice(i *Invoice) error {
 // has *any* payment hashes which already exists within the database, then the
 // insertion will be aborted and rejected due to the strict policy banning any
 // duplicate payment hashes.
-func (d *DB) AddInvoice(newInvoice *Invoice) (uint64, error) {
+func (d *DB) AddInvoice(newInvoice *Invoice, paymentHash [32]byte) (uint64, error) {
 	if err := validateInvoice(newInvoice); err != nil {
 		return 0, err
 	}
@@ -217,9 +216,6 @@ func (d *DB) AddInvoice(newInvoice *Invoice) (uint64, error) {
 
 		// Ensure that an invoice an identical payment hash doesn't
 		// already exist within the index.
-		paymentHash := sha256.Sum256(
-			newInvoice.Terms.PaymentPreimage[:],
-		)
 		if invoiceIndex.Get(paymentHash[:]) != nil {
 			return ErrDuplicateInvoice
 		}
@@ -241,6 +237,7 @@ func (d *DB) AddInvoice(newInvoice *Invoice) (uint64, error) {
 
 		newIndex, err := putInvoice(
 			invoices, invoiceIndex, addIndex, newInvoice, invoiceNum,
+			paymentHash,
 		)
 		if err != nil {
 			return err
@@ -692,7 +689,7 @@ func (d *DB) InvoicesSettledSince(sinceSettleIndex uint64) ([]Invoice, error) {
 }
 
 func putInvoice(invoices, invoiceIndex, addIndex *bbolt.Bucket,
-	i *Invoice, invoiceNum uint32) (uint64, error) {
+	i *Invoice, invoiceNum uint32, paymentHash [32]byte) (uint64, error) {
 
 	// Create the invoice key which is just the big-endian representation
 	// of the invoice number.
@@ -711,7 +708,6 @@ func putInvoice(invoices, invoiceIndex, addIndex *bbolt.Bucket,
 	// Add the payment hash to the invoice index. This will let us quickly
 	// identify if we can settle an incoming payment, and also to possibly
 	// allow a single invoice to have multiple payment installations.
-	paymentHash := sha256.Sum256(i.Terms.PaymentPreimage[:])
 	err := invoiceIndex.Put(paymentHash[:], invoiceKey[:])
 	if err != nil {
 		return 0, err

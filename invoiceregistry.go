@@ -282,7 +282,9 @@ func (i *invoiceRegistry) AddDebugInvoice(amt btcutil.Amount, preimage chainhash
 // redemption in the case that we're the final destination. We also return the
 // addIndex of the newly created invoice which monotonically increases for each
 // new invoice added.
-func (i *invoiceRegistry) AddInvoice(invoice *channeldb.Invoice) (uint64, error) {
+func (i *invoiceRegistry) AddInvoice(invoice *channeldb.Invoice,
+	paymentHash [32]byte) (uint64, error) {
+
 	i.Lock()
 	defer i.Unlock()
 
@@ -290,7 +292,7 @@ func (i *invoiceRegistry) AddInvoice(invoice *channeldb.Invoice) (uint64, error)
 		return spew.Sdump(invoice)
 	}))
 
-	addIndex, err := i.cdb.AddInvoice(invoice)
+	addIndex, err := i.cdb.AddInvoice(invoice, paymentHash)
 	if err != nil {
 		return 0, err
 	}
