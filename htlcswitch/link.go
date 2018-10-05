@@ -2422,6 +2422,24 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			}
 
 			preimage := invoice.Terms.PaymentPreimage
+			if bytes.Equal(preimage[:], unknownPreimage[:]) {
+				// Notify the invoiceRegistry of the invoices we just
+				// accepted this latest commitment update.
+				err = l.cfg.Registry.AcceptInvoice(
+					invoiceHash, pd.Amount,
+				)
+				if err != nil {
+					l.fail(LinkFailureError{code: ErrInternalError},
+						"unable to accept invoice: %v", err)
+					return false
+				}
+
+				l.infof("accepting %x as exit hop", pd.RHash)
+
+				// Still waiting for preimage.
+				continue
+			}
+
 			err = l.channel.SettleHTLC(
 				preimage, pd.HtlcIndex, pd.SourceRef, nil, nil,
 			)
