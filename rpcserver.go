@@ -2970,12 +2970,16 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	var paymentPreimage [32]byte
 
 	switch {
-	// If a preimage wasn't specified, then we'll generate a new preimage
-	// from fresh cryptographic randomness.
-	case len(invoice.RPreimage) == 0:
+	// If neither a preimage or hash was specified, then we'll generate a
+	// new preimage from fresh cryptographic randomness.
+	case len(invoice.RPreimage) == 0 && len(invoice.RHash) == 0:
 		if _, err := rand.Read(paymentPreimage[:]); err != nil {
 			return nil, err
 		}
+
+	// If only a hash is specified, preimage can remain empty and will be
+	// supplied from an external source later.
+	case len(invoice.RPreimage) == 0 && len(invoice.RHash) > 0:
 
 	// Otherwise, if a preimage was specified, then it MUST be exactly
 	// 32-bytes.
@@ -2987,6 +2991,16 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	// as is.
 	default:
 		copy(paymentPreimage[:], invoice.RPreimage[:])
+	}
+
+	// Next, generate the payment hash itself from the preimage if
+	// necessary. This will be used by clients to query for the state of a
+	// particular invoice.
+	var rHash [32]byte
+	if len(invoice.RHash) == 0 {
+		rHash = sha256.Sum256(paymentPreimage[:])
+	} else {
+		copy(rHash[:], invoice.RHash)
 	}
 
 	// The size of the memo, receipt and description hash attached must not
@@ -3019,10 +3033,6 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		return nil, fmt.Errorf("payment of %v is too large, max "+
 			"payment allowed is %v", amt, maxPaymentMSat.ToSatoshis())
 	}
-
-	// Next, generate the payment hash itself from the preimage. This will
-	// be used by clients to query for the state of a particular invoice.
-	rHash := sha256.Sum256(paymentPreimage[:])
 
 	// We also create an encoded payment request which allows the
 	// caller to compactly send the invoice to the payer. We'll create a
