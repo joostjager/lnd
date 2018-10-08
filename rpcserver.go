@@ -2523,12 +2523,16 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	var paymentPreimage [32]byte
 
 	switch {
-	// If a preimage wasn't specified, then we'll generate a new preimage
-	// from fresh cryptographic randomness.
-	case len(invoice.RPreimage) == 0:
+	// If neither a preimage or hash was specified, then we'll generate a
+	// new preimage from fresh cryptographic randomness.
+	case len(invoice.RPreimage) == 0 && len(invoice.RHash) == 0:
 		if _, err := rand.Read(paymentPreimage[:]); err != nil {
 			return nil, err
 		}
+
+	// If only a hash is specified, preimage can remain empty and will be
+	// supplied from an external source later.
+	case len(invoice.RPreimage) == 0 && len(invoice.RHash) > 0:
 
 	// Otherwise, if a preimage was specified, then it MUST be exactly
 	// 32-bytes.
@@ -2540,6 +2544,16 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	// as is.
 	default:
 		copy(paymentPreimage[:], invoice.RPreimage[:])
+	}
+
+	// Next, generate the payment hash itself from the preimage if
+	// necessary. This will be used by clients to query for the state of a
+	// particular invoice.
+	var rHash [32]byte
+	if len(invoice.RHash) == 0 {
+		rHash = sha256.Sum256(paymentPreimage[:])
+	} else {
+		copy(rHash[:], invoice.RHash)
 	}
 
 	// The size of the memo, receipt and description hash attached must not
@@ -2572,10 +2586,6 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		return nil, fmt.Errorf("payment of %v is too large, max "+
 			"payment allowed is %v", amt, maxPaymentMSat.ToSatoshis())
 	}
-
-	// Next, generate the payment hash itself from the preimage. This will
-	// be used by clients to query for the state of a particular invoice.
-	rHash := sha256.Sum256(paymentPreimage[:])
 
 	// We also create an encoded payment request which allows the
 	// caller to compactly send the invoice to the payer. We'll create a
@@ -2793,7 +2803,7 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	)
 
 	// With all sanity checks passed, write the invoice to the database.
-	addIndex, err := r.server.invoices.AddInvoice(newInvoice)
+	addIndex, err := r.server.invoices.AddInvoice(newInvoice, rHash)
 	if err != nil {
 		return nil, err
 	}
@@ -2803,6 +2813,35 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		PaymentRequest: payReqString,
 		AddIndex:       addIndex,
 	}, nil
+}
+
+func (r *rpcServer) SatisfyHash(ctx context.Context,
+	in *lnrpc.SatisfyHashMsg) (*lnrpc.SatisfyHashResp, error) {
+
+	if len(in.PreImage) != 32 {
+		return nil, fmt.Errorf("invalid preimage length")
+	}
+
+	paymentHash := chainhash.Hash(sha256.Sum256(in.PreImage[:]))
+
+	invoice, _, err := r.server.invoices.LookupInvoice(
+		paymentHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query invoice registry: "+
+			" %v", err)
+	}
+
+	if invoice.Terms.State == channeldb.ContractSettled {
+		return nil, fmt.Errorf("invoice already settled")
+	}
+
+	// TODO: safe handoff?
+	r.server.witnessBeacon.AddPreimage(in.PreImage)
+
+	// TODO: update preimage in invoice?
+
+	return &lnrpc.SatisfyHashResp{}, nil
 }
 
 // createRPCInvoice creates an *lnrpc.Invoice from the *channeldb.Invoice.
@@ -2829,6 +2868,11 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 		settleDate = invoice.SettleDate.Unix()
 	}
 
+	acceptDate := int64(0)
+	if !invoice.AcceptDate.IsZero() {
+		acceptDate = invoice.AcceptDate.Unix()
+	}
+
 	// Expiry time will default to 3600 seconds if not specified
 	// explicitly.
 	expiry := int64(decoded.Expiry().Seconds())
@@ -2843,6 +2887,18 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 	satAmt := invoice.Terms.Value.ToSatoshis()
 	satAmtPaid := invoice.AmtPaid.ToSatoshis()
 
+	var state lnrpc.Invoice_InvoiceState
+	switch invoice.Terms.State {
+	case channeldb.ContractOpen:
+		state = lnrpc.Invoice_OPEN
+	case channeldb.ContractAccepted:
+		state = lnrpc.Invoice_ACCEPTED
+	case channeldb.ContractSettled:
+		state = lnrpc.Invoice_SETTLED
+	default:
+		return nil, fmt.Errorf("unknown invoice state")
+	}
+
 	return &lnrpc.Invoice{
 		Memo:            string(invoice.Memo[:]),
 		Receipt:         invoice.Receipt[:],
@@ -2850,8 +2906,9 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 		RPreimage:       preimage[:],
 		Value:           int64(satAmt),
 		CreationDate:    invoice.CreationDate.Unix(),
+		AcceptDate:      acceptDate,
 		SettleDate:      settleDate,
-		Settled:         invoice.Terms.Settled,
+		Settled:         invoice.Terms.State == channeldb.ContractSettled,
 		PaymentRequest:  paymentRequest,
 		DescriptionHash: descHash,
 		Expiry:          expiry,
@@ -2859,10 +2916,12 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 		FallbackAddr:    fallbackAddr,
 		RouteHints:      routeHints,
 		AddIndex:        invoice.AddIndex,
+		AcceptIndex:     invoice.AcceptIndex,
 		SettleIndex:     invoice.SettleIndex,
 		AmtPaidSat:      int64(satAmtPaid),
 		AmtPaidMsat:     int64(invoice.AmtPaid),
 		AmtPaid:         int64(invoice.AmtPaid),
+		State:           state,
 	}, nil
 }
 
@@ -2993,7 +3052,7 @@ func (r *rpcServer) SubscribeInvoices(req *lnrpc.InvoiceSubscription,
 	updateStream lnrpc.Lightning_SubscribeInvoicesServer) error {
 
 	invoiceClient := r.server.invoices.SubscribeNotifications(
-		req.AddIndex, req.SettleIndex,
+		req.AddIndex, req.AcceptIndex, req.SettleIndex,
 	)
 	defer invoiceClient.Cancel()
 
@@ -3001,6 +3060,15 @@ func (r *rpcServer) SubscribeInvoices(req *lnrpc.InvoiceSubscription,
 		select {
 		case newInvoice := <-invoiceClient.NewInvoices:
 			rpcInvoice, err := createRPCInvoice(newInvoice)
+			if err != nil {
+				return err
+			}
+
+			if err := updateStream.Send(rpcInvoice); err != nil {
+				return err
+			}
+		case acceptedInvoice := <-invoiceClient.AcceptedInvoices:
+			rpcInvoice, err := createRPCInvoice(acceptedInvoice)
 			if err != nil {
 				return err
 			}
