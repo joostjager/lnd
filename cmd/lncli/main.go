@@ -273,6 +273,7 @@ func main() {
 		addInvoiceCommand,
 		lookupInvoiceCommand,
 		listInvoicesCommand,
+		subscribeInvoicesCommand,
 		listChannelsCommand,
 		closedChannelsCommand,
 		listPaymentsCommand,
