@@ -2462,6 +2462,46 @@ func listInvoices(ctx *cli.Context) error {
 	return nil
 }
 
+// TODO: Now we have listinvoices, lookupinvoice and subscribeinvoices. It
+// should be possible to eliminate one of them.
+
+var subscribeInvoicesCommand = cli.Command{
+	Name:     "subscribeinvoices",
+	Category: "Payments",
+	Usage:    "Subscribes to a stream that will provide invoice updates.",
+
+	// TODO: Add description.
+	Description: ``,
+	Flags:       []cli.Flag{
+		// TODO: Add add, accepted and settle index flags. Or better,
+		// provide ability to pass in a single invoice hash to monitor
+		// just one invoice.
+	},
+	Action: actionDecorator(subscribeInvoices),
+}
+
+func subscribeInvoices(ctx *cli.Context) error {
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	req := &lnrpc.InvoiceSubscription{}
+
+	invoiceStream, err := client.SubscribeInvoices(context.Background(), req)
+	if err != nil {
+		return err
+	}
+
+	for {
+		invoice, err := invoiceStream.Recv()
+		if err != nil {
+			invoiceStream.CloseSend()
+			return err
+		}
+
+		printRespJSON(invoice)
+	}
+}
+
 var describeGraphCommand = cli.Command{
 	Name:     "describegraph",
 	Category: "Peers",
