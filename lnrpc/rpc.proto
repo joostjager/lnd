@@ -1998,8 +1998,24 @@ service WalletKit {
     rpc NextSweepAddr(AddrRequest)          returns (AddrResponse);
     rpc PublishTransaction(TxRequest)       returns (PublishResponse);
     rpc HasSpendingTx(ChannelPoint)        returns (SpendReport);
+
+    rpc SendOutputs(SendOutputsRequest)       returns (SendOutputsResponse);
 }
 
+message SendOutputsRequest {
+    int64 sat_per_kb = 1;    
+
+    repeated TxOut outputs = 2;
+}
+
+message SendOutputsResponse {
+    bytes txid = 1;
+}
+
+message TxOut {
+    bytes pkScript = 1;
+    int64 value = 2;
+}
 
 message ConfIntent {
     bytes txid = 1;

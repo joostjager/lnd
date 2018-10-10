@@ -2695,6 +2695,15 @@
         }
       }
     },
+    "lnrpcSendOutputsResponse": {
+      "type": "object",
+      "properties": {
+        "txid": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
     "lnrpcSendRequest": {
       "type": "object",
       "properties": {
