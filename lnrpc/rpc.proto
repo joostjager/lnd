@@ -2056,7 +2056,9 @@ message SpendEvent {
 } 
 
 message BlockEpoch {}
-message BlockEpochEvent {}
+message BlockEpochEvent {
+    int32 height = 1;
+}
 
 service ChainNotifier {
     rpc RegisterConfirmationsNtfn(ConfIntent) returns (stream ConfEvent);

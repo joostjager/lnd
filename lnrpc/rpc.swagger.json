@@ -1144,7 +1144,13 @@
       }
     },
     "lnrpcBlockEpochEvent": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
     },
     "lnrpcChangePasswordRequest": {
       "type": "object",
