@@ -250,6 +250,14 @@ var (
 			Entity: "invoices",
 			Action: "write",
 		}},
+		"/lnrpc.Lightning/CancelInvoice": {{
+			Entity: "invoices",
+			Action: "write",
+		}},
+		"/lnrpc.Lightning/SettleInvoice": {{
+			Entity: "invoices",
+			Action: "write",
+		}},
 		"/lnrpc.Lightning/LookupInvoice": {{
 			Entity: "invoices",
 			Action: "read",
@@ -2831,6 +2839,44 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		PaymentRequest: payReqString,
 		AddIndex:       addIndex,
 	}, nil
+}
+
+func (r *rpcServer) SettleInvoice(ctx context.Context,
+	in *lnrpc.SettleInvoiceMsg) (*lnrpc.SettleInvoiceResp, error) {
+
+	if len(in.PreImage) != 32 {
+		return nil, fmt.Errorf("invalid preimage length")
+	}
+
+	var preimage [32]byte
+	copy(preimage[:], in.PreImage)
+
+	err := r.server.invoiceSettler.Settle(preimage)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: update preimage in invoice?
+
+	return &lnrpc.SettleInvoiceResp{}, nil
+}
+
+func (r *rpcServer) CancelInvoice(ctx context.Context,
+	in *lnrpc.CancelInvoiceMsg) (*lnrpc.CancelInvoiceResp, error) {
+
+	if len(in.PaymentHash) != 32 {
+		return nil, fmt.Errorf("invalid hash length")
+	}
+
+	var paymentHash [32]byte
+	copy(paymentHash[:], in.PaymentHash)
+
+	err := r.server.invoiceSettler.Cancel(paymentHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &lnrpc.CancelInvoiceResp{}, nil
 }
 
 // createRPCInvoice creates an *lnrpc.Invoice from the *channeldb.Invoice.

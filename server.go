@@ -142,6 +142,8 @@ type server struct {
 
 	htlcSwitch *htlcswitch.Switch
 
+	invoiceSettler *htlcswitch.InvoiceSettler
+
 	invoices *invoiceRegistry
 
 	witnessBeacon contractcourt.WitnessBeacon
@@ -310,6 +312,8 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		return nil, err
 	}
 
+	s.invoiceSettler = htlcswitch.NewInvoiceSettler(s.invoices)
+
 	s.htlcSwitch, err = htlcswitch.New(htlcswitch.Config{
 		DB:      chanDB,
 		SelfKey: s.identityPriv.PubKey(),
@@ -344,10 +348,14 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 			htlcswitch.DefaultFwdEventInterval),
 		LogEventTicker: ticker.New(
 			htlcswitch.DefaultLogInterval),
+		InvoiceSettler: s.invoiceSettler,
 	}, uint32(currentHeight))
 	if err != nil {
 		return nil, err
 	}
+
+	// Late setting because circular dependency between switch and settler.
+	s.invoiceSettler.HtlcSwitch = s.htlcSwitch
 
 	// If enabled, use either UPnP or NAT-PMP to automatically configure
 	// port forwarding for users behind a NAT.

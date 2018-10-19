@@ -2440,49 +2440,57 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			}
 
 			preimage := invoice.Terms.PaymentPreimage
-			err = l.channel.SettleHTLC(
-				preimage, pd.HtlcIndex, pd.SourceRef, nil, nil,
-			)
-			if err != nil {
-				l.fail(LinkFailureError{code: ErrInternalError},
-					"unable to settle htlc: %v", err)
-				return false
+			// If we have the preimage, we can now settle the
+			// invoice instantly.
+			if !bytes.Equal(preimage[:], unknownPreimage[:]) {
+
+				err = l.channel.SettleHTLC(
+					preimage, pd.HtlcIndex, pd.SourceRef, nil, nil,
+				)
+				if err != nil {
+					l.fail(LinkFailureError{code: ErrInternalError},
+						"unable to settle htlc: %v", err)
+					return false
+				}
+
+				// Notify the invoiceRegistry of the invoices we just
+				// settled (with the amount accepted at settle time)
+				// with this latest commitment update.
+				err = l.cfg.Registry.SettleInvoice(
+					invoiceHash, pd.Amount,
+				)
+				if err != nil {
+					l.fail(LinkFailureError{code: ErrInternalError},
+						"unable to settle invoice: %v", err)
+					return false
+				}
+
+				l.infof("settling %x as exit hop", pd.RHash)
+
+				// If the link is in hodl.BogusSettle mode, replace the
+				// preimage with a fake one before sending it to the
+				// peer.
+				if l.cfg.DebugHTLC &&
+					l.cfg.HodlMask.Active(hodl.BogusSettle) {
+					l.warnf(hodl.BogusSettle.Warning())
+					preimage = [32]byte{}
+					copy(preimage[:], bytes.Repeat([]byte{2}, 32))
+				}
+
+				// HTLC was successfully settled locally send
+				// notification about it remote peer.
+				l.cfg.Peer.SendMessage(false, &lnwire.UpdateFulfillHTLC{
+					ChanID:          l.ChanID(),
+					ID:              pd.HtlcIndex,
+					PaymentPreimage: preimage,
+				})
+				needUpdate = true
+
+				continue
 			}
 
-			// Notify the invoiceRegistry of the invoices we just
-			// settled (with the amount accepted at settle time)
-			// with this latest commitment update.
-			err = l.cfg.Registry.SettleInvoice(
-				invoiceHash, pd.Amount,
-			)
-			if err != nil {
-				l.fail(LinkFailureError{code: ErrInternalError},
-					"unable to settle invoice: %v", err)
-				return false
-			}
-
-			l.infof("settling %x as exit hop", pd.RHash)
-
-			// If the link is in hodl.BogusSettle mode, replace the
-			// preimage with a fake one before sending it to the
-			// peer.
-			if l.cfg.DebugHTLC &&
-				l.cfg.HodlMask.Active(hodl.BogusSettle) {
-				l.warnf(hodl.BogusSettle.Warning())
-				preimage = [32]byte{}
-				copy(preimage[:], bytes.Repeat([]byte{2}, 32))
-			}
-
-			// HTLC was successfully settled locally send
-			// notification about it remote peer.
-			l.cfg.Peer.SendMessage(false, &lnwire.UpdateFulfillHTLC{
-				ChanID:          l.ChanID(),
-				ID:              pd.HtlcIndex,
-				PaymentPreimage: preimage,
-			})
-			needUpdate = true
-
-			continue
+			// Still waiting for preimage, proceed with forwarding
+			// packet with destination exithop to switch.
 		}
 
 		// There are additional channels left within this route. So
