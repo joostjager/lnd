@@ -2279,8 +2279,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 		heightNow := l.cfg.Switch.BestHeight()
 
 		fwdInfo := chanIterator.ForwardingInstructions()
-		switch fwdInfo.NextHop {
-		case exitHop:
+		if fwdInfo.NextHop == exitHop {
 			// If hodl.ExitSettle is requested, we will not validate
 			// the final hop's ADD, nor will we settle the
 			// corresponding invoice or respond with the preimage.
@@ -2483,134 +2482,137 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			})
 			needUpdate = true
 
+			continue
+		}
+
 		// There are additional channels left within this route. So
 		// we'll simply do some forwarding package book-keeping.
-		default:
-			// If hodl.AddIncoming is requested, we will not
-			// validate the forwarded ADD, nor will we send the
-			// packet to the htlc switch.
-			if l.cfg.DebugHTLC &&
-				l.cfg.HodlMask.Active(hodl.AddIncoming) {
-				l.warnf(hodl.AddIncoming.Warning())
-				continue
+
+		// If hodl.AddIncoming is requested, we will not
+		// validate the forwarded ADD, nor will we send the
+		// packet to the htlc switch.
+		if l.cfg.DebugHTLC &&
+			l.cfg.HodlMask.Active(hodl.AddIncoming) {
+			l.warnf(hodl.AddIncoming.Warning())
+			continue
+		}
+
+		switch fwdPkg.State {
+		case channeldb.FwdStateProcessed:
+			// This add was not forwarded on the previous
+			// processing phase, run it through our
+			// validation pipeline to reproduce an error.
+			// This may trigger a different error due to
+			// expiring timelocks, but we expect that an
+			// error will be reproduced.
+			if !fwdPkg.FwdFilter.Contains(idx) {
+				break
 			}
 
-			switch fwdPkg.State {
-			case channeldb.FwdStateProcessed:
-				// This add was not forwarded on the previous
-				// processing phase, run it through our
-				// validation pipeline to reproduce an error.
-				// This may trigger a different error due to
-				// expiring timelocks, but we expect that an
-				// error will be reproduced.
-				if !fwdPkg.FwdFilter.Contains(idx) {
-					break
-				}
-
-				// Otherwise, it was already processed, we can
-				// can collect it and continue.
-				addMsg := &lnwire.UpdateAddHTLC{
-					Expiry:      fwdInfo.OutgoingCTLV,
-					Amount:      fwdInfo.AmountToForward,
-					PaymentHash: pd.RHash,
-				}
-
-				// Finally, we'll encode the onion packet for
-				// the _next_ hop using the hop iterator
-				// decoded for the current hop.
-				buf := bytes.NewBuffer(addMsg.OnionBlob[0:0])
-
-				// We know this cannot fail, as this ADD
-				// was marked forwarded in a previous
-				// round of processing.
-				chanIterator.EncodeNextHop(buf)
-
-				updatePacket := &htlcPacket{
-					incomingChanID:  l.ShortChanID(),
-					incomingHTLCID:  pd.HtlcIndex,
-					outgoingChanID:  fwdInfo.NextHop,
-					sourceRef:       pd.SourceRef,
-					incomingAmount:  pd.Amount,
-					amount:          addMsg.Amount,
-					htlc:            addMsg,
-					obfuscator:      obfuscator,
-					incomingTimeout: pd.Timeout,
-					outgoingTimeout: fwdInfo.OutgoingCTLV,
-				}
-				switchPackets = append(
-					switchPackets, updatePacket,
-				)
-
-				continue
-			}
-
-			// TODO(roasbeef): ensure don't accept outrageous
-			// timeout for htlc
-
-			// With all our forwarding constraints met, we'll
-			// create the outgoing HTLC using the parameters as
-			// specified in the forwarding info.
+			// Otherwise, it was already processed, we can
+			// can collect it and continue.
 			addMsg := &lnwire.UpdateAddHTLC{
 				Expiry:      fwdInfo.OutgoingCTLV,
 				Amount:      fwdInfo.AmountToForward,
 				PaymentHash: pd.RHash,
 			}
 
-			// Finally, we'll encode the onion packet for the
-			// _next_ hop using the hop iterator decoded for the
-			// current hop.
+			// Finally, we'll encode the onion packet for
+			// the _next_ hop using the hop iterator
+			// decoded for the current hop.
 			buf := bytes.NewBuffer(addMsg.OnionBlob[0:0])
-			err := chanIterator.EncodeNextHop(buf)
-			if err != nil {
-				log.Errorf("unable to encode the "+
-					"remaining route %v", err)
 
-				var failure lnwire.FailureMessage
-				update, err := l.cfg.FetchLastChannelUpdate(
-					l.ShortChanID(),
-				)
-				if err != nil {
-					failure = &lnwire.FailTemporaryNodeFailure{}
-				} else {
-					failure = lnwire.NewTemporaryChannelFailure(
-						update,
-					)
-				}
+			// We know this cannot fail, as this ADD
+			// was marked forwarded in a previous
+			// round of processing.
+			chanIterator.EncodeNextHop(buf)
 
-				l.sendHTLCError(
-					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
-				)
-				needUpdate = true
-				continue
+			updatePacket := &htlcPacket{
+				incomingChanID:  l.ShortChanID(),
+				incomingHTLCID:  pd.HtlcIndex,
+				outgoingChanID:  fwdInfo.NextHop,
+				sourceRef:       pd.SourceRef,
+				incomingAmount:  pd.Amount,
+				amount:          addMsg.Amount,
+				htlc:            addMsg,
+				obfuscator:      obfuscator,
+				incomingTimeout: pd.Timeout,
+				outgoingTimeout: fwdInfo.OutgoingCTLV,
 			}
+			switchPackets = append(
+				switchPackets, updatePacket,
+			)
 
-			// Now that this add has been reprocessed, only append
-			// it to our list of packets to forward to the switch
-			// this is the first time processing the add. If the
-			// fwd pkg has already been processed, then we entered
-			// the above section to recreate a previous error.  If
-			// the packet had previously been forwarded, it would
-			// have been added to switchPackets at the top of this
-			// section.
-			if fwdPkg.State == channeldb.FwdStateLockedIn {
-				updatePacket := &htlcPacket{
-					incomingChanID:  l.ShortChanID(),
-					incomingHTLCID:  pd.HtlcIndex,
-					outgoingChanID:  fwdInfo.NextHop,
-					sourceRef:       pd.SourceRef,
-					incomingAmount:  pd.Amount,
-					amount:          addMsg.Amount,
-					htlc:            addMsg,
-					obfuscator:      obfuscator,
-					incomingTimeout: pd.Timeout,
-					outgoingTimeout: fwdInfo.OutgoingCTLV,
-				}
-
-				fwdPkg.FwdFilter.Set(idx)
-				switchPackets = append(switchPackets,
-					updatePacket)
-			}
+			continue
 		}
+
+		// TODO(roasbeef): ensure don't accept outrageous
+		// timeout for htlc
+
+		// With all our forwarding constraints met, we'll
+		// create the outgoing HTLC using the parameters as
+		// specified in the forwarding info.
+		addMsg := &lnwire.UpdateAddHTLC{
+			Expiry:      fwdInfo.OutgoingCTLV,
+			Amount:      fwdInfo.AmountToForward,
+			PaymentHash: pd.RHash,
+		}
+
+		// Finally, we'll encode the onion packet for the
+		// _next_ hop using the hop iterator decoded for the
+		// current hop.
+		buf := bytes.NewBuffer(addMsg.OnionBlob[0:0])
+		err := chanIterator.EncodeNextHop(buf)
+		if err != nil {
+			log.Errorf("unable to encode the "+
+				"remaining route %v", err)
+
+			var failure lnwire.FailureMessage
+			update, err := l.cfg.FetchLastChannelUpdate(
+				l.ShortChanID(),
+			)
+			if err != nil {
+				failure = &lnwire.FailTemporaryNodeFailure{}
+			} else {
+				failure = lnwire.NewTemporaryChannelFailure(
+					update,
+				)
+			}
+
+			l.sendHTLCError(
+				pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
+			)
+			needUpdate = true
+			continue
+		}
+
+		// Now that this add has been reprocessed, only append
+		// it to our list of packets to forward to the switch
+		// this is the first time processing the add. If the
+		// fwd pkg has already been processed, then we entered
+		// the above section to recreate a previous error.  If
+		// the packet had previously been forwarded, it would
+		// have been added to switchPackets at the top of this
+		// section.
+		if fwdPkg.State == channeldb.FwdStateLockedIn {
+			updatePacket := &htlcPacket{
+				incomingChanID:  l.ShortChanID(),
+				incomingHTLCID:  pd.HtlcIndex,
+				outgoingChanID:  fwdInfo.NextHop,
+				sourceRef:       pd.SourceRef,
+				incomingAmount:  pd.Amount,
+				amount:          addMsg.Amount,
+				htlc:            addMsg,
+				obfuscator:      obfuscator,
+				incomingTimeout: pd.Timeout,
+				outgoingTimeout: fwdInfo.OutgoingCTLV,
+			}
+
+			fwdPkg.FwdFilter.Set(idx)
+			switchPackets = append(switchPackets,
+				updatePacket)
+		}
+
 	}
 
 	// Commit the htlcs we are intending to forward if this package has not
