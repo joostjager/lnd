@@ -40,11 +40,14 @@ func (c NetworkHop) String() string {
 var (
 	// exitHop is a special "hop" which denotes that an incoming HTLC is
 	// meant to pay finally to the receiving node.
-	exitHop lnwire.ShortChannelID
+	//
+	// We must make sure that these special channel ids are unique, because
+	// they are mainly compared by value.
+	exitHop = lnwire.ShortChannelID{TxPosition: 0}
 
 	// sourceHop is a sentinel value denoting that an incoming HTLC is
 	// initiated by our own switch.
-	sourceHop lnwire.ShortChannelID
+	sourceHop = lnwire.ShortChannelID{TxPosition: 1}
 )
 
 // ForwardingInfo contains all the information that is necessary to forward and
