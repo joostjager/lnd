@@ -191,6 +191,15 @@ type WalletController interface {
 	// backend.
 	PublishTransaction(tx *wire.MsgTx) error
 
+	// HasSpendingTx determines whether the store contains a spending
+	// transaction for the given outpoint. This transaction can be either
+	// confirmed or unconfirmed.
+	//
+	// NOTE: It's possible for there not to be a spending transaction for
+	// this outpoint, therefore a nil check must be used to guarantee safety
+	// to the caller.
+	HasSpendingTx(op wire.OutPoint) (*wire.MsgTx, error)
+
 	// SubscribeTransactions returns a TransactionSubscription client which
 	// is capable of receiving async notifications as new transactions
 	// related to the wallet are seen within the network, or found in

@@ -358,6 +358,13 @@ func (b *BtcWallet) ListUnspentWitness(minConfs, maxConfs int32) (
 	return witnessOutputs, nil
 }
 
+// HasSpendingTx determines whether the store contains a spending transaction
+// for the given outpoint. This transaction can be either confirmed or
+// unconfirmed.
+func (b *BtcWallet) HasSpendingTx(op wire.OutPoint) (*wire.MsgTx, error) {
+	return b.wallet.HasSpendingTx(op)
+}
+
 // PublishTransaction performs cursory validation (dust checks, etc), then
 // finally broadcasts the passed transaction to the Bitcoin network. If
 // publishing the transaction fails, an error describing the reason is

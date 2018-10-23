@@ -106,7 +106,7 @@
   revision = "ab6388e0c60ae4834a1f57511e20c17b5f78be4b"
 
 [[projects]]
-  digest = "1:ac01796bf202b80d6cb1b92d42df0fbbf3aff964451376bfa7c39bc2bf94d108"
+  digest = "1:cd2656734ea1207abc77dc0f04167949c780f296543455d7bae2ef2335e26958"
   name = "github.com/btcsuite/btcwallet"
   packages = [
     "chain",
@@ -126,7 +126,8 @@
     "wtxmgr",
   ]
   pruneopts = "UT"
-  revision = "c4dd27e481f9801866cf5226bfe532084772ec2a"
+  revision = "dcd3739a706c4f4e29236d77fb1b5ae51564545e"
+  source = "github.com/wpaulino/btcwallet"
 
 [[projects]]
   branch = "master"
