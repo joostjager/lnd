@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
 )
 
@@ -18,6 +19,12 @@ type subRpcServerConfigs struct {
 	// Signrpc is a sub-RPC server that exposes signing of arbitrary inputs
 	// as a gRPC service.
 	Signrpc *signrpc.Config `group:"signrpc" namespace:"signrpc"`
+
+	// WalletKitRpc is a sub-RPC server that exposes functionality allowing
+	// a client to send transactions through a wallet, publish them, and
+	// also requests keys and addresses under control of the backing
+	// wallet.
+	WalletKitRpc *walletrpc.Config `group:"walletrpc" namespace:"walletrpc"`
 }
 
 // PopulateDependancies attempts to iterate through all the sub-server configs
@@ -64,6 +71,25 @@ func (s *subRpcServerConfigs) PopulateDependancies(cc *chainControl,
 			)
 			subCfgValue.FieldByName("Signer").Set(
 				reflect.ValueOf(cc.signer),
+			)
+
+		case *walletrpc.Config:
+			subCfgValue := extractReflectValue(cfg)
+
+			subCfgValue.FieldByName("NetworkDir").Set(
+				reflect.ValueOf(networkDir),
+			)
+			subCfgValue.FieldByName("MacService").Set(
+				reflect.ValueOf(macService),
+			)
+			subCfgValue.FieldByName("FeeEstimator").Set(
+				reflect.ValueOf(cc.feeEstimator),
+			)
+			subCfgValue.FieldByName("Wallet").Set(
+				reflect.ValueOf(cc.wallet),
+			)
+			subCfgValue.FieldByName("KeyRing").Set(
+				reflect.ValueOf(cc.keyRing),
 			)
 
 		default:
