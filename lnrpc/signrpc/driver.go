@@ -35,9 +35,9 @@ func createNewSubServer(configRegistry lnrpc.SubServerConfigDispatcher) (lnrpc.S
 	// Before we try to make the new signer service instance, we'll perform
 	// some sanity checks on the arguments to ensure taht they're useable.
 	switch {
-	case config.MacService == nil:
-		return nil, nil, fmt.Errorf("MacService must be set to create " +
-			"Signrpc")
+	// case config.MacService == nil:
+	// 	return nil, nil, fmt.Errorf("MacService must be set to create " +
+	// 		"Signrpc")
 	case config.NetworkDir == "":
 		return nil, nil, fmt.Errorf("NetworkDir must be set to create " +
 			"Signrpc")

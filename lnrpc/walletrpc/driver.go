@@ -36,9 +36,9 @@ func createNewSubServer(configRegistry lnrpc.SubServerConfigDispatcher) (lnrpc.S
 	// perform some sanity checks on the arguments to ensure that they're
 	// useable.
 	switch {
-	case config.MacService == nil:
-		return nil, nil, fmt.Errorf("MacService must be set to " +
-			"create WalletKit RPC server")
+	// case config.MacService == nil:
+	// 	return nil, nil, fmt.Errorf("MacService must be set to " +
+	// 		"create WalletKit RPC server")
 
 	case config.NetworkDir == "":
 		return nil, nil, fmt.Errorf("NetworkDir must be set to " +
