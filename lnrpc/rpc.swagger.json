@@ -1145,14 +1145,6 @@
         }
       }
     },
-    "lnrpcAddrResponse": {
-      "type": "object",
-      "properties": {
-        "addr": {
-          "type": "string"
-        }
-      }
-    },
     "lnrpcBlockEpochEvent": {
       "type": "object",
       "properties": {
@@ -2031,31 +2023,6 @@
         }
       }
     },
-    "lnrpcKeyDescriptor": {
-      "type": "object",
-      "properties": {
-        "raw_key_bytes": {
-          "type": "string",
-          "format": "byte"
-        },
-        "key_loc": {
-          "$ref": "#/definitions/lnrpcKeyLocator"
-        }
-      }
-    },
-    "lnrpcKeyLocator": {
-      "type": "object",
-      "properties": {
-        "key_family": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "key_index": {
-          "type": "integer",
-          "format": "int32"
-        }
-      }
-    },
     "lnrpcLightningAddress": {
       "type": "object",
       "properties": {
@@ -2580,14 +2547,6 @@
     "lnrpcPolicyUpdateResponse": {
       "type": "object"
     },
-    "lnrpcPublishResponse": {
-      "type": "object",
-      "properties": {
-        "error": {
-          "type": "string"
-        }
-      }
-    },
     "lnrpcQueryRoutesResponse": {
       "type": "object",
       "properties": {
@@ -2716,15 +2675,6 @@
         }
       }
     },
-    "lnrpcSendOutputsResponse": {
-      "type": "object",
-      "properties": {
-        "txid": {
-          "type": "string",
-          "format": "byte"
-        }
-      }
-    },
     "lnrpcSendRequest": {
       "type": "object",
       "properties": {
@@ -2811,15 +2761,6 @@
         }
       }
     },
-    "lnrpcSignResp": {
-      "type": "object",
-      "properties": {
-        "raw_fixed_sized_sig": {
-          "type": "string",
-          "format": "byte"
-        }
-      }
-    },
     "lnrpcSpendEvent": {
       "type": "object",
       "properties": {
@@ -2841,19 +2782,6 @@
         "spending_height": {
           "type": "integer",
           "format": "int32"
-        }
-      }
-    },
-    "lnrpcSpendReport": {
-      "type": "object",
-      "properties": {
-        "has_spend": {
-          "type": "boolean",
-          "format": "boolean"
-        },
-        "raw_tx_hex": {
-          "type": "string",
-          "format": "byte"
         }
       }
     },
