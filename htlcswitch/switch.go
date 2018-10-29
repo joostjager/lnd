@@ -176,6 +176,11 @@ type Config struct {
 	// LogEventTicker is a signal instructing the htlcswitch to log
 	// aggregate stats about it's forwarding during the last interval.
 	LogEventTicker ticker.Ticker
+
+	// InvoiceSettler is opening invoice settle circuits in the circuitmap
+	// for hold invoices and contains the logic to later settle or cancel
+	// invoices.
+	InvoiceSettler *InvoiceSettler
 }
 
 // Switch is the central messaging bus for all incoming/outgoing HTLCs.
@@ -1007,7 +1012,12 @@ func (s *Switch) parseFailedPayment(payment *pendingPayment, pkt *htlcPacket,
 // handlePacketForward is used in cases when we need forward the htlc update
 // from one channel link to another and be able to propagate the settle/fail
 // updates back. This behaviour is achieved by creation of payment circuits.
-func (s *Switch) handlePacketForward(packet *htlcPacket) error {
+//
+// In case of a resolution packet, the failure message needs to be supplied as
+// it isn't part of the packet itself in unencrypted form.
+func (s *Switch) handlePacketForward(packet *htlcPacket,
+	resolutionFailure lnwire.FailureMessage) error {
+
 	switch htlc := packet.htlc.(type) {
 
 	// Channel link forwarded us a new htlc, therefore we initiate the
@@ -1018,6 +1028,9 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 			// A blank incomingChanID indicates that this is
 			// a pending user-initiated payment.
 			return s.handleLocalDispatch(packet)
+		}
+		if packet.outgoingChanID == exitHop {
+			return s.cfg.InvoiceSettler.handleIncoming(packet)
 		}
 
 		s.indexMtx.RLock()
@@ -1159,9 +1172,8 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				// it as it's actually internally sourced.
 				var err error
 				// TODO(roasbeef): don't need to pass actually?
-				failure := &lnwire.FailPermanentChannelFailure{}
 				fail.Reason, err = circuit.ErrorEncrypter.EncryptFirstHop(
-					failure,
+					resolutionFailure,
 				)
 				if err != nil {
 					err = fmt.Errorf("unable to obfuscate "+
@@ -1575,7 +1587,7 @@ out:
 			// encounter is due to the circuit already being
 			// closed. This is fine, as processing this message is
 			// meant to be idempotent.
-			err := s.handlePacketForward(pkt)
+			err := s.handlePacketForward(pkt, resolutionMsg.Failure)
 			if err != nil {
 				log.Errorf("Unable to forward resolution msg: %v", err)
 			}
@@ -1587,7 +1599,8 @@ out:
 		// packet concretely, then either forward it along, or
 		// interpret a return packet to a locally initialized one.
 		case cmd := <-s.htlcPlex:
-			cmd.err <- s.handlePacketForward(cmd.pkt)
+			cmd.err <- s.handlePacketForward(cmd.pkt,
+				&lnwire.FailPermanentChannelFailure{})
 
 		// When this time ticks, then it indicates that we should
 		// collect all the forwarding events since the last internal,

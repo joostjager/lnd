@@ -2235,6 +2235,11 @@ var addInvoiceCommand = cli.Command{
 				"preimage. If not set, a random preimage will be " +
 				"created.",
 		},
+		cli.StringFlag{
+			Name: "paymenthash",
+			Usage: "the hex-encoded payment hash (32 byte) that " +
+				"identifies this invoice.",
+		},
 		cli.Int64Flag{
 			Name:  "amt",
 			Usage: "the amt of satoshis in this invoice",
@@ -2270,11 +2275,12 @@ var addInvoiceCommand = cli.Command{
 
 func addInvoice(ctx *cli.Context) error {
 	var (
-		preimage []byte
-		descHash []byte
-		receipt  []byte
-		amt      int64
-		err      error
+		preimage    []byte
+		paymentHash []byte
+		descHash    []byte
+		receipt     []byte
+		amt         int64
+		err         error
 	)
 
 	client, cleanUp := getClient(ctx)
@@ -2304,6 +2310,14 @@ func addInvoice(ctx *cli.Context) error {
 		return fmt.Errorf("unable to parse preimage: %v", err)
 	}
 
+	if ctx.IsSet("paymenthash") {
+		paymentHash, err = hex.DecodeString(ctx.String("paymenthash"))
+
+		if err != nil {
+			return fmt.Errorf("unable to parse preimage: %v", err)
+		}
+	}
+
 	descHash, err = hex.DecodeString(ctx.String("description_hash"))
 	if err != nil {
 		return fmt.Errorf("unable to parse description_hash: %v", err)
@@ -2318,6 +2332,7 @@ func addInvoice(ctx *cli.Context) error {
 		Memo:            ctx.String("memo"),
 		Receipt:         receipt,
 		RPreimage:       preimage,
+		RHash:           paymentHash,
 		Value:           amt,
 		DescriptionHash: descHash,
 		FallbackAddr:    ctx.String("fallback_addr"),
@@ -2339,6 +2354,113 @@ func addInvoice(ctx *cli.Context) error {
 		PayReq:   resp.PaymentRequest,
 		AddIndex: resp.AddIndex,
 	})
+
+	return nil
+}
+
+var settleInvoiceCommand = cli.Command{
+	Name:     "settleinvoice",
+	Category: "Payments",
+	Usage:    "Reveal a preimage and use it to settle the corresponding invoice.",
+	Description: `
+	Todo.`,
+	ArgsUsage: "preimage",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name: "preimage",
+			Usage: "the hex-encoded preimage (32 byte) which will " +
+				"allow settling an incoming HTLC payable to this " +
+				"preimage.",
+		},
+	},
+	Action: actionDecorator(settleInvoice),
+}
+
+func settleInvoice(ctx *cli.Context) error {
+	var (
+		preimage []byte
+		err      error
+	)
+
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	args := ctx.Args()
+
+	switch {
+	case ctx.IsSet("preimage"):
+		preimage, err = hex.DecodeString(ctx.String("preimage"))
+	case args.Present():
+		preimage, err = hex.DecodeString(args.First())
+	}
+
+	if err != nil {
+		return fmt.Errorf("unable to parse preimage: %v", err)
+	}
+
+	invoice := &lnrpc.SettleInvoiceMsg{
+		PreImage: preimage,
+	}
+
+	resp, err := client.SettleInvoice(context.Background(), invoice)
+	if err != nil {
+		return err
+	}
+
+	printJSON(resp)
+
+	return nil
+}
+
+var cancelInvoiceCommand = cli.Command{
+	Name:     "cancelinvoice",
+	Category: "Payments",
+	Usage:    "Cancels a (hold) invoice",
+	Description: `
+	Todo.`,
+	ArgsUsage: "paymenthash",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name: "paymenthash",
+			Usage: "the hex-encoded payment hash (32 byte) for which the " +
+				"corresponding invoice will be canceled.",
+		},
+	},
+	Action: actionDecorator(cancelInvoice),
+}
+
+func cancelInvoice(ctx *cli.Context) error {
+	var (
+		paymentHash []byte
+		err         error
+	)
+
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	args := ctx.Args()
+
+	switch {
+	case ctx.IsSet("paymenthash"):
+		paymentHash, err = hex.DecodeString(ctx.String("paymenthash"))
+	case args.Present():
+		paymentHash, err = hex.DecodeString(args.First())
+	}
+
+	if err != nil {
+		return fmt.Errorf("unable to parse preimage: %v", err)
+	}
+
+	invoice := &lnrpc.CancelInvoiceMsg{
+		PaymentHash: paymentHash,
+	}
+
+	resp, err := client.CancelInvoice(context.Background(), invoice)
+	if err != nil {
+		return err
+	}
+
+	printJSON(resp)
 
 	return nil
 }
@@ -2460,6 +2582,46 @@ func listInvoices(ctx *cli.Context) error {
 	printRespJSON(invoices)
 
 	return nil
+}
+
+// TODO: Now we have listinvoices, lookupinvoice and subscribeinvoices. It
+// should be possible to eliminate one of them.
+
+var subscribeInvoicesCommand = cli.Command{
+	Name:     "subscribeinvoices",
+	Category: "Payments",
+	Usage:    "Subscribes to a stream that will provide invoice updates.",
+
+	// TODO: Add description.
+	Description: ``,
+	Flags:       []cli.Flag{
+		// TODO: Add add, accepted and settle index flags. Or better,
+		// provide ability to pass in a single invoice hash to monitor
+		// just one invoice.
+	},
+	Action: actionDecorator(subscribeInvoices),
+}
+
+func subscribeInvoices(ctx *cli.Context) error {
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	req := &lnrpc.InvoiceSubscription{}
+
+	invoiceStream, err := client.SubscribeInvoices(context.Background(), req)
+	if err != nil {
+		return err
+	}
+
+	for {
+		invoice, err := invoiceStream.Recv()
+		if err != nil {
+			invoiceStream.CloseSend()
+			return err
+		}
+
+		printRespJSON(invoice)
+	}
 }
 
 var describeGraphCommand = cli.Command{
