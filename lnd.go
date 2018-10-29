@@ -600,6 +600,13 @@ func genMacaroons(ctx context.Context, svc *macaroons.Service,
 
 	// Generate the admin macaroon and write it to a file.
 	adminPermissions := append(readPermissions, writePermissions...)
+
+	// TODO: Remove temporary hack to give admin signer permissions.
+	adminPermissions = append(adminPermissions, bakery.Op{
+		Entity: "signer",
+		Action: "generate",
+	})
+
 	admMacaroon, err := svc.Oven.NewMacaroon(
 		ctx, bakery.LatestVersion, nil, adminPermissions...,
 	)
