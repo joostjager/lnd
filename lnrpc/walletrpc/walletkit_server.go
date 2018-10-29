@@ -67,6 +67,10 @@ var (
 			Entity: "onchain",
 			Action: "write",
 		}},
+		"/walletrpc.WalletKit/SendOutputs": {{
+			Entity: "onchain",
+			Action: "write",
+		}},
 		"/walletrpc.WalletKit/HasSpendingTx": {{
 			Entity: "onchain",
 			Action: "read",
