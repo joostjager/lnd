@@ -1965,3 +1965,138 @@ message ForwardingHistoryResponse {
    /// The index of the last time in the set of returned forwarding events. Can be used to seek further, pagination style.
    uint32 last_offset_index = 2 [json_name = "last_offset_index"];
 }
+
+message KeyReq {
+    int32 parent_finger_print = 1;
+    int32 key_family = 2;
+}
+message KeyLocator {
+    int32 key_family = 1;
+    int32 key_index = 2;
+}
+message KeyDescriptor {
+     bytes      raw_key_bytes = 1;
+     KeyLocator key_loc = 2;
+}
+message AddrRequest {
+ // no body as we always give it a n2pwkh 
+}
+message AddrResponse {
+    string addr = 1;
+}
+
+message TxRequest {
+    bytes tx_hex = 1;
+ 
+    // TODO(roasbeef): RBF stuff related to conf target, fee ceiling, etc
+}
+message PublishResponse {
+    string error = 1; 
+
+    // TODO(roasbeef): map to the concrete errors using an enum that we decide upon in the future for the wallet, etc
+}
+
+message SpendReport {
+    bool has_spend = 1; 
+    bytes raw_tx_hex = 2;
+}
+
+service WalletKit {
+    rpc DeriveNextKey(KeyReq)               returns (KeyDescriptor);
+    rpc DeriveKey(KeyLocator)               returns (KeyDescriptor);
+    rpc NextSweepAddr(AddrRequest)          returns (AddrResponse);
+    rpc PublishTransaction(TxRequest)       returns (PublishResponse);
+    rpc HasSpendingTx(ChannelPoint)        returns (SpendReport);
+
+    rpc SendOutputs(SendOutputsRequest)       returns (SendOutputsResponse);
+}
+
+message SendOutputsRequest {
+    int64 sat_per_kb = 1;    
+
+    repeated TxOut outputs = 2;
+}
+
+message SendOutputsResponse {
+    bytes txid = 1;
+}
+
+message TxOut {
+    bytes pkScript = 1;
+    int64 value = 2;
+}
+
+message ConfIntent {
+    bytes txid = 1;
+    bytes script = 2; 
+    int32 num_confs = 3; 
+}
+
+message TxConf {
+   bytes block_hash = 1; 
+   bytes block_heigt = 2; 
+   bytes tx_index = 3;
+   bytes raw_txn_bytes = 4; 
+}
+
+message NegativeConf {
+   int32 re_org_depth = 1;
+}
+
+message ConfEvent {
+    oneof conf_Type {
+        TxConf       conf = 1;
+        NegativeConf neg_conf =2;
+    }
+}
+
+message SpendIntent {
+    bytes txid = 1;
+    int32 output_index = 2;
+    bytes script = 3; 
+}
+
+message SpendEvent {
+    ChannelPoint spending_outpoint = 1; 
+    bytes spender_tx_hash = 2; 
+    bytes raw_spending_tx = 3; 
+    int32 spender_input_index = 4;
+    int32 spending_height = 5;   
+} 
+
+message BlockEpoch {}
+message BlockEpochEvent {
+    int32 height = 1;
+}
+
+service ChainNotifier {
+    rpc RegisterConfirmationsNtfn(ConfIntent) returns (stream ConfEvent);
+
+    rpc RegisterSpendNtfn(SpendIntent) returns (stream SpendEvent);
+
+    rpc RegisterBlockEpochNtfn(BlockEpoch) returns (stream BlockEpochEvent);
+}
+
+message SignDescriptor {
+    KeyDescriptor key_desc = 1;
+    bytes         single_tweak = 2;
+    bytes         double_tweak = 3;
+    bytes         witness_script = 4;
+    int32         output_value = 5;
+
+    // Use int32 because no byte type available in protobuf.    
+    int32         sighash = 6;
+    
+    int32         input_index = 7;
+}
+message SignReq {
+    bytes          raw_tx_bytes = 1;
+    repeated SignDescriptor sign_desc = 2; 
+}
+message SignResp {
+    bytes raw_fixed_sized_sig = 1;
+}
+
+service Signer {
+    rpc SignOutputRaw(SignReq) returns (SignResp);
+}
