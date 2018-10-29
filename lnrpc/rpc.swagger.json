@@ -1145,6 +1145,15 @@
         }
       }
     },
+    "lnrpcBlockEpochEvent": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
     "lnrpcChangePasswordRequest": {
       "type": "object",
       "properties": {
@@ -1505,6 +1514,17 @@
           "items": {
             "$ref": "#/definitions/lnrpcChannelCloseSummary"
           }
+        }
+      }
+    },
+    "lnrpcConfEvent": {
+      "type": "object",
+      "properties": {
+        "conf": {
+          "$ref": "#/definitions/lnrpcTxConf"
+        },
+        "neg_conf": {
+          "$ref": "#/definitions/lnrpcNegativeConf"
         }
       }
     },
@@ -2099,6 +2119,15 @@
         }
       }
     },
+    "lnrpcNegativeConf": {
+      "type": "object",
+      "properties": {
+        "re_org_depth": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
     "lnrpcNetworkInfo": {
       "type": "object",
       "properties": {
@@ -2249,6 +2278,11 @@
           "type": "integer",
           "format": "int32",
           "description": "/ The minimum number of confirmations each one of your outputs used for the funding transaction must satisfy."
+        },
+        "spend_unconfirmed": {
+          "type": "boolean",
+          "format": "boolean",
+          "description": "/ Whether unconfirmed outputs should be used as inputs for the funding transaction."
         }
       }
     },
@@ -2727,6 +2761,30 @@
         }
       }
     },
+    "lnrpcSpendEvent": {
+      "type": "object",
+      "properties": {
+        "spending_outpoint": {
+          "$ref": "#/definitions/lnrpcChannelPoint"
+        },
+        "spender_tx_hash": {
+          "type": "string",
+          "format": "byte"
+        },
+        "raw_spending_tx": {
+          "type": "string",
+          "format": "byte"
+        },
+        "spender_input_index": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "spending_height": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
     "lnrpcStopResponse": {
       "type": "object"
     },
@@ -2784,6 +2842,27 @@
             "$ref": "#/definitions/lnrpcTransaction"
           },
           "description": "/ The list of transactions relevant to the wallet."
+        }
+      }
+    },
+    "lnrpcTxConf": {
+      "type": "object",
+      "properties": {
+        "block_hash": {
+          "type": "string",
+          "format": "byte"
+        },
+        "block_heigt": {
+          "type": "string",
+          "format": "byte"
+        },
+        "tx_index": {
+          "type": "string",
+          "format": "byte"
+        },
+        "raw_txn_bytes": {
+          "type": "string",
+          "format": "byte"
         }
       }
     },

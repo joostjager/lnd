@@ -1170,6 +1170,9 @@ message OpenChannelRequest {
 
     /// The minimum number of confirmations each one of your outputs used for the funding transaction must satisfy.
     int32 min_confs = 11 [json_name = "min_confs"];
+
+    /// Whether unconfirmed outputs should be used as inputs for the funding transaction.
+    bool spend_unconfirmed = 12 [json_name = "spend_unconfirmed"];
 }
 message OpenStatusUpdate {
     oneof update {
@@ -1961,4 +1964,55 @@ message ForwardingHistoryResponse {
 
    /// The index of the last time in the set of returned forwarding events. Can be used to seek further, pagination style.
    uint32 last_offset_index = 2 [json_name = "last_offset_index"];
+}
+
+message ConfIntent {
+    bytes txid = 1;
+    bytes script = 2; 
+    int32 num_confs = 3; 
+}
+
+message TxConf {
+   bytes block_hash = 1; 
+   bytes block_heigt = 2; 
+   bytes tx_index = 3;
+   bytes raw_txn_bytes = 4; 
+}
+
+message NegativeConf {
+   int32 re_org_depth = 1;
+}
+
+message ConfEvent {
+    oneof conf_Type {
+        TxConf       conf = 1;
+        NegativeConf neg_conf =2;
+    }
+}
+
+message SpendIntent {
+    bytes txid = 1;
+    int32 output_index = 2;
+    bytes script = 3; 
+}
+
+message SpendEvent {
+    ChannelPoint spending_outpoint = 1; 
+    bytes spender_tx_hash = 2; 
+    bytes raw_spending_tx = 3; 
+    int32 spender_input_index = 4;
+    int32 spending_height = 5;   
+} 
+
+message BlockEpoch {}
+message BlockEpochEvent {
+    int32 height = 1;
+}
+
+service ChainNotifier {
+    rpc RegisterConfirmationsNtfn(ConfIntent) returns (stream ConfEvent);
+
+    rpc RegisterSpendNtfn(SpendIntent) returns (stream SpendEvent);
+
+    rpc RegisterBlockEpochNtfn(BlockEpoch) returns (stream BlockEpochEvent);
 }
