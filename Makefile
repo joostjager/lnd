@@ -136,6 +136,11 @@ build:
 	$(GOBUILD) -tags="$(DEV_TAGS)" -o lnd-debug $(LDFLAGS) $(PKG)
 	$(GOBUILD) -tags="$(DEV_TAGS)" -o lncli-debug $(LDFLAGS) $(PKG)/cmd/lncli
 
+build-itest:
+	@$(call print, "Building itest lnd and lncli.")
+	$(GOBUILD) -tags="$(ITEST_TAGS)" -o lnd-itest $(LDFLAGS) $(PKG)
+	$(GOBUILD) -tags="$(ITEST_TAGS)" -o lncli-itest $(LDFLAGS) $(PKG)/cmd/lncli
+
 install:
 	@$(call print, "Installing lnd and lncli.")
 	go install -v -tags="$(PROD_TAGS)" $(LDFLAGS) $(PKG)
@@ -150,7 +155,7 @@ scratch: dep build
 
 check: unit itest
 
-itest: btcd build
+itest: btcd build-itest
 	@$(call print, "Running integration tests.")
 	$(ITEST)
 
@@ -232,6 +237,7 @@ rpc:
 clean:
 	@$(call print, "Cleaning source.$(NC)")
 	$(RM) ./lnd-debug ./lncli-debug
+	$(RM) ./lnd-itest ./lncli-itest
 	$(RM) -r ./vendor .vendor-new
 
 
