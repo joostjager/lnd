@@ -227,9 +227,9 @@ func (*mockWalletController) IsOurAddress(a btcutil.Address) bool {
 }
 
 func (*mockWalletController) SendOutputs(outputs []*wire.TxOut,
-	_ lnwallet.SatPerKWeight) (*chainhash.Hash, error) {
+	_ lnwallet.SatPerKWeight) (*chainhash.Hash, []int, error) {
 
-	return nil, nil
+	return nil, nil, nil
 }
 
 // ListUnspentWitness is called by the wallet when doing coin selection. We just
