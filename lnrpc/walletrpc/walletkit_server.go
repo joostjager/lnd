@@ -4,6 +4,7 @@ package walletrpc
 
 import (
 	"bytes"
+	"errors"
 	fmt "fmt"
 	"io/ioutil"
 	"os"
@@ -331,16 +332,24 @@ func (w *WalletKit) SendOutputs(ctx context.Context,
 
 	// Now that we have the outputs mapped, we can request that the wallet
 	// attempt to create this transaction.
-	txid, err := w.cfg.Wallet.SendOutputs(
+	tx, err := w.cfg.Wallet.SendOutputs(
 		outputsToCreate, lnwallet.SatPerKWeight(req.SatPerKw),
 	)
 	if err != nil {
 		return nil, err
 	}
+	txid := tx.TxHash()
 
-	return &SendOutputsResponse{
-		Txid: txid[:],
-	}, nil
+	for idx, output := range tx.TxOut {
+		if bytes.Equal(output.PkScript, req.Outputs[0].PkScript) {
+			return &SendOutputsResponse{
+				Txid:        txid[:],
+				OutputIndex: int32(idx),
+			}, nil
+		}
+	}
+
+	return nil, errors.New("output not present")
 }
 
 // EstimateFee attempts to query the internal fee estimator of the wallet to

@@ -90,6 +90,8 @@ message SendOutputsResponse {
     The txid of the transaction sent out on the network.
     */
     bytes txid = 1;
+
+    int32 outputIndex = 2;
 }
 
 message EstimateFeeRequest {
