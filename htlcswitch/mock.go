@@ -753,6 +753,15 @@ func (i *mockInvoiceRegistry) AcceptInvoice(rhash chainhash.Hash,
 	return nil
 }
 
+func (i *mockInvoiceRegistry) RemoveInvoice(payHash chainhash.Hash) error {
+	i.Lock()
+	defer i.Unlock()
+
+	delete(i.invoices, payHash)
+
+	return nil
+}
+
 func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
 	i.Lock()
 	defer i.Unlock()
