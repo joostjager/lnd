@@ -95,6 +95,9 @@ const (
 
 	// ContractAccepted means the HTLC has been accepted but not settled yet.
 	ContractAccepted = 2
+
+	// ContractRemoved means the invoice has been removed.
+	ContractRemoved = 3
 )
 
 // ContractTerm is a companion struct to the Invoice struct. This struct houses
@@ -702,6 +705,43 @@ func (d *DB) AcceptInvoice(paymentHash [32]byte,
 	return acceptedInvoice, nil
 }
 
+// RemoveInvoice attempts to remove an invoice corresponding to the
+// passed payment hash.
+func (d *DB) RemoveInvoice(paymentHash [32]byte) error {
+	return d.Update(func(tx *bolt.Tx) error {
+		invoices, err := tx.CreateBucketIfNotExists(invoiceBucket)
+		if err != nil {
+			return err
+		}
+		invoiceIndex, err := invoices.CreateBucketIfNotExists(
+			invoiceIndexBucket,
+		)
+		if err != nil {
+			return err
+		}
+		acceptedIndex, err := invoices.CreateBucketIfNotExists(
+			acceptedIndexBucket,
+		)
+		if err != nil {
+			return err
+		}
+
+		// Check the invoice index to see if an invoice paying to this
+		// hash exists within the DB.
+		invoiceNum := invoiceIndex.Get(paymentHash[:])
+		if invoiceNum == nil {
+			return ErrInvoiceNotFound
+		}
+
+		err = removeInvoice(invoices, acceptedIndex, invoiceNum)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
 // InvoicesAcceptedSince can be used by callers to catch up any accepted invoices
 // they missed within the accepted invoice time series. We'll return all known
 // accepted invoice that have a accept index higher than the passed
@@ -1100,4 +1140,35 @@ func acceptInvoice(invoices, acceptedIndex *bolt.Bucket, invoiceNum []byte,
 	}
 
 	return &invoice, nil
+}
+
+func removeInvoice(invoices, acceptedIndex *bolt.Bucket,
+	invoiceNum []byte) error {
+
+	invoice, err := fetchInvoice(invoiceNum, invoices)
+	if err != nil {
+		return err
+	}
+
+	// Add idempotency to duplicate removed state, return here to avoid
+	// overwriting the previous info.
+	switch invoice.Terms.State {
+	case ContractRemoved:
+		return nil
+	case ContractSettled:
+		return fmt.Errorf("invoice already settled")
+	}
+
+	invoice.Terms.State = ContractRemoved
+
+	var buf bytes.Buffer
+	if err := serializeInvoice(&buf, &invoice); err != nil {
+		return err
+	}
+
+	if err := invoices.Put(invoiceNum[:], buf.Bytes()); err != nil {
+		return err
+	}
+
+	return nil
 }
