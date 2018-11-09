@@ -233,6 +233,8 @@ func (s *Server) SettleInvoice(ctx context.Context,
 	switch invoice.Terms.State {
 	case channeldb.ContractSettled:
 		return &SettleInvoiceResp{}, nil
+	case channeldb.ContractCanceled:
+		return nil, errors.New("invoice has been removed")
 	case channeldb.ContractOpen:
 		return nil, errors.New("invoice not yet accepted")
 	}
@@ -288,7 +290,11 @@ func (s *Server) CancelInvoice(ctx context.Context,
 	switch invoice.Terms.State {
 	case channeldb.ContractSettled:
 		return nil, errors.New("invoice already settled")
+	case channeldb.ContractCanceled:
+		return &CancelInvoiceResp{}, nil
 	}
+
+	s.cfg.InvoiceRegistry.CancelInvoice(paymentHash)
 
 	err = s.cfg.Switch.ProcessContractResolution(
 		contractcourt.ResolutionMsg{

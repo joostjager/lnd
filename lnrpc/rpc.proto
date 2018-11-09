@@ -1797,6 +1797,7 @@ message Invoice {
         OPEN = 0;
         SETTLED = 1;
         ACCEPTED = 2;
+        CANCELED = 3;
     }
 
     /**

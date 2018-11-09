@@ -87,8 +87,8 @@ const (
 	// ContractAccepted means the HTLC has been accepted but not settled yet.
 	ContractAccepted ContractState = 2
 
-	// ContractRemoved means the invoice has been removed.
-	ContractRemoved ContractState = 3
+	// ContractCanceled means the invoice has been canceled.
+	ContractCanceled ContractState = 3
 )
 
 // String returns a human readable identifier for the ContractState type.
@@ -100,6 +100,8 @@ func (c ContractState) String() string {
 		return "Accepted"
 	case ContractSettled:
 		return "Settled"
+	case ContractCanceled:
+		return "Canceled"
 	}
 
 	return "Unknown"
@@ -691,6 +693,44 @@ func (d *DB) AcceptInvoice(paymentHash [32]byte,
 	return acceptedInvoice, nil
 }
 
+// CancelInvoice attempts to remove an invoice corresponding to the
+// passed payment hash.
+func (d *DB) CancelInvoice(paymentHash [32]byte) (*Invoice, error) {
+	var canceledInvoice *Invoice
+	err := d.Update(func(tx *bbolt.Tx) error {
+		invoices, err := tx.CreateBucketIfNotExists(invoiceBucket)
+		if err != nil {
+			return err
+		}
+		invoiceIndex, err := invoices.CreateBucketIfNotExists(
+			invoiceIndexBucket,
+		)
+		if err != nil {
+			return err
+		}
+
+		// Check the invoice index to see if an invoice paying to this
+		// hash exists within the DB.
+		invoiceNum := invoiceIndex.Get(paymentHash[:])
+		if invoiceNum == nil {
+			return ErrInvoiceNotFound
+		}
+
+		invoice, err := cancelInvoice(invoices, invoiceNum)
+		if err != nil {
+			return err
+		}
+		canceledInvoice = invoice
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return canceledInvoice, nil
+}
+
 // InvoicesSettledSince can be used by callers to catch up any settled invoices
 // they missed within the settled invoice time series. We'll return all known
 // settled invoice that have a settle index higher than the passed
@@ -1001,6 +1041,36 @@ func acceptInvoice(invoices *bbolt.Bucket, invoiceNum []byte,
 
 	invoice.AmtPaid = amtPaid
 	invoice.Terms.State = ContractAccepted
+
+	var buf bytes.Buffer
+	if err := serializeInvoice(&buf, &invoice); err != nil {
+		return nil, err
+	}
+
+	if err := invoices.Put(invoiceNum[:], buf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	return &invoice, nil
+}
+
+func cancelInvoice(invoices *bbolt.Bucket, invoiceNum []byte) (*Invoice, error) {
+
+	invoice, err := fetchInvoice(invoiceNum, invoices)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add idempotency to duplicate removed state, return here to avoid
+	// overwriting the previous info.
+	switch invoice.Terms.State {
+	case ContractCanceled:
+		return &invoice, nil
+	case ContractSettled:
+		return nil, fmt.Errorf("invoice already settled")
+	}
+
+	invoice.Terms.State = ContractCanceled
 
 	var buf bytes.Buffer
 	if err := serializeInvoice(&buf, &invoice); err != nil {

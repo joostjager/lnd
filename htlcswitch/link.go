@@ -2389,6 +2389,20 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 					"hash=%x", pd.RHash[:])
 			}
 
+			// Reject htlcs for removed invoices.
+			if invoice.Terms.State == channeldb.ContractCanceled {
+				log.Errorf("rejecting htlc due to canceled " +
+					"invoice")
+
+				failure := lnwire.FailUnknownPaymentHash{}
+				l.sendHTLCError(
+					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
+				)
+
+				needUpdate = true
+				continue
+			}
+
 			// If we're not currently in debug mode, and the
 			// extended htlc doesn't meet the value requested, then
 			// we'll fail the htlc.  Otherwise, we settle this htlc
