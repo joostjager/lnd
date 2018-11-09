@@ -475,6 +475,19 @@ func (i *InvoiceRegistry) AcceptInvoice(rHash chainhash.Hash,
 	return nil
 }
 
+// RemoveInvoice attempts to remove an invoice corresponding to the
+// passed payment hash.
+func (i *InvoiceRegistry) RemoveInvoice(payHash chainhash.Hash) error {
+	i.Lock()
+	defer i.Unlock()
+
+	log.Debugf("Removing invoice %x", payHash[:])
+
+	return i.cdb.RemoveInvoice(payHash)
+
+	// TODO: notification of removal.
+}
+
 // notifyClients notifies all currently registered invoice notification clients
 // of a newly added/settled invoice.
 func (i *InvoiceRegistry) notifyClients(hash chainhash.Hash,
