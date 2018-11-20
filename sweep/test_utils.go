@@ -80,20 +80,20 @@ func (m *MockNotifier) ConfirmTx(txid *chainhash.Hash, height uint32) error {
 }
 
 // SpendOutpoint ...
-func (m *MockNotifier) SpendOutpoint(outpoint *wire.OutPoint,
-	spendingTx *wire.MsgTx) {
+func (m *MockNotifier) SpendOutpoint(outpoint wire.OutPoint,
+	spendingTx wire.MsgTx) {
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	channels, ok := m.spendChan[*outpoint]
+	channels, ok := m.spendChan[outpoint]
 	if ok {
 		for _, channel := range channels {
-			m.sendSpend(channel, outpoint, spendingTx)
+			m.sendSpend(channel, &outpoint, &spendingTx)
 		}
 	}
 
-	m.spends[*outpoint] = spendingTx
+	m.spends[outpoint] = &spendingTx
 }
 
 // SpendOutpoint ...
