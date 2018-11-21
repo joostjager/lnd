@@ -109,14 +109,7 @@ func createSweeperTestContext(t *testing.T) *sweeperTestContext {
 
 	var outputScriptCount byte
 	ctx.sweeper = New(&UtxoSweeperConfig{
-		GenSweepScript: func() ([]byte, error) {
-			script := []byte{outputScriptCount}
-			outputScriptCount++
-			return script, nil
-		},
-		Estimator: estimator,
-		Signer:    &mockSigner{},
-		Notifier:  notifier,
+		Notifier: notifier,
 		PublishTransaction: func(tx *wire.MsgTx) error {
 			log.Tracef("Publishing tx %v", tx.TxHash())
 			err := backend.publishTransaction(tx)
@@ -132,9 +125,18 @@ func createSweeperTestContext(t *testing.T) *sweeperTestContext {
 			ctx.timeoutChan <- c
 			return c
 		},
-		ChainIO:        &mockChainIO{},
-		Store:          store,
-		MaxInputsPerTx: 3,
+		Store: store,
+		TxGenerator: &TxGenerator{
+			GenSweepScript: func() ([]byte, error) {
+				script := []byte{outputScriptCount}
+				outputScriptCount++
+				return script, nil
+			},
+			Estimator:      estimator,
+			Signer:         &mockSigner{},
+			ChainIO:        &mockChainIO{},
+			MaxInputsPerTx: 3,
+		},
 	})
 
 	ctx.sweeper.Start()
