@@ -44,5 +44,5 @@ func (s *sweeperStore) AddTx(*wire.MsgTx) error {
 	return nil
 }
 
-// Compile-time constraint to ensure nurseryStore implements NurseryStore.
+// Compile-time constraint to ensure sweeperStore implements SweeperStore.
 var _ SweeperStore = (*sweeperStore)(nil)

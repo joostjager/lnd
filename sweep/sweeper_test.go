@@ -137,6 +137,7 @@ func createSweeperTestContext(t *testing.T) *sweeperTestContext {
 			ChainIO:        &mockChainIO{},
 			MaxInputsPerTx: 3,
 		},
+		SweepTxConfTarget: 1,
 	})
 
 	ctx.sweeper.Start()

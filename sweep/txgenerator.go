@@ -36,7 +36,7 @@ type TxGenerator struct {
 	MaxInputsPerTx int
 }
 
-// sweepAll goes through all given inputs and constructs sweep transactions,
+// Generate goes through all given inputs and constructs sweep transactions,
 // each up to the configured maximum number of inputs. Negative yield inputs are
 // skipped. Transactions with an output below the dust limit are not published.
 // Those inputs remain pending and will be bundled with future inputs if
@@ -45,7 +45,7 @@ type TxGenerator struct {
 // Returns a boolean indicating whether there are sweepable inputs remaining.
 // This can happen when fullOnly is true and there are less sweepable inputs
 // then the configured maximum number per tx.
-func (s *TxGenerator) generate(sweepableInputs []Input, confTarget uint32,
+func (s *TxGenerator) Generate(sweepableInputs []Input, confTarget uint32,
 	fullOnly bool) ([]*wire.MsgTx, bool, error) {
 
 	// Calculate dust limit based on the P2WPKH output script of the sweep

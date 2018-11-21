@@ -462,7 +462,7 @@ func (s *UtxoSweeper) sweepAll(fullOnly bool) (bool, error) {
 		sweepableInputs = append(sweepableInputs, input.input)
 	}
 
-	txes, remaining, err := s.cfg.TxGenerator.generate(sweepableInputs,
+	txes, remaining, err := s.cfg.TxGenerator.Generate(sweepableInputs,
 		s.cfg.SweepTxConfTarget, fullOnly)
 	if err != nil {
 		return false, err
