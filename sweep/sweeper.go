@@ -3,17 +3,11 @@ package sweep
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/btcsuite/btcd/blockchain"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcwallet/wallet/txrules"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/lnwallet"
 )
@@ -43,7 +37,9 @@ type UtxoSweeper struct {
 
 	timer <-chan time.Time
 
-	dustLimit btcutil.Amount
+	testSpendChan chan wire.OutPoint
+
+	currentOutputScript []byte
 
 	quit chan struct{}
 	wg   sync.WaitGroup
@@ -60,10 +56,6 @@ type UtxoSweeperConfig struct {
 	// transaction.
 	Estimator lnwallet.FeeEstimator
 
-	// Signer is used by the sweeper to generate valid witnesses at the
-	// time the incubated outputs need to be spent.
-	Signer lnwallet.Signer
-
 	// PublishTransaction facilitates the process of broadcasting a signed
 	// transaction to the appropriate network.
 	PublishTransaction func(*wire.MsgTx) error
@@ -73,26 +65,22 @@ type UtxoSweeperConfig struct {
 	// be added to the sweep tx that is about to be generated.
 	NewBatchTimer func() <-chan time.Time
 
-	// SweepTxConfTarget assigns a confirmation target for sweep txes on
-	// which the fee calculation will be based.
-	SweepTxConfTarget uint32
-
 	// Notifier is an instance of a chain notifier we'll use to watch for
 	// certain on-chain events.
 	Notifier chainntnfs.ChainNotifier
 
-	// ChainIO allows us to query the state of the current main chain.
+	// ChainIO is used  to determine the current block height.
 	ChainIO lnwallet.BlockChainIO
 
-	// HasSpendingTx allows the sweeper to check whether there is already a
-	// unconfirmed or confirmed wallet transaction for this output. It
-	// prevents unnecessary republication and address inflation.
-	HasSpendingTx func(op wire.OutPoint) (*wire.MsgTx, error)
+	// Store stores the published sweeper txes.
+	Store SweeperStore
 
-	// MaxInputsPerTx specifies the  maximum number of inputs allowed in a
-	// single sweep tx. If more need to be swept, multiple txes are created
-	// and published.
-	MaxInputsPerTx int
+	// TxGenerator generates a set of sweep txes given a list of inputs.
+	TxGenerator *TxGenerator
+
+	// SweepTxConfTarget assigns a confirmation target for sweep txes on
+	// which the fee calculation will be based.
+	SweepTxConfTarget uint32
 }
 
 // Result is the struct that is pushed through the result channel. Callers
@@ -115,29 +103,9 @@ type sweepInputMessage struct {
 	resultChan chan Result
 }
 
-type inputState uint8
-
-const (
-	// stateNew is the initial state of inputs. No tx of ours has been
-	// published yet. Not in this run and not in previous runs (as reported
-	// via HasWalletTx).
-	stateNew inputState = iota
-
-	// statePublished indicates that we published a sweep tx for this input.
-	statePublished
-
-	// stateError indicates that we didn't succeed in publishing the sweep
-	// tx.
-	stateError
-)
-
 // pendingInput is created when an input reaches the main loop for the first
 // time. It tracks all relevant state that is needed for sweeping.
 type pendingInput struct {
-	// txHash is the hash of our sweep tx. It is set when the sweep is
-	// published and the input moves to statePublished.
-	txHash chainhash.Hash
-
 	// listeners is a list of channels over which the final outcome of the
 	// sweep needs to be broadcasted.
 	listeners []chan Result
@@ -150,21 +118,17 @@ type pendingInput struct {
 	// notifier spend registration.
 	ntfnRegCancel func()
 
-	// state tracks the state this input is in.
-	state inputState
+	// minPublishHeight indicates the minimum block height at which this
+	// input may be (re)published.
+	minPublishHeight int32
 
-	// witnessSizeUpperBound is the upper bound of the number of witness
-	// bytes that this input is going to add to the tx weight.
-	witnessSizeUpperBound int
+	// publishAttempts records the number of attempts that have already been
+	// made to sweep this tx.
+	publishAttempts int
 }
 
 // New returns a new Sweeper instance.
 func New(cfg *UtxoSweeperConfig) *UtxoSweeper {
-	// Calculate dust limit based on the P2WPKH output script of the sweep
-	// txes.
-	dustLimit := txrules.GetDustThreshold(
-		lnwallet.P2WPKHSize,
-		btcutil.Amount(cfg.Estimator.RelayFeePerKW().FeePerKVByte()))
 
 	return &UtxoSweeper{
 		cfg:           cfg,
@@ -172,7 +136,6 @@ func New(cfg *UtxoSweeperConfig) *UtxoSweeper {
 		spendChan:     make(chan *chainntnfs.SpendDetail),
 		quit:          make(chan struct{}),
 		pendingInputs: make(map[wire.OutPoint]*pendingInput),
-		dustLimit:     dustLimit,
 	}
 }
 
@@ -180,12 +143,58 @@ func New(cfg *UtxoSweeperConfig) *UtxoSweeper {
 func (s *UtxoSweeper) Start() error {
 	if !atomic.CompareAndSwapUint32(&s.started, 0, 1) {
 		return nil
+
 	}
 
 	log.Tracef("Sweeper starting")
 
+	// TODO: Republish last tx? No matter what the result is, the output address should
+	// be considered used.
+
+	/*
+		txes, err := s.cfg.Store.GetUnconfirmedTxes()
+		if err != nil {
+			return err
+		}
+
+		// Republish all txes on startup, in case lnd crashed during the
+		// previous publication attempt.
+		for _, tx := range txes {
+			err := s.cfg.PublishTransaction(tx)
+
+			// Double spends are expected, because wea already published
+			// these txes on a previous run.
+			if err != nil && err != lnwallet.ErrDoubleSpend {
+				return err
+			}
+
+			for _, in := range tx.TxIn {
+				// Start watching for spend of this input, either by us
+				// or the remote party.
+				//
+				// TODO: Pass in script and heighthint!
+				cancel, err := s.registerSpendNtfn(
+					in.PreviousOutPoint, nil, 0)
+				if err != nil {
+					return fmt.Errorf("cannot watch for spend: %v",
+						err)
+				}
+
+				pendInput := &pendingInput{
+					ntfnRegCancel: cancel,
+					errored:       err != nil,
+				}
+				s.pendingInputs[in.PreviousOutPoint] = pendInput
+			}
+		}*/
+
 	s.wg.Add(1)
-	go s.collector()
+	go func() {
+		err := s.collector()
+		if err != nil {
+			log.Errorf("Sweeper stopped: %v", err)
+		}
+	}()
 
 	return nil
 }
@@ -237,8 +246,22 @@ func (s *UtxoSweeper) SweepInput(input Input) (chan Result, error) {
 
 // collector is the sweeper main loop. It processes new inputs, spend
 // notifications and counts down to publication of the sweep tx.
-func (s *UtxoSweeper) collector() {
+func (s *UtxoSweeper) collector() error {
 	defer s.wg.Done()
+
+	bestHash, bestHeight, err := s.cfg.ChainIO.GetBestBlock()
+	if err != nil {
+		return err
+	}
+
+	blockEpochs, err := s.cfg.Notifier.RegisterBlockEpochNtfn(&chainntnfs.BlockEpoch{
+		Height: bestHeight,
+		Hash:   bestHash,
+	})
+	if err != nil {
+		return err
+	}
+	defer blockEpochs.Cancel()
 
 	for {
 		select {
@@ -248,91 +271,57 @@ func (s *UtxoSweeper) collector() {
 			if pending {
 				log.Debugf("Already pending input %v received",
 					outpoint)
-
 				// Add additional result channel to signal spend
 				// of this input.
 				pendInput.listeners = append(
 					pendInput.listeners, input.resultChan)
-
 				continue
 			}
-
 			// Create a new pendingInput and initialize the
 			// listeners slice with the passed in result channel. If
 			// this input is offered for sweep again, the result
 			// channel will be appended to this slice.
 			pendInput = &pendingInput{
-				listeners: []chan Result{input.resultChan},
-				input:     input.input,
-				state:     stateNew,
+				listeners:        []chan Result{input.resultChan},
+				input:            input.input,
+				minPublishHeight: bestHeight,
 			}
 			s.pendingInputs[outpoint] = pendInput
-
-			size, err := getInputWitnessSizeUpperBound(input.input)
-			if err != nil {
-				err = fmt.Errorf("cannot determine size: %v",
-					err)
-
-				s.signalAndRemove(&outpoint, Result{Err: err})
-
-				continue
-			}
-			pendInput.witnessSizeUpperBound = size
 
 			// Start watching for spend of this input, either by us
 			// or the remote party. The possibility of a remote
 			// spend is the reason why just registering for conf. of
 			// our sweep tx isn't enough.
-			cancel, err := s.registerSpendNtfn(input.input)
+			cancel, err := s.registerSpendNtfn(
+				outpoint,
+				input.input.SignDesc().Output.PkScript,
+				input.input.HeightHint(),
+			)
 			if err != nil {
-				err = fmt.Errorf("cannot watch for spend: %v",
+				err = fmt.Errorf(
+					"cannot watch for spend: %v",
 					err)
 
-				s.signalAndRemove(&outpoint, Result{Err: err})
+				s.signalAndRemove(&outpoint,
+					Result{Err: err})
 
 				continue
 			}
 			pendInput.ntfnRegCancel = cancel
 
-			// Lookup if there is already a confirmed or unconfirmed
-			// tx of ours that spends this input.
-			spendingTx, err := s.cfg.HasSpendingTx(outpoint)
-			if err != nil {
-				log.Errorf("HasSpendingTx %v: %v", outpoint,
-					err)
-
-				// TODO: Re-enable code below once HasSpendingTx
-				// is reliable. For now, just continue as if
-				// there is no spending tx.
-
-				// s.signalAndRemove(&outpoint, Result{Err: err})
-				// continue
-			}
-
-			if spendingTx != nil {
-				spendingTxHash := spendingTx.TxHash()
-				log.Debugf("Already swept input %v received "+
-					"(tx: %v)", outpoint, spendingTxHash)
-
-				// Save spending tx to find sibling inputs in
-				// case of remote spend.
-				pendInput.txHash = spendingTxHash
-				pendInput.state = statePublished
-
-				continue
-			}
-
-			// If there is no spending tx yet, we include
-			// this input in the list of inputs to sweep in
-			// the next round.
-
-			log.Debugf("Scheduling sweep for input %v",
-				pendInput.input.OutPoint())
-
-			s.scheduleSweep()
+			// Check to see if with this new input a sweep tx can be
+			// formed.
+			s.scheduleSweep(bestHeight)
 
 		case spend := <-s.spendChan:
-			invalidatedTxes := make(map[chainhash.Hash]struct{})
+			// For testing
+			if s.testSpendChan != nil {
+				s.testSpendChan <- *spend.SpentOutPoint
+			}
+
+			isOurTx := s.cfg.Store.IsOurTx(*spend.SpenderTxHash)
+
+			// Signal sweep results for inputs in this confirmed tx.
 			for _, txIn := range spend.SpendingTx.TxIn {
 				outpoint := txIn.PreviousOutPoint
 
@@ -341,33 +330,14 @@ func (s *UtxoSweeper) collector() {
 				// registration, deleted from pendingInputs but
 				// the ntfn was in-flight already. Or this could
 				// be not one of our inputs.
-				pendingInput, ok := s.pendingInputs[outpoint]
+				_, ok := s.pendingInputs[outpoint]
 				if !ok {
 					continue
 				}
 
 				var err error
-
-				switch pendingInput.state {
-
-				// We haven't even published a sweep and
-				// won't need to anymore.
-				case stateNew, stateError:
+				if !isOurTx {
 					err = ErrRemoteSpend
-
-				// If we published, check if spender tx hash
-				// matches our tx. If not, this is a remote
-				// spend.
-				case statePublished:
-					txHash := pendingInput.txHash
-					if txHash != *spend.SpenderTxHash {
-						// This implies that the stored
-						// tx must be invalid now.
-						invalidatedTxes[txHash] =
-							struct{}{}
-
-						err = ErrRemoteSpend
-					}
 				}
 
 				// Signal result channels sweep result.
@@ -377,35 +347,8 @@ func (s *UtxoSweeper) collector() {
 				})
 			}
 
-			// Reschedule remaining inputs of all invalidated txes.
-			rescheduledInputs := false
-			for _, input := range s.pendingInputs {
-				if input.state != statePublished {
-					continue
-				}
-
-				_, ok := invalidatedTxes[input.txHash]
-				if !ok {
-					// Input isn't invalidated.
-					continue
-				}
-
-				// Move input back to the new state so it can be
-				// re-swept.
-				input.state = stateNew
-
-				log.Debugf("Re-schedule sweep for input %v",
-					input.input.OutPoint())
-
-				rescheduledInputs = true
-			}
-
-			// If any inputs were rescheduled, check to see if
-			// already a tx consisting the maximum number of inputs
-			// can be constructed.
-			if rescheduledInputs {
-				s.scheduleSweep()
-			}
+			// Don't need to schedule a sweep, because spend ntfns
+			// coincide with block epochs.
 
 		case <-s.timer:
 			log.Debugf("Timer expired")
@@ -414,57 +357,83 @@ func (s *UtxoSweeper) collector() {
 			// be started when new inputs arrive.
 			s.timer = nil
 
-			// Examine pending inputs and try to construct one or
-			// more sweep txes. Publish a tx even if it is not full
-			// yet (input count less than maximum allowed inputs per
-			// tx).
-			_, err := s.sweepAll(false)
+			// Retrieve fee estimate for input filtering and final
+			// tx fee calculation.
+			satPerKW, err := s.cfg.Estimator.EstimateFeePerKW(
+				s.cfg.SweepTxConfTarget)
+			if err != nil {
+				return err
+			}
+
+			// Examine pending inputs and try to construct lists of
+			// inputs.
+			inputLists, err := s.getInputLists(bestHeight, satPerKW)
 			if err != nil {
 				log.Errorf("Cannot sweep on timer event: %v",
 					err)
 			}
 
+			// Sweep selected inputs.
+			for _, inputs := range inputLists {
+				err := s.sweep(inputs, satPerKW, bestHeight)
+				if err != nil {
+					return err
+				}
+			}
+
+		case epoch := <-blockEpochs.Epochs:
+			bestHeight = epoch.Height
+			s.scheduleSweep(bestHeight)
 		case <-s.quit:
-			return
+			return nil
 		}
-
-		// TODO: Handle the case where a tx is not confirmed within
-		// specified time and fee needs to be bumped.
-
-		// TODO: Periodically refresh fee rate and see if it unlocks any
-		// inputs that then have a positive yield.
 	}
 }
 
-// scheduleSweep tries to sweep inputs, but only goes through if the generated
-// tx has the maximum number of inputs. If inputs remain, the batch timer is
-// started to create an opportunity for more inputs to be added.
-func (s *UtxoSweeper) scheduleSweep() {
-	// Try to sweep inputs, but only if full txes can be generated.
-	inputsRemaining, err := s.sweepAll(true)
+// scheduleSweep starts the sweep timer to create an opportunity for more inputs
+// to be added.
+func (s *UtxoSweeper) scheduleSweep(currentHeight int32) error {
+	// Retrieve fee estimate for input filtering and final
+	// tx fee calculation.
+	satPerKW, err := s.cfg.Estimator.EstimateFeePerKW(
+		s.cfg.SweepTxConfTarget)
 	if err != nil {
-		log.Errorf("Cannot sweep during scheduling: %v", err)
-		return
+		return err
 	}
 
-	if !inputsRemaining {
-		// Nothing sweepable anymore, disable timer. This prevents two
-		// sweeps from happening in fast succession. The first sweep
-		// triggered by the maximum allowed number of inputs and the
-		// second because of the timer.
-		log.Debugf("No inputs remaining, disabling timer")
-		s.timer = nil
-		return
+	// Examine pending inputs and try to construct lists of
+	// inputs.
+	inputLists, err := s.getInputLists(currentHeight, satPerKW)
+	if err != nil {
+		log.Errorf("Cannot sweep on timer event: %v",
+			err)
 	}
 
-	if s.timer == nil {
-		// Start sweep timer to create opportunity for more inputs to be
-		// added before a tx is constructed.
-		log.Debugf("Starting timer")
-		s.timer = s.cfg.NewBatchTimer()
-	} else {
+	// If there are inputLists, there is something to sweep.
+	sweepableInputs := len(inputLists) > 0
+
+	// Stop timer if it is running and there is nothing to sweep anymore.
+	if !sweepableInputs {
+		if s.timer != nil {
+			log.Debugf("Timer stopped, nothing to sweep anymore")
+			s.timer = nil
+		}
+		return nil
+	}
+
+	// There is something to sweep. Don't restart the timer if it is already
+	// ticking.
+	if s.timer != nil {
 		log.Debugf("Timer still ticking")
+		return nil
 	}
+
+	// Start sweep timer to create opportunity for more inputs to be
+	// added before a tx is constructed.
+	log.Debugf("Timer started")
+	s.timer = s.cfg.NewBatchTimer()
+
+	return nil
 }
 
 // signalAndRemove notifies the listeners of the final result of the input
@@ -497,211 +466,104 @@ func (s *UtxoSweeper) signalAndRemove(outpoint *wire.OutPoint, result Result) {
 	delete(s.pendingInputs, *outpoint)
 }
 
-// sweepAll goes through all pending inputs and constructs sweep transactions,
+// getInputLists goes through all pending inputs and constructs sweep lists,
 // each up to the configured maximum number of inputs. Negative yield inputs are
 // skipped. Transactions with an output below the dust limit are not published.
 // Those inputs remain pending and will be bundled with future inputs if
 // possible.
-//
-// Returns a boolean indicating whether there are sweepable inputs remaining.
-// This can happen when fullOnly is true and there are less sweepable inputs
-// then the configured maximum number per tx.
-func (s *UtxoSweeper) sweepAll(fullOnly bool) (bool, error) {
-	// Retrieve fee estimate for input filtering and final tx fee
-	// calculation.
-	satPerKW, err := s.cfg.Estimator.EstimateFeePerKW(
-		s.cfg.SweepTxConfTarget)
-	if err != nil {
-		return false, err
-	}
+func (s *UtxoSweeper) getInputLists(currentHeight int32,
+	satPerKW lnwallet.SatPerKWeight) ([][]Input, error) {
 
-	// Retrieve current height to properly set tx locktime.
-	_, currentHeight, err := s.cfg.ChainIO.GetBestBlock()
-	if err != nil {
-		return false, err
-	}
+	// TODO: Separate zero-attempt inputs from retries.
 
 	// Filter for inputs that need to be swept.
-	var sweepableInputs []*pendingInput
+	var sweepableInputs []Input
 	for _, input := range s.pendingInputs {
-		// Skip inputs that are already part of a sweep tx.
-		if input.state != stateNew {
+		// Skip inputs that have a minimum publish height that is not
+		// yet reached.
+		if input.minPublishHeight > currentHeight {
 			continue
 		}
 
-		sweepableInputs = append(sweepableInputs, input)
+		sweepableInputs = append(sweepableInputs, input.input)
 	}
 
-	// Sort input by yield. We will start constructing sweep transactions
-	// starting with the highest yield inputs. This is to prevent the
-	// construction of a sweep tx with an output below the dust limit,
-	// causing the sweep process to stop, while there are still higher value
-	// inputs sweepable. It also allows us to stop evaluating more inputs
-	// when the first input in this ordering is encountered with a negative
-	// yield.
-	//
-	// Yield is calculated as the difference between value and added fee for
-	// this input. The fee calculation excludes fee components that are
-	// common to all inputs, as those wouldn't influence the order. The
-	// single component that is differentiating is witness size.
-	//
-	// For witness size, a worst case upper limit is taken. The actual size
-	// depends on the signature length, which is not known yet at this
-	// point.
-	yield := func(i *pendingInput) int64 {
-		return i.input.SignDesc().Output.Value -
-			int64(satPerKW.FeeForWeight(
-				int64(i.witnessSizeUpperBound)))
-	}
-
-	sort.Slice(sweepableInputs, func(i, j int) bool {
-		return yield(sweepableInputs[i]) > yield(sweepableInputs[j])
-	})
-
-	// Select blocks of inputs up to the configured maximum number.
-	stopSweep := false
-	for len(sweepableInputs) > 0 && !stopSweep {
-		var weightEstimate lnwallet.TxWeightEstimator
-
-		// Add the sweep tx output to the weight estimate.
-		weightEstimate.AddP2WKHOutput()
-
-		var inputList []Input
-		var total, outputValue int64
-		for len(sweepableInputs) > 0 {
-			input := sweepableInputs[0]
-			sweepableInputs = sweepableInputs[1:]
-			size, err := getInputWitnessSizeUpperBound(input.input)
-			if err != nil {
-				log.Warnf("Failed adding input weight: %v", err)
-				continue
-			}
-			weightEstimate.AddWitnessInput(size)
-
-			newTotal := total +
-				input.input.SignDesc().Output.Value
-
-			weight := weightEstimate.Weight()
-			fee := satPerKW.FeeForWeight(int64(weight))
-			newOutputValue := newTotal - int64(fee)
-
-			// If adding this input makes the total output value of
-			// the tx decrease, this is a negative yield input. It
-			// shouldn't be added to the tx. We also don't need to
-			// consider further inputs. Because of the sorting by
-			// value, subsequent inputs almost certainly have an
-			// even higher negative yield.
-			if newOutputValue <= outputValue {
-				stopSweep = true
-				break
-			}
-
-			inputList = append(inputList, input.input)
-			total = newTotal
-			outputValue = newOutputValue
-			if len(inputList) >= s.cfg.MaxInputsPerTx {
-				break
-			}
-		}
-
-		// We can get an empty input list if all of the inputs had a
-		// negative yield. In that case, we can stop here.
-		if len(inputList) == 0 {
-			return false, nil
-		}
-
-		// If the output value of this block of inputs does not reach
-		// the dust limit, stop sweeping. Because of the sorting,
-		// continuing with remaining inputs will only lead to
-		// transactions with a even lower output value.
-		if outputValue < int64(s.dustLimit) {
-			log.Debugf("Tx output value %v below dust limit of %v",
-				outputValue, s.dustLimit)
-			return false, nil
-		}
-
-		// If fullOnly, don't sweep if less inputs than the maximum. Do
-		// this check after the dust limit check, to properly report
-		// whether there are sweepable inputs remaining.
-		if fullOnly && len(inputList) < s.cfg.MaxInputsPerTx {
-			return true, nil
-		}
-
-		s.sweep(inputList, uint32(currentHeight), satPerKW)
-	}
-
-	return false, nil
+	return s.cfg.TxGenerator.Generate(sweepableInputs, satPerKW)
 }
 
-// sweep creates and publishes a sweep tx for the provided list of inputs. It
-// uses the outcome to advance the pending input states and notifies listeners
-// if necessary.
-func (s *UtxoSweeper) sweep(inputList []Input, currentHeight uint32,
-	feePerKw lnwallet.SatPerKWeight) {
+func (s *UtxoSweeper) sweep(inputs []Input,
+	satPerKW lnwallet.SatPerKWeight, currentHeight int32) error {
 
-	sweepTx, err := s.createAndPublishTx(inputList, currentHeight, feePerKw)
-	if err != nil {
-		log.Error(err)
-	}
+	var err error
 
-	// TODO: Rebroadcaster/retry mechanisms need to be added.
-
-	// Advance input states or report outcomes.
-	for _, input := range inputList {
-		pi := s.pendingInputs[*(input.OutPoint())]
-
-		switch {
-
-		// Published successfully, record tx hash.
-		case err == nil:
-			pi.txHash = sweepTx.TxHash()
-			pi.state = statePublished
-
-		// In case of a double spend, don't notify listeners yet
-		// but wait for the spending tx to trigger the spend
-		// notification. Because of the inaccurate error
-		// reporting, ErrDoubleSpend may actually mean various
-		// things other than a real double spend.
-		case err == lnwallet.ErrDoubleSpend:
-			pi.state = stateError
-
-		// In case of an other error, signal the listener and
-		// remove the input.
-		default:
-			s.signalAndRemove(input.OutPoint(), Result{Err: err})
+	// Generate output script if no unused script available.
+	if s.currentOutputScript == nil {
+		s.currentOutputScript, err = s.cfg.GenSweepScript()
+		if err != nil {
+			return err
 		}
 	}
-}
 
-func (s *UtxoSweeper) createAndPublishTx(inputs []Input,
-	currentHeight uint32, feePerKw lnwallet.SatPerKWeight) (
-	*wire.MsgTx, error) {
-
-	tx, err := s.createSweepTx(inputs, s.cfg.SweepTxConfTarget,
-		currentHeight, feePerKw)
+	// Create sweep tx.
+	tx, err := s.cfg.TxGenerator.createSweepTx(inputs,
+		s.currentOutputScript,
+		uint32(currentHeight), satPerKW)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create sweep tx: %v", err)
+		return fmt.Errorf("cannot create sweep tx: %v", err)
 	}
+
+	// Add tx before publication, so that we will always know that a
+	// spend by this tx is ours.
+	s.cfg.Store.NotifyPublishTx(tx)
 
 	// Publish sweep tx.
 	log.Debugf("Publishing sweep tx %v", tx.TxHash())
 	err = s.cfg.PublishTransaction(tx)
+
+	// Keep outputScript in case of an error, so that it can be
+	// reused for the next tx and causes no address inflation.
 	if err != nil {
-		return nil, err
+		log.Error(err)
+	} else {
+		s.currentOutputScript = nil
 	}
 
-	return tx, nil
+	// Reschedule sweep.
+	for _, input := range tx.TxIn {
+		pi := s.pendingInputs[input.PreviousOutPoint]
+
+		var nextAttemptDelta int32
+		switch err {
+		// Successful publish, but it may still not confirm.
+		// Retry later.
+		case nil:
+			nextAttemptDelta = 6
+
+		// In case of a double spend, retry the next block.
+		case lnwallet.ErrDoubleSpend:
+			nextAttemptDelta = 1
+
+		// For other errors, back off exponentially.
+		default:
+			nextAttemptDelta = 1 << uint(pi.publishAttempts)
+		}
+
+		pi.minPublishHeight = currentHeight + nextAttemptDelta
+		pi.publishAttempts++
+
+	}
+	return nil
 }
 
 // registerSpendNtfn registers a spend notification with the chain notifier. It
 // returns a cancel function that can be used to cancel the registration.
-func (s *UtxoSweeper) registerSpendNtfn(input Input) (func(), error) {
-	outpoint := input.OutPoint()
+func (s *UtxoSweeper) registerSpendNtfn(outpoint wire.OutPoint,
+	script []byte, heightHint uint32) (func(), error) {
 
 	log.Debugf("Wait for spend of %v", outpoint)
 
 	spendEvent, err := s.cfg.Notifier.RegisterSpendNtfn(
-		outpoint, input.SignDesc().Output.PkScript, input.HeightHint(),
+		&outpoint, script, heightHint,
 	)
 	if err != nil {
 		return nil, err
@@ -753,180 +615,13 @@ func (s *UtxoSweeper) CreateSweepTx(inputs []Input, confTarget uint32,
 		return nil, err
 	}
 
-	return s.createSweepTx(inputs, confTarget, currentBlockHeight, feePerKw)
-}
-
-func (s *UtxoSweeper) createSweepTx(inputs []Input, confTarget uint32,
-	currentBlockHeight uint32, feePerKw lnwallet.SatPerKWeight) (
-	*wire.MsgTx, error) {
-
-	inputs, txWeight, csvCount, cltvCount := getWeightEstimate(inputs)
-	log.Infof("Creating sweep transaction for %v inputs (%v CSV, %v CLTV) "+
-		"using %v sat/kw", len(inputs), csvCount, cltvCount,
-		int64(feePerKw))
-
-	// Using the txn weight estimate, compute the required txn fee.
-	txFee := feePerKw.FeeForWeight(txWeight)
-
 	// Generate the receiving script to which the funds will be swept.
 	pkScript, err := s.cfg.GenSweepScript()
 	if err != nil {
 		return nil, err
 	}
 
-	// Sum up the total value contained in the inputs.
-	var totalSum int64
-	for _, o := range inputs {
-		totalSum += o.SignDesc().Output.Value
-	}
-
-	// Sweep as much possible, after subtracting txn fees.
-	sweepAmt := totalSum - int64(txFee)
-
-	// Create the sweep transaction that we will be building. We use
-	// version 2 as it is required for CSV. The txn will sweep the amount
-	// after fees to the pkscript generated above.
-	sweepTx := wire.NewMsgTx(2)
-	sweepTx.AddTxOut(&wire.TxOut{
-		PkScript: pkScript,
-		Value:    sweepAmt,
-	})
-
-	sweepTx.LockTime = currentBlockHeight
-
-	// Add all inputs to the sweep transaction. Ensure that for each
-	// csvInput, we set the sequence number properly.
-	for _, input := range inputs {
-		sweepTx.AddTxIn(&wire.TxIn{
-			PreviousOutPoint: *input.OutPoint(),
-			Sequence:         input.BlocksToMaturity(),
-		})
-	}
-
-	// Before signing the transaction, check to ensure that it meets some
-	// basic validity requirements.
-	//
-	// TODO(conner): add more control to sanity checks, allowing us to
-	// delay spending "problem" outputs, e.g. possibly batching with other
-	// classes if fees are too low.
-	btx := btcutil.NewTx(sweepTx)
-	if err := blockchain.CheckTransactionSanity(btx); err != nil {
-		return nil, err
-	}
-
-	hashCache := txscript.NewTxSigHashes(sweepTx)
-
-	// With all the inputs in place, use each output's unique witness
-	// function to generate the final witness required for spending.
-	addWitness := func(idx int, tso Input) error {
-		witness, err := tso.BuildWitness(
-			s.cfg.Signer, sweepTx, hashCache, idx,
-		)
-		if err != nil {
-			return err
-		}
-
-		sweepTx.TxIn[idx].Witness = witness
-
-		return nil
-	}
-
-	// Finally we'll attach a valid witness to each csv and cltv input
-	// within the sweeping transaction.
-	for i, input := range inputs {
-		if err := addWitness(i, input); err != nil {
-			return nil, err
-		}
-	}
-
-	return sweepTx, nil
-}
-
-func getInputWitnessSizeUpperBound(input Input) (int, error) {
-	switch input.WitnessType() {
-
-	// Outputs on a remote commitment transaction that pay directly
-	// to us.
-	case lnwallet.CommitmentNoDelay:
-		return lnwallet.P2WKHWitnessSize, nil
-
-	// Outputs on a past commitment transaction that pay directly
-	// to us.
-	case lnwallet.CommitmentTimeLock:
-		return lnwallet.ToLocalTimeoutWitnessSize, nil
-
-	// Outgoing second layer HTLC's that have confirmed within the
-	// chain, and the output they produced is now mature enough to
-	// sweep.
-	case lnwallet.HtlcOfferedTimeoutSecondLevel:
-		return lnwallet.ToLocalTimeoutWitnessSize, nil
-
-	// Incoming second layer HTLC's that have confirmed within the
-	// chain, and the output they produced is now mature enough to
-	// sweep.
-	case lnwallet.HtlcAcceptedSuccessSecondLevel:
-		return lnwallet.ToLocalTimeoutWitnessSize, nil
-
-	// An HTLC on the commitment transaction of the remote party,
-	// that has had its absolute timelock expire.
-	case lnwallet.HtlcOfferedRemoteTimeout:
-		return lnwallet.AcceptedHtlcTimeoutWitnessSize, nil
-
-	// An HTLC on the commitment transaction of the remote party,
-	// that can be swept with the preimage.
-	case lnwallet.HtlcAcceptedRemoteSuccess:
-		return lnwallet.OfferedHtlcSuccessWitnessSize, nil
-	}
-
-	return 0, fmt.Errorf("unexpected witness type: %v", input.WitnessType())
-}
-
-// getWeightEstimate returns a weight estimate for the given inputs.
-// Additionally, it returns counts for the number of csv and cltv inputs.
-func getWeightEstimate(inputs []Input) ([]Input, int64, int, int) {
-	// We initialize a weight estimator so we can accurately asses the
-	// amount of fees we need to pay for this sweep transaction.
-	//
-	// TODO(roasbeef): can be more intelligent about buffering outputs to
-	// be more efficient on-chain.
-	var weightEstimate lnwallet.TxWeightEstimator
-
-	// Our sweep transaction will pay to a single segwit p2wkh address,
-	// ensure it contributes to our weight estimate.
-	weightEstimate.AddP2WKHOutput()
-
-	// For each output, use its witness type to determine the estimate
-	// weight of its witness, and add it to the proper set of spendable
-	// outputs.
-	var (
-		sweepInputs         []Input
-		csvCount, cltvCount int
+	return s.cfg.TxGenerator.createSweepTx(
+		inputs, pkScript, currentBlockHeight, feePerKw,
 	)
-	for i := range inputs {
-		input := inputs[i]
-
-		size, err := getInputWitnessSizeUpperBound(input)
-		if err != nil {
-			log.Warn(err)
-
-			// Skip inputs for which no weight estimate can be
-			// given.
-			continue
-		}
-		weightEstimate.AddWitnessInput(size)
-
-		switch input.WitnessType() {
-		case lnwallet.CommitmentTimeLock,
-			lnwallet.HtlcOfferedTimeoutSecondLevel,
-			lnwallet.HtlcAcceptedSuccessSecondLevel:
-			csvCount++
-		case lnwallet.HtlcOfferedRemoteTimeout:
-			cltvCount++
-		}
-		sweepInputs = append(sweepInputs, input)
-	}
-
-	txWeight := int64(weightEstimate.Weight())
-
-	return sweepInputs, txWeight, csvCount, cltvCount
 }
