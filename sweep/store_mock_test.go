@@ -6,63 +6,82 @@ import (
 )
 
 type mockSweeperStore struct {
-	txes     map[chainhash.Hash]*wire.MsgTx
-	inputMap map[wire.OutPoint]chainhash.Hash
+	lastTx            *wire.MsgTx
+	ourTxes           map[chainhash.Hash]struct{}
+	unconfirmedInputs map[wire.OutPoint]*wire.MsgTx
+	unconfirmedTxes   map[chainhash.Hash]*wire.MsgTx
 }
 
 func newMockSweeperStore() *mockSweeperStore {
 	return &mockSweeperStore{
-		txes:     make(map[chainhash.Hash]*wire.MsgTx),
-		inputMap: make(map[wire.OutPoint]chainhash.Hash),
+		unconfirmedInputs: make(map[wire.OutPoint]*wire.MsgTx),
+		ourTxes:           make(map[chainhash.Hash]struct{}),
+		unconfirmedTxes:   make(map[chainhash.Hash]*wire.MsgTx),
 	}
 }
 
-func (s *mockSweeperStore) GetTxes() ([]*wire.MsgTx, error) {
-	testLog.Infof("mockStore get txes")
-	txes := make([]*wire.MsgTx, 0, len(s.txes))
-	for _, tx := range s.txes {
+func (s *mockSweeperStore) GetUnconfirmedTxes() ([]*wire.MsgTx, error) {
+	var txes []*wire.MsgTx
+	for _, tx := range s.unconfirmedTxes {
 		txes = append(txes, tx)
 	}
 	return txes, nil
 }
 
-func (s *mockSweeperStore) GetSpendingTx(outpoint wire.OutPoint) *chainhash.Hash {
-	tx, ok := s.inputMap[outpoint]
-	if !ok {
-		return nil
-	}
-	return &tx
+func (s *mockSweeperStore) IsUnconfirmedOutput(outpoint wire.OutPoint) bool {
+	_, ok := s.unconfirmedInputs[outpoint]
+	return ok
 }
 
-func (s *mockSweeperStore) RemoveTxByInput(outpoint wire.OutPoint) error {
-	txHash, ok := s.inputMap[outpoint]
-	if !ok {
-		testLog.Warnf("mockStore input to remove not found: %v", outpoint)
-		return nil
-	}
+func (s *mockSweeperStore) IsOurTx(hash chainhash.Hash) bool {
+	_, ok := s.ourTxes[hash]
+	return ok
+}
 
-	testLog.Infof("mockStore remove tx %v by input %v", txHash, outpoint)
-	for _, in := range s.txes[txHash].TxIn {
-		delete(s.inputMap, in.PreviousOutPoint)
-	}
-	delete(s.txes, txHash)
+func (s *mockSweeperStore) NotifyTxPublished(tx *wire.MsgTx) error {
+	txHash := tx.TxHash()
+	s.unconfirmedTxes[txHash] = tx
+	s.ourTxes[txHash] = struct{}{}
 
 	return nil
 }
 
-func (s *mockSweeperStore) AddTx(tx *wire.MsgTx) error {
+func (s *mockSweeperStore) NotifyTxAccepted(tx *wire.MsgTx) error {
 	txHash := tx.TxHash()
 
-	testLog.Infof("mockStore add tx %v", txHash)
+	testLog.Infof("mockStore notify tx accepted: %v", txHash)
+	s.removeDoubleSpends(tx)
 
-	for _, in := range tx.TxIn {
-		s.RemoveTxByInput(in.PreviousOutPoint)
+	for _, acceptedIn := range tx.TxIn {
+		s.unconfirmedInputs[acceptedIn.PreviousOutPoint] = tx
 	}
+	s.unconfirmedTxes[txHash] = tx
 
-	for _, in := range tx.TxIn {
-		s.inputMap[in.PreviousOutPoint] = txHash
+	return nil
+}
+
+func (s *mockSweeperStore) NotifyTxConfirmed(tx *wire.MsgTx) error {
+	return s.removeDoubleSpends(tx)
+}
+
+func (s *mockSweeperStore) removeDoubleSpends(tx *wire.MsgTx) error {
+	for _, confirmedIn := range tx.TxIn {
+		confirmedOutpoint := confirmedIn.PreviousOutPoint
+
+		// Check for an unconfirmed tx spending this outpoint.
+		unconfirmedTx, ok := s.unconfirmedInputs[confirmedOutpoint]
+		if !ok {
+			continue
+		}
+
+		// Inputs of this tx are either spent or no longer part of an
+		// unconfirmed tx.
+		for _, in := range unconfirmedTx.TxIn {
+			delete(s.unconfirmedInputs, in.PreviousOutPoint)
+		}
+
+		delete(s.unconfirmedTxes, unconfirmedTx.TxHash())
 	}
-	s.txes[txHash] = tx
 
 	return nil
 }

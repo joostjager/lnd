@@ -8,13 +8,15 @@ import (
 
 // SweeperStore stores published txes.
 type SweeperStore interface {
-	GetTxes() ([]*wire.MsgTx, error)
+	IsUnconfirmedOutput(wire.OutPoint) bool
 
-	GetSpendingTx(wire.OutPoint) *chainhash.Hash
+	NotifyTxConfirmed(tx *wire.MsgTx) error
 
-	RemoveTxByInput(wire.OutPoint) error
+	IsOurTx(hash chainhash.Hash) bool
 
-	AddTx(*wire.MsgTx) error
+	NotifyTxAccepted(tx *wire.MsgTx) error
+
+	GetUnconfirmedTxes() ([]*wire.MsgTx, error)
 }
 
 type sweeperStore struct {
@@ -22,13 +24,12 @@ type sweeperStore struct {
 }
 
 func newSweeperStore(db *channeldb.DB) (*sweeperStore, error) {
-
 	return &sweeperStore{
 		db: db,
 	}, nil
 }
 
-func (s *sweeperStore) GetTxes() ([]*wire.MsgTx, error) {
+func (s *sweeperStore) GetUnconfirmedTxes() ([]*wire.MsgTx, error) {
 	return nil, nil
 }
 
@@ -36,13 +37,17 @@ func (s *sweeperStore) RemoveTxByInput(wire.OutPoint) error {
 	return nil
 }
 
-func (s *sweeperStore) GetSpendingTx(wire.OutPoint) *chainhash.Hash {
+func (s *sweeperStore) IsUnconfirmedOutput(wire.OutPoint) bool {
+	return false
+}
+
+func (s *sweeperStore) AddUnconfirmedTx(*wire.MsgTx) error {
 	return nil
 }
 
-func (s *sweeperStore) AddTx(*wire.MsgTx) error {
-	return nil
+func (s *sweeperStore) IsOurTx(hash chainhash.Hash) bool {
+	return false
 }
 
 // Compile-time constraint to ensure sweeperStore implements SweeperStore.
-var _ SweeperStore = (*sweeperStore)(nil)
+// var _ SweeperStore = (*sweeperStore)(nil)

@@ -125,11 +125,12 @@ func New(cfg *UtxoSweeperConfig) *UtxoSweeper {
 func (s *UtxoSweeper) Start() error {
 	if !atomic.CompareAndSwapUint32(&s.started, 0, 1) {
 		return nil
+
 	}
 
 	log.Tracef("Sweeper starting")
 
-	txes, err := s.cfg.Store.GetTxes()
+	txes, err := s.cfg.Store.GetUnconfirmedTxes()
 	if err != nil {
 		return err
 	}
@@ -138,6 +139,9 @@ func (s *UtxoSweeper) Start() error {
 	// previous publication attempt.
 	for _, tx := range txes {
 		err := s.cfg.PublishTransaction(tx)
+
+		// Double spends are expected, because wea already published
+		// these txes on a previous run.
 		if err != nil && err != lnwallet.ErrDoubleSpend {
 			return err
 		}
@@ -291,6 +295,8 @@ func (s *UtxoSweeper) collector() error {
 				s.testSpendChan <- *spend.SpentOutPoint
 			}
 
+			isOurTx := s.cfg.Store.IsOurTx(*spend.SpenderTxHash)
+
 			// Signal sweep results for inputs in this confirmed tx.
 			for _, txIn := range spend.SpendingTx.TxIn {
 				outpoint := txIn.PreviousOutPoint
@@ -300,27 +306,14 @@ func (s *UtxoSweeper) collector() error {
 				// registration, deleted from pendingInputs but
 				// the ntfn was in-flight already. Or this could
 				// be not one of our inputs.
-				pendingInput, ok := s.pendingInputs[outpoint]
+				_, ok := s.pendingInputs[outpoint]
 				if !ok {
 					continue
 				}
 
 				var err error
-				if pendingInput.errored {
-					// We couldn't publish and the remote
-					// party swept.
+				if !isOurTx {
 					err = ErrRemoteSpend
-				} else {
-					sweepTx := s.cfg.Store.GetSpendingTx(
-						outpoint)
-
-					if sweepTx != nil &&
-						*sweepTx == *spend.SpenderTxHash {
-
-						err = nil
-					} else {
-						err = ErrRemoteSpend
-					}
 				}
 
 				// Signal result channels sweep result.
@@ -455,7 +448,7 @@ func (s *UtxoSweeper) sweepAll(fullOnly bool) (bool, error) {
 		}
 
 		// Skip inputs that are already part of a sweep tx.
-		if s.cfg.Store.GetSpendingTx(*input.input.OutPoint()) != nil {
+		if s.cfg.Store.IsUnconfirmedOutput(*input.input.OutPoint()) {
 			continue
 		}
 
@@ -469,12 +462,14 @@ func (s *UtxoSweeper) sweepAll(fullOnly bool) (bool, error) {
 	}
 
 	for _, tx := range txes {
+		// Add tx before publication, so that it is guarantueed to be
+		// republished on restart.
+		s.cfg.Store.AddUnconfirmedTx(tx)
+
 		// Publish sweep tx.
 		log.Debugf("Publishing sweep tx %v", tx.TxHash())
 		err := s.cfg.PublishTransaction(tx)
 		if err == nil {
-			// TODO: Save before publish
-			s.cfg.Store.AddTx(tx)
 			continue
 		}
 

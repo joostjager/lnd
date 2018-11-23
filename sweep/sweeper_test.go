@@ -207,7 +207,7 @@ func (ctx *sweeperTestContext) finish(expectedGoroutineCount int) {
 		ctx.t.Fatal("unconfirmed txes remaining")
 	}
 
-	if len(ctx.store.txes) != 0 {
+	if len(ctx.store.inputMap) != 0 {
 		ctx.t.Fatal("sweeper store txes remaining")
 	}
 }
