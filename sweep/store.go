@@ -8,15 +8,11 @@ import (
 
 // SweeperStore stores published txes.
 type SweeperStore interface {
-	IsUnconfirmedOutput(wire.OutPoint) bool
-
-	NotifyTxConfirmed(tx *wire.MsgTx) error
-
 	IsOurTx(hash chainhash.Hash) bool
 
-	NotifyTxAccepted(tx *wire.MsgTx) error
+	NotifyPublishTx(*wire.MsgTx) error
 
-	GetUnconfirmedTxes() ([]*wire.MsgTx, error)
+	GetLastPublishedTx() (*wire.MsgTx, error)
 }
 
 type sweeperStore struct {

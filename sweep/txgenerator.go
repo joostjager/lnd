@@ -27,13 +27,13 @@ type TxGenerator struct {
 	// time the incubated outputs need to be spent.
 	Signer lnwallet.Signer
 
-	// ChainIO allows us to query the state of the current main chain.
-	ChainIO lnwallet.BlockChainIO
-
 	// MaxInputsPerTx specifies the  maximum number of inputs allowed in a
 	// single sweep tx. If more need to be swept, multiple txes are created
 	// and published.
 	MaxInputsPerTx int
+}
+
+type inputWithYield struct {
 }
 
 // Generate goes through all given inputs and constructs sweep transactions,
@@ -46,7 +46,7 @@ type TxGenerator struct {
 // This can happen when fullOnly is true and there are less sweepable inputs
 // then the configured maximum number per tx.
 func (s *TxGenerator) Generate(sweepableInputs []Input, confTarget uint32,
-	fullOnly bool) ([]*wire.MsgTx, bool, error) {
+	currentHeight int32) (*wire.MsgTx, []Input, error) {
 
 	// Calculate dust limit based on the P2WPKH output script of the sweep
 	// txes.
@@ -60,13 +60,7 @@ func (s *TxGenerator) Generate(sweepableInputs []Input, confTarget uint32,
 	satPerKW, err := s.Estimator.EstimateFeePerKW(
 		confTarget)
 	if err != nil {
-		return nil, false, err
-	}
-
-	// Retrieve current height to properly set tx locktime.
-	_, currentHeight, err := s.ChainIO.GetBestBlock()
-	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 
 	log.Tracef("Sweepable inputs count: %v", len(sweepableInputs))
@@ -88,103 +82,89 @@ func (s *TxGenerator) Generate(sweepableInputs []Input, confTarget uint32,
 	// depends on the signature length, which is not known yet at this
 	// point.
 
-	yields := make([]int64, len(sweepableInputs))
-	for i, input := range sweepableInputs {
+	yields := make(map[wire.OutPoint]int64)
+	for _, input := range sweepableInputs {
 		size, err := getInputWitnessSizeUpperBound(input)
 		if err != nil {
-			return nil, false, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"failed adding input weight: %v", err)
 		}
 
-		yields[i] = input.SignDesc().Output.Value -
+		yields[*input.OutPoint()] = input.SignDesc().Output.Value -
 			int64(satPerKW.FeeForWeight(int64(size)))
 	}
 
 	sort.Slice(sweepableInputs, func(i, j int) bool {
-		return yields[i] > yields[j]
+		return yields[*sweepableInputs[i].OutPoint()] >
+			yields[*sweepableInputs[j].OutPoint()]
 	})
 
-	// Select blocks of inputs up to the configured maximum number.
-	var txes []*wire.MsgTx
-	stopSweep := false
-	for len(sweepableInputs) > 0 && !stopSweep {
-		var weightEstimate lnwallet.TxWeightEstimator
+	var weightEstimate lnwallet.TxWeightEstimator
 
-		// Add the sweep tx output to the weight estimate.
-		weightEstimate.AddP2WKHOutput()
+	// Add the sweep tx output to the weight estimate.
+	weightEstimate.AddP2WKHOutput()
 
-		var inputList []Input
-		var total, outputValue int64
-		for len(sweepableInputs) > 0 {
-			input := sweepableInputs[0]
-			sweepableInputs = sweepableInputs[1:]
-			size, err := getInputWitnessSizeUpperBound(input)
-			if err != nil {
-				log.Warnf("Failed adding input weight: %v", err)
-				continue
-			}
-			weightEstimate.AddWitnessInput(size)
+	// Select inputs up to the configured maximum number.
+	var inputList []Input
+	var total, outputValue int64
+	for len(sweepableInputs) > 0 {
+		input := sweepableInputs[0]
+		sweepableInputs = sweepableInputs[1:]
 
-			newTotal := total +
-				input.SignDesc().Output.Value
+		// Can ignore error, because
+		size, _ := getInputWitnessSizeUpperBound(input)
 
-			weight := weightEstimate.Weight()
-			fee := satPerKW.FeeForWeight(int64(weight))
-			newOutputValue := newTotal - int64(fee)
+		weightEstimate.AddWitnessInput(size)
 
-			// If adding this input makes the total output value of
-			// the tx decrease, this is a negative yield input. It
-			// shouldn't be added to the tx. We also don't need to
-			// consider further inputs. Because of the sorting by
-			// value, subsequent inputs almost certainly have an
-			// even higher negative yield.
-			if newOutputValue <= outputValue {
-				stopSweep = true
-				break
-			}
+		newTotal := total +
+			input.SignDesc().Output.Value
 
-			inputList = append(inputList, input)
-			total = newTotal
-			outputValue = newOutputValue
-			if len(inputList) >= s.MaxInputsPerTx {
-				break
-			}
+		weight := weightEstimate.Weight()
+		fee := satPerKW.FeeForWeight(int64(weight))
+		newOutputValue := newTotal - int64(fee)
+
+		// If adding this input makes the total output value of
+		// the tx decrease, this is a negative yield input. It
+		// shouldn't be added to the tx. We also don't need to
+		// consider further inputs. Because of the sorting by
+		// value, subsequent inputs almost certainly have an
+		// even higher negative yield.
+		if newOutputValue <= outputValue {
+			sweepableInputs = nil
+			break
 		}
 
-		// We can get an empty input list if all of the inputs had a
-		// negative yield. In that case, we can stop here.
-		if len(inputList) == 0 {
-			return txes, false, nil
+		inputList = append(inputList, input)
+		total = newTotal
+		outputValue = newOutputValue
+		if len(inputList) >= s.MaxInputsPerTx {
+			break
 		}
-
-		// If the output value of this block of inputs does not reach
-		// the dust limit, stop sweeping. Because of the sorting,
-		// continuing with remaining inputs will only lead to
-		// transactions with a even lower output value.
-		if outputValue < int64(dustLimit) {
-			log.Debugf("Tx output value %v below dust limit of %v",
-				outputValue, dustLimit)
-			return txes, false, nil
-		}
-
-		// If fullOnly, don't sweep if less inputs than the maximum. Do
-		// this check after the dust limit check, to properly report
-		// whether there are sweepable inputs remaining.
-		if fullOnly && len(inputList) < s.MaxInputsPerTx {
-			return txes, true, nil
-		}
-
-		tx, err := s.createSweepTx(inputList, confTarget,
-			uint32(currentHeight), satPerKW)
-		if err != nil {
-			return nil, false,
-				fmt.Errorf("cannot create sweep tx: %v", err)
-		}
-
-		txes = append(txes, tx)
 	}
 
-	return txes, false, nil
+	// We can get an empty input list if all of the inputs had a
+	// negative yield. In that case, we can stop here.
+	if len(inputList) == 0 {
+		return nil, nil, nil
+	}
+
+	// If the output value of this block of inputs does not reach
+	// the dust limit, stop sweeping. Because of the sorting,
+	// continuing with remaining inputs will only lead to
+	// transactions with a even lower output value.
+	if outputValue < int64(dustLimit) {
+		log.Debugf("Tx output value %v below dust limit of %v",
+			outputValue, dustLimit)
+		return nil, nil, nil
+	}
+
+	tx, err := s.createSweepTx(inputList, confTarget,
+		uint32(currentHeight), satPerKW)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot create sweep tx: %v", err)
+	}
+
+	return tx, sweepableInputs, nil
 }
 
 // CreateSweepTx accepts a list of inputs and signs and generates a txn that

@@ -132,12 +132,13 @@ func createSweeperTestContext(t *testing.T) *sweeperTestContext {
 				outputScriptCount++
 				return script, nil
 			},
-			Estimator:      estimator,
-			Signer:         &mockSigner{},
-			ChainIO:        &mockChainIO{},
+			Estimator: estimator,
+			Signer:    &mockSigner{},
+
 			MaxInputsPerTx: 3,
 		},
 		SweepTxConfTarget: 1,
+		ChainIO:           &mockChainIO{},
 	})
 
 	ctx.sweeper.Start()
@@ -205,10 +206,6 @@ func (ctx *sweeperTestContext) finish(expectedGoroutineCount int) {
 	ctx.assertNoNewTimer()
 	if !ctx.backend.isDone() {
 		ctx.t.Fatal("unconfirmed txes remaining")
-	}
-
-	if len(ctx.store.inputMap) != 0 {
-		ctx.t.Fatal("sweeper store txes remaining")
 	}
 }
 
@@ -402,38 +399,23 @@ func testTxIns(tx *wire.MsgTx, inputs []*wire.OutPoint) bool {
 func TestChunks(t *testing.T) {
 	ctx := createSweeperTestContext(t)
 
-	// Sweep three inputs.
-	for _, input := range spendableInputs[:3] {
+	// Sweep five inputs.
+	for _, input := range spendableInputs[:5] {
 		_, err := ctx.sweeper.SweepInput(input)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// Because the max number of inputs is reached, we expect a sweep to be
-	// published immediately.
+	ctx.tick()
+
+	// We expect two txes to be published because of the max input count of
+	// three.
 	sweepTx1 := ctx.receiveTx()
 	if len(sweepTx1.TxIn) != 3 {
 		t.Fatalf("Expected first tx to sweep 3 inputs, but contains %v "+
 			"inputs instead", len(sweepTx1.TxIn))
 	}
-
-	ctx.backend.mine()
-
-	// Started time still expires, even though sweeper isn't listening
-	// anymore.
-	ctx.tick()
-
-	// Sweep two more inputs.
-	for _, input := range spendableInputs[3:5] {
-		_, err := ctx.sweeper.SweepInput(input)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// Max number of inputs not reached yet, so it needs a tick to sweep.
-	ctx.tick()
 
 	sweepTx2 := ctx.receiveTx()
 	if len(sweepTx2.TxIn) != 2 {
@@ -602,8 +584,8 @@ func TestIdempotency(t *testing.T) {
 	// cannot recognize that it already swept this input itself!
 	select {
 	case result := <-resultChan4:
-		if result.Err != ErrRemoteSpend {
-			t.Fatalf("expected remote spend")
+		if result.Err != nil {
+			t.Fatalf("expected successful sweep")
 		}
 	case <-time.After(defaultTestTimeout):
 		t.Fatalf("no result received")
@@ -627,20 +609,18 @@ func TestNoInputs(t *testing.T) {
 // TestRestart asserts that the sweeper picks up sweeping properly after
 // a restart.
 func TestRestart(t *testing.T) {
-
 	ctx := createSweeperTestContext(t)
 
-	// Sweep input.
+	// Sweep input and expect sweep tx.
 	_, err := ctx.sweeper.SweepInput(spendableInputs[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx.tick()
 
-	// Should result in sweep tx.
 	ctx.receiveTx()
 
-	// Sweep another input.
+	// Sweep another input and expect sweep tx.
 	_, err = ctx.sweeper.SweepInput(spendableInputs[1])
 	if err != nil {
 		t.Fatal(err)
@@ -659,10 +639,6 @@ func TestRestart(t *testing.T) {
 	ctx.sweeper = New(ctx.sweeper.cfg)
 	ctx.sweeper.Start()
 
-	// We expect both txes to be republished.
-	ctx.receiveTx()
-	ctx.receiveTx()
-
 	// Simulate other subsystem (eg contract resolver) re-offering inputs.
 	spendChan1, err := ctx.sweeper.SweepInput(spendableInputs[0])
 	if err != nil {
@@ -676,9 +652,10 @@ func TestRestart(t *testing.T) {
 
 	// Spend inputs of sweep txes and verify that spend channels signal
 	// spends.
-
 	ctx.backend.mine()
 
+	// Sweeper should recognize that its sweep tx of the previous run is
+	// spending the input.
 	select {
 	case result := <-spendChan1:
 		if result.Err != nil {
@@ -687,6 +664,14 @@ func TestRestart(t *testing.T) {
 	case <-time.After(defaultTestTimeout):
 		t.Fatalf("no result received")
 	}
+
+	// Timer tick should trigger republishing a sweep for the remaining
+	// input.
+	ctx.tick()
+
+	spendingTx2 = ctx.receiveTx()
+
+	ctx.backend.mine()
 
 	select {
 	case result := <-spendChan2:
@@ -697,7 +682,7 @@ func TestRestart(t *testing.T) {
 		t.Fatalf("no result received")
 	}
 
-	// Restart sweeper again.
+	// Restart sweeper again. No action is expected.
 	ctx.sweeper.Stop()
 	ctx.sweeper = New(ctx.sweeper.cfg)
 	ctx.sweeper.Start()
@@ -725,16 +710,13 @@ func TestRestartRemoteSpend(t *testing.T) {
 
 	ctx.tick()
 
-	ctx.receiveTx()
+	sweepTx := ctx.receiveTx()
 
 	// Restart sweeper.
 	ctx.sweeper.Stop()
 
 	ctx.sweeper = New(ctx.sweeper.cfg)
 	ctx.sweeper.Start()
-
-	// We expect the tx to be republished.
-	sweepTx := ctx.receiveTx()
 
 	// Replace the sweep tx with a remote tx spending input 1.
 	ctx.backend.deleteUnconfirmed(sweepTx.TxHash())
@@ -751,6 +733,7 @@ func TestRestartRemoteSpend(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Mine remote spending tx.
 	ctx.backend.mine()
 
 	// Simulate other subsystem (eg contract resolver) re-offering input 0.
@@ -782,7 +765,6 @@ func TestRestartRemoteSpend(t *testing.T) {
 // TestRestartConfirmed asserts that the sweeper picks up sweeping properly after
 // a restart with a confirm of our own sweep tx.
 func TestRestartConfirmed(t *testing.T) {
-
 	ctx := createSweeperTestContext(t)
 
 	// Sweep input.
@@ -801,17 +783,8 @@ func TestRestartConfirmed(t *testing.T) {
 	ctx.sweeper = New(ctx.sweeper.cfg)
 	ctx.sweeper.Start()
 
-	// We expect the tx to be republished.
-	ctx.receiveTx()
-
-	// Assign test chan to block until sweeper main loop received spend ntfn
-	// from mining.
-	ctx.sweeper.testSpendChan = make(chan wire.OutPoint)
-
+	// Mine the sweep tx.
 	ctx.backend.mine()
-
-	<-ctx.sweeper.testSpendChan
-	ctx.sweeper.testSpendChan = nil
 
 	// Simulate other subsystem (eg contract resolver) re-offering input 0.
 	spendChan, err := ctx.sweeper.SweepInput(spendableInputs[0])
@@ -822,8 +795,8 @@ func TestRestartConfirmed(t *testing.T) {
 	// Here we expect a remote spend because sweeper keeps no history!
 	select {
 	case result := <-spendChan:
-		if result.Err != ErrRemoteSpend {
-			t.Fatalf("expected remote spend")
+		if result.Err != nil {
+			t.Fatalf("expected successful sweep")
 		}
 	case <-time.After(defaultTestTimeout):
 		t.Fatalf("no result received")
