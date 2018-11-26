@@ -18,6 +18,7 @@ func invoicesCommands() []cli.Command {
 		subscribeSingleInvoiceCommand,
 		cancelInvoiceCommand,
 		addHoldInvoiceCommand,
+		settleInvoiceCommand,
 	}
 }
 
@@ -69,6 +70,60 @@ func subscribeSingleInvoice(ctx *cli.Context) error {
 
 		printRespJSON(invoice)
 	}
+}
+
+var settleInvoiceCommand = cli.Command{
+	Name:     "settleinvoice",
+	Category: "Payments",
+	Usage:    "Reveal a preimage and use it to settle the corresponding invoice.",
+	Description: `
+	Todo.`,
+	ArgsUsage: "preimage",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name: "preimage",
+			Usage: "the hex-encoded preimage (32 byte) which will " +
+				"allow settling an incoming HTLC payable to this " +
+				"preimage.",
+		},
+	},
+	Action: actionDecorator(settleInvoice),
+}
+
+func settleInvoice(ctx *cli.Context) error {
+	var (
+		preimage []byte
+		err      error
+	)
+
+	client, cleanUp := getInvoicesClient(ctx)
+	defer cleanUp()
+
+	args := ctx.Args()
+
+	switch {
+	case ctx.IsSet("preimage"):
+		preimage, err = hex.DecodeString(ctx.String("preimage"))
+	case args.Present():
+		preimage, err = hex.DecodeString(args.First())
+	}
+
+	if err != nil {
+		return fmt.Errorf("unable to parse preimage: %v", err)
+	}
+
+	invoice := &invoicesrpc.SettleInvoiceMsg{
+		PreImage: preimage,
+	}
+
+	resp, err := client.SettleInvoice(context.Background(), invoice)
+	if err != nil {
+		return err
+	}
+
+	printJSON(resp)
+
+	return nil
 }
 
 var cancelInvoiceCommand = cli.Command{
