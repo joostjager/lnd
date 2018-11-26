@@ -4,6 +4,7 @@ package invoicesrpc
 
 import (
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/invoices"
 )
 
@@ -14,6 +15,8 @@ import (
 // also be specified.
 type Config struct {
 	InvoiceRegistry *invoices.InvoiceRegistry
+
+	Switch *htlcswitch.Switch
 
 	ChainParams *chaincfg.Params
 }

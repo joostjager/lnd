@@ -16,5 +16,21 @@ service Invoices {
     Initially the current invoice state is always sent out.
     */
     rpc SubscribeSingleInvoice (lnrpc.PaymentHash) returns (stream lnrpc.Invoice);
+
+    rpc SettleInvoice(SettleInvoiceMsg) returns (SettleInvoiceResp);
+
+    rpc CancelInvoice(CancelInvoiceMsg) returns (CancelInvoiceResp);
 }
 
+message SettleInvoiceMsg {
+    /// Externally discovered pre-image that should be used to settle the hold invoice.
+    bytes pre_image = 1;
+} 
+message SettleInvoiceResp {}
+
+
+message CancelInvoiceMsg {
+    /// Hash corresponding to the (hold) invoice to fail.
+    bytes payment_hash = 1;
+} 
+message CancelInvoiceResp {}

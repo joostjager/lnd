@@ -3,7 +3,14 @@
 package invoicesrpc
 
 import (
+	"context"
+	"crypto/sha256"
+	"fmt"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/contractcourt"
+	"github.com/lightningnetwork/lnd/htlcswitch"
+	"github.com/lightningnetwork/lnd/lnwire"
 	"os"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -138,4 +145,96 @@ func (s *Server) SubscribeSingleInvoice(req *lnrpc.PaymentHash,
 			return nil
 		}
 	}
+}
+
+func (s *Server) SettleInvoice(ctx context.Context,
+	in *SettleInvoiceMsg) (*SettleInvoiceResp, error) {
+
+	if len(in.PreImage) != 32 {
+		return nil, fmt.Errorf("invalid preimage length")
+	}
+
+	paymentHash := chainhash.Hash(sha256.Sum256(in.PreImage))
+
+	invoice, _, err := s.cfg.InvoiceRegistry.LookupInvoice(
+		paymentHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query invoice registry: "+
+			" %v", err)
+	}
+
+	if invoice.Terms.State == channeldb.ContractSettled {
+		return nil, fmt.Errorf("invoice already settled")
+	}
+
+	var preimage [32]byte
+	copy(preimage[:], in.PreImage)
+	err = s.cfg.Switch.ProcessContractResolution(
+		contractcourt.ResolutionMsg{
+			SourceChan: htlcswitch.SwitchSettleHop,
+			HtlcIndex:  invoice.AddIndex,
+			PreImage:   &preimage,
+		},
+	)
+	if err != nil {
+		log.Errorf("unable to settle htlc: %v", err)
+		return nil, err
+	}
+
+	// TODO: Set amount in accepted stage already
+	err = s.cfg.InvoiceRegistry.SettleInvoice(
+		paymentHash, lnwire.MilliSatoshi(0),
+	)
+	if err != nil {
+		log.Errorf("unable to settle invoice: %v", err)
+		return nil, err
+	}
+
+	log.Infof("Settled invoice %x", paymentHash)
+
+	// TODO: update preimage in invoice?
+
+	return &SettleInvoiceResp{}, nil
+}
+
+func (s *Server) CancelInvoice(ctx context.Context,
+	in *CancelInvoiceMsg) (*CancelInvoiceResp, error) {
+
+	if len(in.PaymentHash) != 32 {
+		return nil, fmt.Errorf("invalid hash length")
+	}
+
+	var paymentHash [32]byte
+	copy(paymentHash[:], in.PaymentHash)
+
+	invoice, _, err := s.cfg.InvoiceRegistry.LookupInvoice(
+		paymentHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query invoice registry: "+
+			" %v", err)
+	}
+
+	if invoice.Terms.State == channeldb.ContractSettled {
+		return nil, fmt.Errorf("invoice already settled")
+	}
+
+	err = s.cfg.Switch.ProcessContractResolution(
+		contractcourt.ResolutionMsg{
+			SourceChan: htlcswitch.SwitchSettleHop,
+			HtlcIndex:  invoice.AddIndex,
+			Failure:    lnwire.FailUnknownPaymentHash{},
+		},
+	)
+	if err != nil {
+		log.Errorf("unable to cancel htlc: %v", err)
+		return nil, err
+	}
+
+	// TODO: Move invoice to canceled state / remove
+
+	log.Infof("Canceled invoice %x", paymentHash)
+
+	return &CancelInvoiceResp{}, nil
 }
