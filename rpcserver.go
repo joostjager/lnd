@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/lightningnetwork/lnd/contractcourt"
 	"io"
 	"math"
 	"net/http"
@@ -257,6 +258,14 @@ var (
 			Action: "write",
 		}},
 		"/lnrpc.Lightning/AddInvoice": {{
+			Entity: "invoices",
+			Action: "write",
+		}},
+		"/lnrpc.Lightning/CancelInvoice": {{
+			Entity: "invoices",
+			Action: "write",
+		}},
+		"/lnrpc.Lightning/SettleInvoice": {{
 			Entity: "invoices",
 			Action: "write",
 		}},
@@ -3122,6 +3131,90 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		PaymentRequest: payReqString,
 		AddIndex:       addIndex,
 	}, nil
+}
+
+func (r *rpcServer) SettleInvoice(ctx context.Context,
+	in *lnrpc.SettleInvoiceMsg) (*lnrpc.SettleInvoiceResp, error) {
+
+	if len(in.PreImage) != 32 {
+		return nil, fmt.Errorf("invalid preimage length")
+	}
+
+	paymentHash := chainhash.Hash(sha256.Sum256(in.PreImage))
+
+	invoice, _, err := r.server.invoices.LookupInvoice(
+		paymentHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query invoice registry: "+
+			" %v", err)
+	}
+
+	if invoice.Terms.State == channeldb.ContractSettled {
+		return nil, fmt.Errorf("invoice already settled")
+	}
+
+	var preimage [32]byte
+	copy(preimage[:], in.PreImage)
+	r.server.htlcSwitch.ProcessContractResolution(
+		contractcourt.ResolutionMsg{
+			SourceChan: htlcswitch.SwitchSettleHop,
+			HtlcIndex:  invoice.AddIndex,
+			PreImage:   &preimage,
+		},
+	)
+
+	// TODO: Set amount in accepted stage already
+	err = r.server.invoices.SettleInvoice(
+		paymentHash, lnwire.MilliSatoshi(0),
+	)
+	if err != nil {
+		rpcsLog.Errorf("unable to settle invoice: %v", err)
+		return nil, err
+	}
+
+	rpcsLog.Infof("Settled invoice %x", paymentHash)
+
+	// TODO: update preimage in invoice?
+
+	return &lnrpc.SettleInvoiceResp{}, nil
+}
+
+func (r *rpcServer) CancelInvoice(ctx context.Context,
+	in *lnrpc.CancelInvoiceMsg) (*lnrpc.CancelInvoiceResp, error) {
+
+	if len(in.PaymentHash) != 32 {
+		return nil, fmt.Errorf("invalid hash length")
+	}
+
+	var paymentHash [32]byte
+	copy(paymentHash[:], in.PaymentHash)
+
+	invoice, _, err := r.server.invoices.LookupInvoice(
+		paymentHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query invoice registry: "+
+			" %v", err)
+	}
+
+	if invoice.Terms.State == channeldb.ContractSettled {
+		return nil, fmt.Errorf("invoice already settled")
+	}
+
+	r.server.htlcSwitch.ProcessContractResolution(
+		contractcourt.ResolutionMsg{
+			SourceChan: htlcswitch.SwitchSettleHop,
+			HtlcIndex:  invoice.AddIndex,
+			Failure:    lnwire.FailUnknownPaymentHash{},
+		},
+	)
+
+	// TODO: Move invoice to canceled state / remove
+
+	rpcsLog.Infof("Canceled invoice %x", paymentHash)
+
+	return &lnrpc.CancelInvoiceResp{}, nil
 }
 
 // createRPCInvoice creates an *lnrpc.Invoice from the *channeldb.Invoice.
