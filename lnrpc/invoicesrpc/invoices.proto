@@ -20,10 +20,12 @@ service Invoices {
     rpc CancelInvoice(CancelInvoiceMsg) returns (CancelInvoiceResp);
 
     rpc AddHoldInvoice(AddHoldInvoiceRequest) returns (AddHoldInvoiceResp);
+ 
+    rpc SettleInvoice(SettleInvoiceMsg) returns (SettleInvoiceResp);
 }
 
 message CancelInvoiceMsg {
-    /// Hash corresponding to the invoice to cancel.
+    /// Hash corresponding to the (hold) invoice to cancel.
     bytes payment_hash = 1;
 } 
 message CancelInvoiceResp {}
@@ -77,3 +79,10 @@ message AddHoldInvoiceResp {
     */
     string payment_request = 1 [json_name = "payment_request"];
 }
+
+message SettleInvoiceMsg {
+    /// Externally discovered pre-image that should be used to settle the hold invoice.
+    bytes pre_image = 1;
+} 
+
+message SettleInvoiceResp {}
