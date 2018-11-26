@@ -2277,6 +2277,21 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 
 		fwdInfo := chanIterator.ForwardingInstructions()
 		switch fwdInfo.NextHop {
+
+		// Reject any HTLCs that specify the switch-settle hop in the
+		// onion packet. This should only be used internally, and should
+		// never correspond to a valid short channel ID.
+		case SwitchSettleHop:
+			log.Errorf("htlc(%x) has invalid next switch-settle hop",
+				pd.RHash[:])
+
+			var failure lnwire.FailUnknownNextPeer
+			l.sendHTLCError(
+				pd.HtlcIndex, &failure, obfuscator, pd.SourceRef,
+			)
+			needUpdate = true
+			continue
+
 		case exitHop:
 			// If hodl.ExitSettle is requested, we will not validate
 			// the final hop's ADD, nor will we settle the
@@ -2284,22 +2299,6 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			if l.cfg.DebugHTLC &&
 				l.cfg.HodlMask.Active(hodl.ExitSettle) {
 				l.warnf(hodl.ExitSettle.Warning())
-				continue
-			}
-
-			// First, we'll check the expiry of the HTLC itself
-			// against, the current block height. If the timeout is
-			// too soon, then we'll reject the HTLC.
-			if pd.Timeout-expiryGraceDelta <= heightNow {
-				log.Errorf("htlc(%x) has an expiry that's too "+
-					"soon: expiry=%v, best_height=%v",
-					pd.RHash[:], pd.Timeout, heightNow)
-
-				failure := lnwire.FailFinalExpiryTooSoon{}
-				l.sendHTLCError(
-					pd.HtlcIndex, &failure, obfuscator, pd.SourceRef,
-				)
-				needUpdate = true
 				continue
 			}
 
@@ -2318,6 +2317,55 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
 				)
 
+				needUpdate = true
+				continue
+			}
+
+			switch fwdPkg.State {
+			case channeldb.FwdStateProcessed:
+				// This exit settle was not forwarded on the
+				// previous processing phase, run it through our
+				// validation pipeline to reproduce an error.
+				// This may trigger a different error due to
+				// expiring timelocks, but we expect that an
+				// error will be reproduced.
+				if !fwdPkg.FwdFilter.Contains(idx) {
+					break
+				}
+
+				// Otherwise, it was already processed, we can
+				// can collect it and continue.
+				addMsg := &lnwire.UpdateAddHTLC{}
+				updatePacket := &htlcPacket{
+					incomingChanID:  l.ShortChanID(),
+					incomingHTLCID:  pd.HtlcIndex,
+					outgoingChanID:  SwitchSettleHop,
+					outgoingHTLCID:  invoice.AddIndex,
+					htlc:            addMsg,
+					obfuscator:      obfuscator,
+					incomingAmount:  pd.Amount,
+					incomingTimeout: pd.Timeout,
+				}
+
+				switchPackets = append(
+					switchPackets, updatePacket,
+				)
+
+				continue
+			}
+
+			// First, we'll check the expiry of the HTLC itself
+			// against, the current block height. If the timeout is
+			// too soon, then we'll reject the HTLC.
+			if pd.Timeout-expiryGraceDelta <= heightNow {
+				log.Errorf("htlc(%x) has an expiry that's too "+
+					"soon: expiry=%v, best_height=%v",
+					pd.RHash[:], pd.Timeout, heightNow)
+
+				failure := lnwire.FailFinalExpiryTooSoon{}
+				l.sendHTLCError(
+					pd.HtlcIndex, &failure, obfuscator, pd.SourceRef,
+				)
 				needUpdate = true
 				continue
 			}
@@ -2437,7 +2485,46 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				continue
 			}
 
+			// We don't have the pre-image yet, but will hold onto
+			// the HTLC as forward it to the switch as if there're
+			// additional hops. We use a special delayed resolution
+			// channelID, and then use the HTLC ID of the add index
+			// for the original invoice.
 			preimage := invoice.Terms.PaymentPreimage
+			if !bytes.Equal(preimage[:], unknownPreimage[:]) {
+				err = l.cfg.Registry.AcceptInvoice(
+					invoiceHash, pd.Amount,
+				)
+				if err != nil {
+					failure := lnwire.FailUnknownPaymentHash{}
+					l.sendHTLCError(
+						pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
+					)
+					needUpdate = true
+
+					continue
+				}
+
+				addMsg := &lnwire.UpdateAddHTLC{}
+				updatePacket := &htlcPacket{
+					incomingChanID:  l.ShortChanID(),
+					incomingHTLCID:  pd.HtlcIndex,
+					outgoingChanID:  SwitchSettleHop,
+					outgoingHTLCID:  invoice.AddIndex,
+					htlc:            addMsg,
+					obfuscator:      obfuscator,
+					incomingAmount:  pd.Amount,
+					incomingTimeout: pd.Timeout,
+				}
+
+				fwdPkg.FwdFilter.Set(idx)
+				switchPackets = append(
+					switchPackets, updatePacket,
+				)
+
+				continue
+			}
+
 			err = l.channel.SettleHTLC(
 				preimage, pd.HtlcIndex, pd.SourceRef, nil, nil,
 			)

@@ -19,6 +19,10 @@ type InvoiceDatabase interface {
 	// SettleInvoice attempts to mark an invoice corresponding to the
 	// passed payment hash as fully settled.
 	SettleInvoice(payHash chainhash.Hash, paidAmount lnwire.MilliSatoshi) error
+
+	// AcceptInvoice attempts to mark an invoice corresponding to the
+	// passed payment hash as accepted.
+	AcceptInvoice(payHash chainhash.Hash, paidAmount lnwire.MilliSatoshi) error
 }
 
 // ChannelLink is an interface which represents the subsystem for managing the
