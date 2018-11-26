@@ -449,6 +449,10 @@ service Lightning {
         };
     }
 
+    rpc SettleInvoice(SettleInvoiceMsg) returns (SettleInvoiceResp);
+
+    rpc CancelInvoice(CancelInvoiceMsg) returns (CancelInvoiceResp);
+
     /** lncli: `listinvoices`
     ListInvoices returns a list of all the invoices currently stored within the
     database. Any active debug invoices are ignored. It has full support for
@@ -2002,3 +2006,17 @@ message ForwardingHistoryResponse {
    /// The index of the last time in the set of returned forwarding events. Can be used to seek further, pagination style.
    uint32 last_offset_index = 2 [json_name = "last_offset_index"];
 }
+
+message SettleInvoiceMsg {
+    /// Externally discovered pre-image that should be used to settle the hold invoice.
+    bytes pre_image = 1;
+} 
+message SettleInvoiceResp {}
+
+
+message CancelInvoiceMsg {
+    /// Hash corresponding to the (hold) invoice to fail.
+    bytes payment_hash = 1;
+} 
+message CancelInvoiceResp {}
+

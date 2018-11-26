@@ -1194,6 +1194,9 @@
         }
       }
     },
+    "lnrpcCancelInvoiceResp": {
+      "type": "object"
+    },
     "lnrpcChangePasswordRequest": {
       "type": "object",
       "properties": {
@@ -2793,6 +2796,9 @@
           "description": "/ The set of routes that should be used to attempt to complete the payment."
         }
       }
+    },
+    "lnrpcSettleInvoiceResp": {
+      "type": "object"
     },
     "lnrpcSignMessageResponse": {
       "type": "object",
