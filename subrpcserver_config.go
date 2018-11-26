@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/invoices"
 	"reflect"
 
@@ -50,6 +51,7 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 	networkDir string, macService *macaroons.Service,
 	atpl *autopilot.Manager,
 	invoiceRegistry *invoices.InvoiceRegistry,
+	htlcSwitch *htlcswitch.Switch,
 	activeNetParams *chaincfg.Params) error {
 
 	// First, we'll use reflect to obtain a version of the config struct
@@ -126,6 +128,9 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			)
 			subCfgValue.FieldByName("InvoiceRegistry").Set(
 				reflect.ValueOf(invoiceRegistry),
+			)
+			subCfgValue.FieldByName("Switch").Set(
+				reflect.ValueOf(htlcSwitch),
 			)
 			subCfgValue.FieldByName("ChainParams").Set(
 				reflect.ValueOf(activeNetParams),

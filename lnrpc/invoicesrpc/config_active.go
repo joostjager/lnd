@@ -4,6 +4,7 @@ package invoicesrpc
 
 import (
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/macaroons"
 )
@@ -23,6 +24,8 @@ type Config struct {
 	MacService *macaroons.Service
 
 	InvoiceRegistry *invoices.InvoiceRegistry
+
+	Switch *htlcswitch.Switch
 
 	ChainParams *chaincfg.Params
 }
