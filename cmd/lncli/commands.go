@@ -2358,6 +2358,113 @@ func addInvoice(ctx *cli.Context) error {
 	return nil
 }
 
+var settleInvoiceCommand = cli.Command{
+	Name:     "settleinvoice",
+	Category: "Payments",
+	Usage:    "Reveal a preimage and use it to settle the corresponding invoice.",
+	Description: `
+	Todo.`,
+	ArgsUsage: "preimage",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name: "preimage",
+			Usage: "the hex-encoded preimage (32 byte) which will " +
+				"allow settling an incoming HTLC payable to this " +
+				"preimage.",
+		},
+	},
+	Action: actionDecorator(settleInvoice),
+}
+
+func settleInvoice(ctx *cli.Context) error {
+	var (
+		preimage []byte
+		err      error
+	)
+
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	args := ctx.Args()
+
+	switch {
+	case ctx.IsSet("preimage"):
+		preimage, err = hex.DecodeString(ctx.String("preimage"))
+	case args.Present():
+		preimage, err = hex.DecodeString(args.First())
+	}
+
+	if err != nil {
+		return fmt.Errorf("unable to parse preimage: %v", err)
+	}
+
+	invoice := &lnrpc.SettleInvoiceMsg{
+		PreImage: preimage,
+	}
+
+	resp, err := client.SettleInvoice(context.Background(), invoice)
+	if err != nil {
+		return err
+	}
+
+	printJSON(resp)
+
+	return nil
+}
+
+var cancelInvoiceCommand = cli.Command{
+	Name:     "cancelinvoice",
+	Category: "Payments",
+	Usage:    "Cancels a (hold) invoice",
+	Description: `
+	Todo.`,
+	ArgsUsage: "paymenthash",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name: "paymenthash",
+			Usage: "the hex-encoded payment hash (32 byte) for which the " +
+				"corresponding invoice will be canceled.",
+		},
+	},
+	Action: actionDecorator(cancelInvoice),
+}
+
+func cancelInvoice(ctx *cli.Context) error {
+	var (
+		paymentHash []byte
+		err         error
+	)
+
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	args := ctx.Args()
+
+	switch {
+	case ctx.IsSet("paymenthash"):
+		paymentHash, err = hex.DecodeString(ctx.String("paymenthash"))
+	case args.Present():
+		paymentHash, err = hex.DecodeString(args.First())
+	}
+
+	if err != nil {
+		return fmt.Errorf("unable to parse preimage: %v", err)
+	}
+
+	invoice := &lnrpc.CancelInvoiceMsg{
+		PaymentHash: paymentHash,
+	}
+
+	resp, err := client.CancelInvoice(context.Background(), invoice)
+	if err != nil {
+		return err
+	}
+
+	printJSON(resp)
+
+	return nil
+}
+
 var lookupInvoiceCommand = cli.Command{
 	Name:      "lookupinvoice",
 	Category:  "Payments",

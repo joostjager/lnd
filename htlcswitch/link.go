@@ -2491,7 +2491,10 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// channelID, and then use the HTLC ID of the add index
 			// for the original invoice.
 			preimage := invoice.Terms.PaymentPreimage
-			if !bytes.Equal(preimage[:], unknownPreimage[:]) {
+
+			if bytes.Equal(preimage[:], unknownPreimage[:]) {
+				l.infof("accepting %x as exit hop", pd.RHash)
+
 				err = l.cfg.Registry.AcceptInvoice(
 					invoiceHash, pd.Amount,
 				)

@@ -2938,13 +2938,17 @@ func (r *rpcServer) SettleInvoice(ctx context.Context,
 
 	var preimage [32]byte
 	copy(preimage[:], in.PreImage)
-	r.server.htlcSwitch.ProcessContractResolution(
+	err = r.server.htlcSwitch.ProcessContractResolution(
 		contractcourt.ResolutionMsg{
 			SourceChan: htlcswitch.SwitchSettleHop,
 			HtlcIndex:  invoice.AddIndex,
 			PreImage:   &preimage,
 		},
 	)
+	if err != nil {
+		rpcsLog.Errorf("unable to settle htlc: %v", err)
+		return nil, err
+	}
 
 	// TODO: Set amount in accepted stage already
 	err = r.server.invoices.SettleInvoice(
@@ -2984,13 +2988,17 @@ func (r *rpcServer) CancelInvoice(ctx context.Context,
 		return nil, fmt.Errorf("invoice already settled")
 	}
 
-	r.server.htlcSwitch.ProcessContractResolution(
+	err = r.server.htlcSwitch.ProcessContractResolution(
 		contractcourt.ResolutionMsg{
 			SourceChan: htlcswitch.SwitchSettleHop,
 			HtlcIndex:  invoice.AddIndex,
 			Failure:    lnwire.FailUnknownPaymentHash{},
 		},
 	)
+	if err != nil {
+		rpcsLog.Errorf("unable to cancel htlc: %v", err)
+		return nil, err
+	}
 
 	// TODO: Move invoice to canceled state / remove
 
