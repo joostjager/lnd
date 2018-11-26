@@ -4,6 +4,7 @@ package invoicesrpc
 
 import (
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/macaroons"
 )
@@ -23,6 +24,10 @@ type Config struct {
 	MacService *macaroons.Service
 
 	InvoiceRegistry *invoices.InvoiceRegistry
+
+	// Switch is used by the invoices subserver to control acceptance and
+	// cancelation of invoices.
+	Switch *htlcswitch.Switch
 
 	// ChainParams are required to properly decode invoice payment requests
 	// that are marshalled over rpc.
