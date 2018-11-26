@@ -4,14 +4,20 @@ package invoicesrpc
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"google.golang.org/grpc"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 
+	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/contractcourt"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnhash"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnwire"
 )
 
 const (
@@ -41,6 +47,10 @@ var (
 		"/invoicesrpc.Invoices/SubscribeSingleInvoice": {{
 			Entity: "invoices",
 			Action: "read",
+		}},
+		"/invoicesrpc.Invoices/SettleInvoice": {{
+			Entity: "invoices",
+			Action: "write",
 		}},
 		"/invoicesrpc.Invoices/CancelInvoice": {{
 			Entity: "invoices",
@@ -194,12 +204,90 @@ func (s *Server) SubscribeSingleInvoice(req *lnrpc.PaymentHash,
 	}
 }
 
+func (s *Server) SettleInvoice(ctx context.Context,
+	in *SettleInvoiceMsg) (*SettleInvoiceResp, error) {
+
+	preimage, err := lnhash.NewHash(in.PreImage)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add revealed preimage to the preimage beacon. This allows contract
+	// resolvers to claim a contested htlc.
+	err = s.cfg.PreimageBeacon.AddPreimage(preimage[:])
+	if err != nil {
+		return nil, err
+	}
+
+	paymentHash := lnhash.Hash(sha256.Sum256(preimage[:]))
+
+	// TODO: Make this invoice update / contract resolution safe.
+
+	invoice, _, err := s.cfg.InvoiceRegistry.LookupInvoice(paymentHash)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query invoice registry: "+
+			" %v", err)
+	}
+
+	if invoice.Terms.State == channeldb.ContractAccepted {
+		var preimageArray [32]byte
+		preimageArray = *preimage
+		err = s.cfg.Switch.ProcessContractResolution(
+			contractcourt.ResolutionMsg{
+				SourceChan: htlcswitch.SwitchSettleHop,
+				HtlcIndex:  invoice.AddIndex,
+				PreImage:   &preimageArray,
+			},
+		)
+		if err != nil {
+			log.Errorf("unable to settle htlc: %v", err)
+			return nil, err
+		}
+	}
+
+	// SettleInvoice with preimage. For hold invoices, paidAmt is ignored.
+	err = s.cfg.InvoiceRegistry.SettleInvoice(
+		paymentHash, lnwire.MilliSatoshi(0), preimage,
+	)
+	if err != nil {
+		log.Errorf("unable to settle invoice: %v", err)
+		return nil, err
+	}
+
+	log.Infof("Settled invoice %x", paymentHash)
+
+	return &SettleInvoiceResp{}, nil
+}
+
 func (s *Server) CancelInvoice(ctx context.Context,
 	in *CancelInvoiceMsg) (*CancelInvoiceResp, error) {
 
 	paymentHash, err := lnhash.NewHash(in.PaymentHash)
 	if err != nil {
 		return nil, err
+	}
+
+	// TODO: Make this invoice update / contract resolution safe.
+
+	invoice, _, err := s.cfg.InvoiceRegistry.LookupInvoice(*paymentHash)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"unable to query invoice registry: %v", err,
+		)
+	}
+
+	if invoice.Terms.State == channeldb.ContractAccepted {
+		err = s.cfg.Switch.ProcessContractResolution(
+			contractcourt.ResolutionMsg{
+				SourceChan: htlcswitch.SwitchSettleHop,
+				HtlcIndex:  invoice.AddIndex,
+				Failure:    lnwire.FailUnknownPaymentHash{},
+			},
+		)
+		if err != nil {
+			log.Errorf("unable to cancel htlc: %v", err)
+			return nil, err
+		}
 	}
 
 	err = s.cfg.InvoiceRegistry.CancelInvoice(*paymentHash)
