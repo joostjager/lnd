@@ -2300,22 +2300,6 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				continue
 			}
 
-			// First, we'll check the expiry of the HTLC itself
-			// against, the current block height. If the timeout is
-			// too soon, then we'll reject the HTLC.
-			if pd.Timeout-expiryGraceDelta <= heightNow {
-				log.Errorf("htlc(%x) has an expiry that's too "+
-					"soon: expiry=%v, best_height=%v",
-					pd.RHash[:], pd.Timeout, heightNow)
-
-				failure := lnwire.FailFinalExpiryTooSoon{}
-				l.sendHTLCError(
-					pd.HtlcIndex, &failure, obfuscator, pd.SourceRef,
-				)
-				needUpdate = true
-				continue
-			}
-
 			// We're the designated payment destination.  Therefore
 			// we attempt to see if we have an invoice locally
 			// which'll allow us to settle this htlc.
@@ -2350,6 +2334,22 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 					pd.SourceRef,
 				)
 
+				needUpdate = true
+				continue
+			}
+
+			// First, we'll check the expiry of the HTLC itself
+			// against, the current block height. If the timeout is
+			// too soon, then we'll reject the HTLC.
+			if pd.Timeout-expiryGraceDelta <= heightNow {
+				log.Errorf("htlc(%x) has an expiry that's too "+
+					"soon: expiry=%v, best_height=%v",
+					pd.RHash[:], pd.Timeout, heightNow)
+
+				failure := lnwire.FailFinalExpiryTooSoon{}
+				l.sendHTLCError(
+					pd.HtlcIndex, &failure, obfuscator, pd.SourceRef,
+				)
 				needUpdate = true
 				continue
 			}
