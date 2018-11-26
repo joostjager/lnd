@@ -24,6 +24,10 @@ type InvoiceDatabase interface {
 	// CancelInvoice attempts to cancel the invoice corresponding to the
 	// passed payment hash.
 	CancelInvoice(payHash lnhash.Hash) error
+
+	// AcceptInvoice attempts to mark an invoice corresponding to the
+	// passed payment hash as accepted.
+	AcceptInvoice(payHash lnhash.Hash, paidAmount lnwire.MilliSatoshi) error
 }
 
 // ChannelLink is an interface which represents the subsystem for managing the
