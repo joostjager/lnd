@@ -603,6 +603,19 @@ func (s *Switch) ForwardPackets(linkQuit chan struct{},
 		switch htlc := packet.htlc.(type) {
 		case *lnwire.UpdateAddHTLC:
 			circuit := newPaymentCircuit(&htlc.PaymentHash, packet)
+
+			// If the outgoing channel id is equal to the
+			// switch-settled sentinel value, we'll construct the
+			// keystone to signal that this circuit should be
+			// atomically opened upon being committed within the
+			// circuit map.
+			if packet.outgoingChanID == SwitchSettleHop {
+				circuit.Outgoing = &CircuitKey{
+					ChanID: SwitchSettleHop,
+					HtlcID: packet.outgoingHTLCID,
+				}
+			}
+
 			packet.circuit = circuit
 			circuits = append(circuits, circuit)
 			addBatch = append(addBatch, packet)
@@ -637,7 +650,14 @@ func (s *Switch) ForwardPackets(linkQuit chan struct{},
 	for _, packet := range addBatch {
 		switch {
 		case len(actions.Adds) > 0 && packet.circuit == actions.Adds[0]:
-			addedPackets = append(addedPackets, packet)
+			// We only need to forward packets through the switch if
+			// they contain an outgoing channel id that isn't
+			// intended to be a switch settled payment. Since these
+			// are atomically opened at the time they are committed,
+			// we can drop them here and await a response.
+			if packet.outgoingChanID != SwitchSettleHop {
+				addedPackets = append(addedPackets, packet)
+			}
 			actions.Adds = actions.Adds[1:]
 
 		case len(actions.Drops) > 0 && packet.circuit == actions.Drops[0]:
@@ -1018,7 +1038,12 @@ func (s *Switch) parseFailedPayment(payment *pendingPayment, pkt *htlcPacket,
 // handlePacketForward is used in cases when we need forward the htlc update
 // from one channel link to another and be able to propagate the settle/fail
 // updates back. This behaviour is achieved by creation of payment circuits.
-func (s *Switch) handlePacketForward(packet *htlcPacket) error {
+//
+// In case of a resolution packet, the failure message needs to be supplied as
+// it isn't part of the packet itself in unencrypted form.
+func (s *Switch) handlePacketForward(packet *htlcPacket,
+	resolutionFailure lnwire.FailureMessage) error {
+
 	switch htlc := packet.htlc.(type) {
 
 	// Channel link forwarded us a new htlc, therefore we initiate the
@@ -1170,9 +1195,8 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				// it as it's actually internally sourced.
 				var err error
 				// TODO(roasbeef): don't need to pass actually?
-				failure := &lnwire.FailPermanentChannelFailure{}
 				fail.Reason, err = circuit.ErrorEncrypter.EncryptFirstHop(
-					failure,
+					resolutionFailure,
 				)
 				if err != nil {
 					err = fmt.Errorf("unable to obfuscate "+
@@ -1586,7 +1610,7 @@ out:
 			// encounter is due to the circuit already being
 			// closed. This is fine, as processing this message is
 			// meant to be idempotent.
-			err := s.handlePacketForward(pkt)
+			err := s.handlePacketForward(pkt, resolutionMsg.Failure)
 			if err != nil {
 				log.Errorf("Unable to forward resolution msg: %v", err)
 			}
@@ -1598,7 +1622,8 @@ out:
 		// packet concretely, then either forward it along, or
 		// interpret a return packet to a locally initialized one.
 		case cmd := <-s.htlcPlex:
-			cmd.err <- s.handlePacketForward(cmd.pkt)
+			cmd.err <- s.handlePacketForward(cmd.pkt,
+				&lnwire.FailPermanentChannelFailure{})
 
 		// When this time ticks, then it indicates that we should
 		// collect all the forwarding events since the last internal,
