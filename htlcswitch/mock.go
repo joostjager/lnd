@@ -731,6 +731,28 @@ func (i *mockInvoiceRegistry) SettleInvoice(rhash chainhash.Hash,
 	return nil
 }
 
+func (i *mockInvoiceRegistry) AcceptInvoice(rhash chainhash.Hash,
+	amt lnwire.MilliSatoshi) error {
+
+	i.Lock()
+	defer i.Unlock()
+
+	invoice, ok := i.invoices[rhash]
+	if !ok {
+		return fmt.Errorf("can't find mock invoice: %x", rhash[:])
+	}
+
+	if invoice.Terms.State == channeldb.ContractAccepted {
+		return nil
+	}
+
+	invoice.Terms.State = channeldb.ContractAccepted
+	invoice.AmtPaid = amt
+	i.invoices[rhash] = invoice
+
+	return nil
+}
+
 func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
 	i.Lock()
 	defer i.Unlock()
