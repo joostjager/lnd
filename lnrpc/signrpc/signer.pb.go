@@ -77,9 +77,7 @@ func (m *KeyDescriptor) String() string            { return proto.CompactTextStr
 func (*KeyDescriptor) ProtoMessage()               {}
 func (*KeyDescriptor) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{1} }
 
-type isKeyDescriptor_Key interface {
-	isKeyDescriptor_Key()
-}
+type isKeyDescriptor_Key interface{ isKeyDescriptor_Key() }
 
 type KeyDescriptor_RawKeyBytes struct {
 	RawKeyBytes []byte `protobuf:"bytes,1,opt,name=raw_key_bytes,json=rawKeyBytes,proto3,oneof"`
@@ -376,6 +374,7 @@ func (m *InputScript) GetSigScript() []byte {
 }
 
 type InputScriptResp struct {
+	// / The set of fully valid input scripts requested.
 	InputScripts []*InputScript `protobuf:"bytes,1,rep,name=input_scripts,json=inputScripts" json:"input_scripts,omitempty"`
 }
 
