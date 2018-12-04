@@ -217,12 +217,11 @@ func (w *WalletKit) DeriveNextKey(ctx context.Context,
 	}
 
 	return &signrpc.KeyDescriptor{
-		Key: &signrpc.KeyDescriptor_KeyLoc{
-			KeyLoc: &signrpc.KeyLocator{
-				KeyFamily: int32(nextKeyDesc.Family),
-				KeyIndex:  int32(nextKeyDesc.Index),
-			},
+		KeyLoc: &signrpc.KeyLocator{
+			KeyFamily: int32(nextKeyDesc.Family),
+			KeyIndex:  int32(nextKeyDesc.Index),
 		},
+		RawKeyBytes: nextKeyDesc.PubKey.SerializeCompressed(),
 	}, nil
 }
 
@@ -240,12 +239,11 @@ func (w *WalletKit) DeriveKey(ctx context.Context,
 	}
 
 	return &signrpc.KeyDescriptor{
-		Key: &signrpc.KeyDescriptor_KeyLoc{
-			KeyLoc: &signrpc.KeyLocator{
-				KeyFamily: int32(keyDesc.Family),
-				KeyIndex:  int32(keyDesc.Index),
-			},
+		KeyLoc: &signrpc.KeyLocator{
+			KeyFamily: int32(keyDesc.Family),
+			KeyIndex:  int32(keyDesc.Index),
 		},
+		RawKeyBytes: keyDesc.PubKey.SerializeCompressed(),
 	}, nil
 }
 
