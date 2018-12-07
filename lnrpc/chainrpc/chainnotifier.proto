@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package chainrpc;
+
+message ConfRequest {
+    bytes txid = 1;
+    bytes script = 2;
+    uint32 num_confs = 3;
+    uint32 height_hint = 4;
+}
+
+message ConfDetails {
+    bytes block_hash = 1;
+    uint32 block_height = 2;
+    uint32 tx_index = 3;
+
+    // Is this needed? Would need to modify the ChainNotifier to return this as
+    // well.
+    bytes raw_tx = 4;
+}
+
+message Reorg {
+    // Is this needed? Just wondering - it's already returned by the
+    // ChainNotifier.
+    uint32 depth = 1;
+}
+
+message ConfEvent {
+    oneof event {
+        ConfDetails conf = 1;
+        Reorg reorg = 2;
+    }
+}
+
+message Outpoint {
+    bytes hash = 1;
+    uint32 index = 2;
+}
+
+message SpendRequest {
+    Outpoint outpoint = 1;
+    bytes script = 2;
+    uint32 height_hint = 3;
+
+    // Is this needed? The ChainNotifier doesn't support this at the moment, so
+    // we would either need to modify the ChainNotifier to do, the subserver to
+    // do it by calling `chainNotifier.RegisterConfirmationsNtfn`, or the client
+    // can do it by calling the RegisterConfirmationsNtfn RPC.
+    uint32 conf_depth = 4;
+}
+
+message SpendDetails {
+    Outpoint spending_outpoint = 1;
+    bytes spending_tx_hash = 2;
+    uint32 spending_input_index = 3;
+    uint32 spending_height = 4;
+
+    // Is this needed? Would need to modify the ChainNotifier to return this as
+    // well.
+    bytes raw_spending_tx = 5;
+}
+
+message SpendEvent {
+    oneof event {
+        SpendDetails spend = 1;
+        Reorg reorg = 2;
+    }
+}
+
+message BlockEpoch {
+    bytes hash = 1;
+    uint32 height = 2;
+}
+
+service ChainNotifier {
+    rpc RegisterConfirmationsNtfn(ConfRequest) returns (stream ConfEvent);
+
+    rpc RegisterSpendNtfn(SpendRequest) returns (stream SpendEvent);
+
+    rpc RegisterBlockEpochNtfn(BlockEpoch) returns (stream BlockEpoch);
+}
