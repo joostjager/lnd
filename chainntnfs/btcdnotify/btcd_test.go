@@ -69,7 +69,7 @@ func TestHistoricalConfDetailsTxIndex(t *testing.T) {
 	t.Parallel()
 
 	harness, tearDown := chainntnfs.NewMiner(
-		t, []string{"--txindex"}, true, 25,
+		t, []string{"--txindex"}, true, 400,
 	)
 	defer tearDown()
 
