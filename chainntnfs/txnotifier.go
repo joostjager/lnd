@@ -11,6 +11,20 @@ import (
 )
 
 var (
+	// ZeroHash is the value that should be used as the txid when
+	// registering for the confirmation of a script on-chain. This allows
+	// the notifier to match _and_ dispatch upon the inclusion of the script
+	// on-chain, rather than the txid..
+	ZeroHash chainhash.Hash
+
+	// ZeroOutPoint is the value that should be used as the outpoint when
+	// registering for the spend of a script on-chain. This allows the
+	// notifier to match _and_ dispatch upon detecting the spend of the
+	// script on-chain, rather than the outpoint.
+	ZeroOutPoint wire.OutPoint
+)
+
+var (
 	// ErrTxNotifierExiting is an error returned when attempting to interact
 	// with the TxNotifier but it been shut down.
 	ErrTxNotifierExiting = errors.New("TxNotifier is exiting")
@@ -94,6 +108,46 @@ func newSpendNtfnSet() *spendNtfnSet {
 	}
 }
 
+// ConfRequest encapsulates a request for a confirmation notification of either
+// a txid or output script.
+type ConfRequest struct {
+	// TxID is the hash of the transaction for which confirmation
+	// notifications are requested. If set to a zero hash, then a
+	// confirmation notification will be dispatched upon inclusion of the
+	// _script_, rather than the txid.
+	TxID chainhash.Hash
+
+	// PkScript is the public key script of an outpoint created in this
+	// transaction.
+	PkScript txscript.PkScript
+}
+
+// NewConfRequest creates a request for a confirmation notification of either a
+// txid or output script.
+func NewConfRequest(txid *chainhash.Hash, pkScript []byte) (ConfRequest, error) {
+	var r ConfRequest
+	outputScript, err := txscript.ParsePkScript(pkScript)
+	if err != nil {
+		return r, err
+	}
+
+	r.TxID = ZeroHash
+	if txid != nil {
+		r.TxID = *txid
+	}
+	r.PkScript = outputScript
+
+	return r, nil
+}
+
+// String returns the string representation of the ConfRequest.
+func (c ConfRequest) String() string {
+	if c.TxID != ZeroHash {
+		return fmt.Sprintf("txid=%v", c.TxID)
+	}
+	return fmt.Sprintf("script=%v", c.PkScript)
+}
+
 // ConfNtfn represents a notifier client's request to receive a notification
 // once the target transaction gets sufficient confirmations. The client is
 // asynchronously notified via the ConfirmationEvent channels.
@@ -150,6 +204,45 @@ type HistoricalConfDispatch struct {
 	// EndHeight specifies the last block height (inclusive) that the
 	// historical scan should consider.
 	EndHeight uint32
+}
+
+// SpendRequest encapsulates a request for a spend notification of either an
+// outpoint or output script.
+type SpendRequest struct {
+	// OutPoint is the outpoint for which a client has requested a spend
+	// notification for. If set to a zero outpoint, then a spend
+	// notification will be dispatched upon detecting the spend of the
+	// _script_, rather than the outpoint.
+	OutPoint wire.OutPoint
+
+	// PkScript is the script of the outpoint.
+	PkScript txscript.PkScript
+}
+
+// NewSpendRequest creates a request for a spend notification of either an
+// outpoint or output script.
+func NewSpendRequest(op *wire.OutPoint, pkScript []byte) (SpendRequest, error) {
+	var r SpendRequest
+	outputScript, err := txscript.ParsePkScript(pkScript)
+	if err != nil {
+		return r, err
+	}
+
+	r.OutPoint = ZeroOutPoint
+	if op != nil {
+		r.OutPoint = *op
+	}
+	r.PkScript = outputScript
+
+	return r, nil
+}
+
+// String returns the string representation of the SpendRequest.
+func (c SpendRequest) String() string {
+	if c.OutPoint != ZeroOutPoint {
+		return fmt.Sprintf("outpoint=%v", c.OutPoint)
+	}
+	return fmt.Sprintf("script=%v", c.PkScript)
 }
 
 // SpendNtfn represents a client's request to receive a notification once an
