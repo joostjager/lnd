@@ -103,7 +103,7 @@ func syncNotifierWithMiner(t *testing.T, notifier *BitcoindNotifier,
 // historical confirmation details using the backend node's txindex.
 func TestHistoricalConfDetailsTxIndex(t *testing.T) {
 	miner, tearDown := chainntnfs.NewMiner(
-		t, []string{"--txindex"}, true, 25,
+		t, []string{"--txindex"}, true, 400,
 	)
 	defer tearDown()
 
