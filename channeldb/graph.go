@@ -2449,6 +2449,36 @@ type ChannelEdgePolicy struct {
 	db *DB
 }
 
+// IsSatisfiedBy checks whether the given parameters satisfy the policy.
+func (c *ChannelEdgePolicy) IsSatisfiedBy(amt,
+	fee lnwire.MilliSatoshi, timeLockDelta uint16) bool {
+
+	if c.MinHTLC > amt {
+		return false
+	}
+
+	// TODO: Add MaxHTLC when it becomes available
+
+	if c.TimeLockDelta > timeLockDelta {
+		return false
+	}
+
+	if fee < c.ComputeFee(amt) {
+		return false
+	}
+
+	return true
+}
+
+// ComputeFee computes the fee to forward an HTLC of `amt` milli-satoshis over
+// the passed active payment channel. This value is currently computed as
+// specified in BOLT07, but will likely change in the near future.
+func (c *ChannelEdgePolicy) ComputeFee(
+	amt lnwire.MilliSatoshi) lnwire.MilliSatoshi {
+
+	return c.FeeBaseMSat + (amt*c.FeeProportionalMillionths)/1000000
+}
+
 // Signature is a channel announcement signature, which is needed for proper
 // edge policy announcement.
 //

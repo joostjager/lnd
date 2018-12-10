@@ -339,6 +339,78 @@ func (p *paymentSession) ReportEdgeFailure(e *edgeLocator) {
 	p.mc.Unlock()
 }
 
+func (p *paymentSession) ReportEdgeSetFailure(edge *edgeLocator,
+	fwdCond *forwardingConditions) error {
+
+	// Fetch channel endpoints.
+	edgeInfo, _, _, err := p.mc.graph.FetchChannelEdgesByID(edge.channelID)
+
+	// If channel is unknown to us, there is nothing to prune.
+	if err == channeldb.ErrEdgeNotFound {
+		return nil
+	}
+
+	// Any other errors are not expected and returned to the caller.
+	if err != nil {
+		return fmt.Errorf("error retrieving edge: %v", err)
+	}
+
+	// Retrieve failing endpoint for this channel.
+	var fromNodePubKey *btcec.PublicKey
+	if edge.direction == 0 {
+		fromNodePubKey, err = edgeInfo.NodeKey1()
+	} else {
+		fromNodePubKey, err = edgeInfo.NodeKey2()
+	}
+	if err != nil {
+		return fmt.Errorf("error retrieving node pubkey: %v", err)
+	}
+
+	// Retrieve database connected node struct.
+	node, err := p.mc.graph.FetchLightningNode(fromNodePubKey)
+	if err != nil && err != channeldb.ErrGraphNodeNotFound {
+		return fmt.Errorf("error retrieving node: %v", err)
+	}
+
+	p.mc.Lock()
+
+	// Start with recording the requested edge itself. It could be that it
+	// isn't in the graph because it is private.
+	p.mc.failedEdges[*edge] = time.Now()
+
+	p.mc.graph.Database().View(func(tx *bbolt.Tx) error {
+		return node.ForEachChannel(tx, func(tx *bbolt.Tx,
+			edgeInfo *channeldb.ChannelEdgeInfo,
+			outEdge, _ *channeldb.ChannelEdgePolicy) error {
+
+			// Without policy we can't prune.
+			if outEdge == nil {
+				return nil
+			}
+
+			// Channel wouldn't be able to support this amount, so
+			// the error doesn't give us usable information.
+			if !outEdge.IsSatisfiedBy(fwdCond.amt, fwdCond.fee,
+				fwdCond.timeLockDelta) {
+
+				return nil
+			}
+
+			// We assume that the intermediate not applied
+			// non-strict forwarding and we can therefore prune
+			// every edge that is satisfied by the offered fee and
+			// timelock delta.
+			e := newEdgeLocator(outEdge)
+			p.mc.failedEdges[*e] = time.Now()
+
+			return nil
+		})
+	})
+	p.mc.Unlock()
+
+	return nil
+}
+
 // ReportChannelPolicyFailure handles a failure message that relates to a
 // channel policy. For these types of failures, the policy is updated and we
 // want to keep it included during path finding. This function does mark the

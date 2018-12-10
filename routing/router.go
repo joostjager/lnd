@@ -1798,7 +1798,8 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 
 			// Always determine chan id ourselves, because a channel
 			// update with id may not be available.
-			failedEdge, err := getFailedEdge(route, errVertex)
+			failedEdge, fwdConditions, err :=
+				getFailedEdge(route, errVertex)
 			if err != nil {
 				return preImage, nil, err
 			}
@@ -1933,7 +1934,8 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 			// now, and continue onwards with our path finding.
 			case *lnwire.FailTemporaryChannelFailure:
 				r.applyChannelUpdate(onionErr.Update, errSource)
-				paySession.ReportEdgeFailure(failedEdge)
+				paySession.ReportEdgeSetFailure(failedEdge,
+					fwdConditions)
 				continue
 
 			// If the send fail due to a node not having the
@@ -2008,14 +2010,21 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 	}
 }
 
+type forwardingConditions struct {
+	amt           lnwire.MilliSatoshi
+	fee           lnwire.MilliSatoshi
+	timeLockDelta uint16
+}
+
 // getFailedEdge tries to locate the failing channel given a route and the
 // pubkey of the node that sent the error. It will assume that the error is
 // associated with the outgoing channel of the error node.
 func getFailedEdge(route *Route, errSource Vertex) (
-	*edgeLocator, error) {
+	*edgeLocator, *forwardingConditions, error) {
 
 	hopCount := len(route.Hops)
 	fromNode := route.SourcePubKey
+	prevAmt := route.TotalAmount
 	for i, hop := range route.Hops {
 		toNode := hop.PubKeyBytes
 
@@ -2034,17 +2043,24 @@ func getFailedEdge(route *Route, errSource Vertex) (
 		// If the errSource is the final hop, we assume that the failing
 		// channel is the incoming channel.
 		if errSource == fromNode || finalHopFailing {
+			fwdCond := &forwardingConditions{
+				amt:           hop.AmtToForward,
+				fee:           hop.AmtToForward - prevAmt,
+				timeLockDelta: uint16(hop.OutgoingTimeLock),
+			}
+
 			return newEdgeLocatorByPubkeys(
 				hop.ChannelID,
 				&fromNode,
 				&toNode,
-			), nil
+			), fwdCond, nil
 		}
 
+		prevAmt = hop.AmtToForward
 		fromNode = toNode
 	}
 
-	return nil, fmt.Errorf("cannot find error source node in route")
+	return nil, nil, fmt.Errorf("cannot find error source node in route")
 }
 
 // applyChannelUpdate validates a channel update and if valid, applies it to the
