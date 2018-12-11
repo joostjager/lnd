@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/lightningnetwork/lnd/lnrpc/chainrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
@@ -25,6 +26,11 @@ type subRPCServerConfigs struct {
 	// also requests keys and addresses under control of the backing
 	// wallet.
 	WalletKitRPC *walletrpc.Config `group:"walletrpc" namespace:"walletrpc"`
+
+	// ChainRPC is a sub-RPC server that exposes functionality allowing a
+	// client to be notified of certain on-chain events (new blocks,
+	// confirmations, spends).
+	ChainRPC *chainrpc.Config `group:"chainrpc" namespace:"chainrpc"`
 }
 
 // PopulateDependencies attempts to iterate through all the sub-server configs
@@ -90,6 +96,19 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			)
 			subCfgValue.FieldByName("KeyRing").Set(
 				reflect.ValueOf(cc.keyRing),
+			)
+
+		case *chainrpc.Config:
+			subCfgValue := extractReflectValue(cfg)
+
+			subCfgValue.FieldByName("NetworkDir").Set(
+				reflect.ValueOf(networkDir),
+			)
+			subCfgValue.FieldByName("MacService").Set(
+				reflect.ValueOf(macService),
+			)
+			subCfgValue.FieldByName("ChainNotifier").Set(
+				reflect.ValueOf(cc.chainNotifier),
 			)
 
 		default:
