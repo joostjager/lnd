@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"google.golang.org/grpc"
@@ -296,15 +295,9 @@ func (s *Server) RegisterConfirmationsNtfn(in *ConfRequest,
 func (s *Server) RegisterSpendNtfn(in *SpendRequest,
 	spendStream ChainNotifier_RegisterSpendNtfnServer) error {
 
-	// We'll start by reconstructing the RPC request into what the
-	// underlying ChainNotifier expects.
-	var txid chainhash.Hash
-	copy(txid[:], in.Outpoint.Hash)
-	op := wire.OutPoint{Hash: txid, Index: in.Outpoint.Index}
-
 	// We'll then register for the spend notification of the request.
 	spendEvent, err := s.cfg.ChainNotifier.RegisterSpendNtfn(
-		&op, in.Script, in.HeightHint,
+		nil, in.Script, in.HeightHint,
 	)
 	if err != nil {
 		return err
