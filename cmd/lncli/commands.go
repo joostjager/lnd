@@ -2212,16 +2212,7 @@ func sendToRouteRequest(ctx *cli.Context, req *lnrpc.SendToRouteRequest) error {
 	client, cleanUp := getClient(ctx)
 	defer cleanUp()
 
-	paymentStream, err := client.SendToRoute(context.Background())
-	if err != nil {
-		return err
-	}
-
-	if err := paymentStream.Send(req); err != nil {
-		return err
-	}
-
-	resp, err := paymentStream.Recv()
+	resp, err := client.SendToRouteSync(context.Background(), req)
 	if err != nil {
 		return err
 	}
