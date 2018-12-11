@@ -591,6 +591,7 @@ func (n *NeutrinoNotifier) historicalConfDetails(confRequest chainntnfs.ConfRequ
 			// script matched, so we'll return the confirmation
 			// details for it.
 			return &chainntnfs.TxConfirmation{
+				Tx:          tx.MsgTx(),
 				BlockHash:   blockHash,
 				BlockHeight: scanHeight,
 				TxIndex:     uint32(i),

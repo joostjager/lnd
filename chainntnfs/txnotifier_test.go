@@ -212,6 +212,7 @@ func TestTxNotifierFutureConfDispatch(t *testing.T) {
 			BlockHash:   block1.Hash(),
 			BlockHeight: 11,
 			TxIndex:     0,
+			Tx:          &tx1,
 		}
 		assertConfDetails(t, txConf, &expectedConf)
 	default:
@@ -283,6 +284,7 @@ func TestTxNotifierFutureConfDispatch(t *testing.T) {
 			BlockHash:   block1.Hash(),
 			BlockHeight: 11,
 			TxIndex:     1,
+			Tx:          &tx2,
 		}
 		assertConfDetails(t, txConf, &expectedConf)
 	default:
@@ -340,6 +342,7 @@ func TestTxNotifierHistoricalConfDispatch(t *testing.T) {
 		BlockHash:   &chainntnfs.ZeroHash,
 		BlockHeight: 9,
 		TxIndex:     1,
+		Tx:          &tx1,
 	}
 	err := n.UpdateConfDetails(ntfn1.ConfRequest, &txConf1)
 	if err != nil {
@@ -373,6 +376,7 @@ func TestTxNotifierHistoricalConfDispatch(t *testing.T) {
 		BlockHash:   &chainntnfs.ZeroHash,
 		BlockHeight: 9,
 		TxIndex:     2,
+		Tx:          &tx2,
 	}
 	err = n.UpdateConfDetails(ntfn2.ConfRequest, &txConf2)
 	if err != nil {
@@ -1279,6 +1283,7 @@ func TestTxNotifierConfReorg(t *testing.T) {
 			BlockHash:   block3.Hash(),
 			BlockHeight: 12,
 			TxIndex:     0,
+			Tx:          &tx2,
 		}
 		assertConfDetails(t, txConf, &expectedConf)
 	default:
@@ -1309,6 +1314,7 @@ func TestTxNotifierConfReorg(t *testing.T) {
 			BlockHash:   block3.Hash(),
 			BlockHeight: 12,
 			TxIndex:     1,
+			Tx:          &tx3,
 		}
 		assertConfDetails(t, txConf, &expectedConf)
 	default:
@@ -2029,6 +2035,10 @@ func assertConfDetails(t *testing.T, result, expected *chainntnfs.TxConfirmation
 	if result.TxIndex != expected.TxIndex {
 		t.Fatalf("Incorrect tx index in confirmation details: "+
 			"expected %d, got %d", expected.TxIndex, result.TxIndex)
+	}
+	if result.Tx.TxHash() != expected.Tx.TxHash() {
+		t.Fatalf("expected tx hash %v, got %v", expected.Tx.TxHash(),
+			result.Tx.TxHash())
 	}
 }
 
