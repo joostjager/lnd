@@ -30,8 +30,7 @@ do
     DIRECTORY=$(dirname ${file})
     echo "Generating protos from ${file}, into ${DIRECTORY}"
 
-    protoc -I/usr/local/include -I. \
-           -I$GOPATH/src \
-           --go_out=plugins=grpc:. \
+    protoc -I/usr/local/include -I.\
+           --go_out=plugins=grpc,paths=source_relative:. \
            ${file}
 done
