@@ -69,6 +69,7 @@ var (
 	swprLog = build.NewSubLogger("SWPR", backendLog.Logger)
 	sgnrLog = build.NewSubLogger("SGNR", backendLog.Logger)
 	wlktLog = build.NewSubLogger("WLKT", backendLog.Logger)
+	ntfrLog = build.NewSubLogger("NTFR", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
