@@ -2375,6 +2375,11 @@ var addInvoiceCommand = cli.Command{
 				"preimage. If not set, a random preimage will be " +
 				"created.",
 		},
+		cli.StringFlag{
+			Name: "paymenthash",
+			Usage: "the hex-encoded payment hash (32 byte) that " +
+				"identifies this invoice.",
+		},
 		cli.Int64Flag{
 			Name:  "amt",
 			Usage: "the amt of satoshis in this invoice",
@@ -2410,11 +2415,12 @@ var addInvoiceCommand = cli.Command{
 
 func addInvoice(ctx *cli.Context) error {
 	var (
-		preimage []byte
-		descHash []byte
-		receipt  []byte
-		amt      int64
-		err      error
+		preimage    []byte
+		paymentHash []byte
+		descHash    []byte
+		receipt     []byte
+		amt         int64
+		err         error
 	)
 
 	client, cleanUp := getClient(ctx)
@@ -2444,6 +2450,14 @@ func addInvoice(ctx *cli.Context) error {
 		return fmt.Errorf("unable to parse preimage: %v", err)
 	}
 
+	if ctx.IsSet("paymenthash") {
+		paymentHash, err = hex.DecodeString(ctx.String("paymenthash"))
+
+		if err != nil {
+			return fmt.Errorf("unable to parse preimage: %v", err)
+		}
+	}
+
 	descHash, err = hex.DecodeString(ctx.String("description_hash"))
 	if err != nil {
 		return fmt.Errorf("unable to parse description_hash: %v", err)
@@ -2458,6 +2472,7 @@ func addInvoice(ctx *cli.Context) error {
 		Memo:            ctx.String("memo"),
 		Receipt:         receipt,
 		RPreimage:       preimage,
+		RHash:           paymentHash,
 		Value:           amt,
 		DescriptionHash: descHash,
 		FallbackAddr:    ctx.String("fallback_addr"),
