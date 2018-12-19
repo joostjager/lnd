@@ -1774,6 +1774,7 @@ message Invoice {
     enum InvoiceState {
         OPEN = 0;
         SETTLED = 1;
+        ACCEPTED = 2;
     }
 
     /**
