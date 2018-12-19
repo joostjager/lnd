@@ -1131,7 +1131,8 @@
       "type": "string",
       "enum": [
         "OPEN",
-        "SETTLED"
+        "SETTLED",
+        "ACCEPTED"
       ],
       "default": "OPEN"
     },
