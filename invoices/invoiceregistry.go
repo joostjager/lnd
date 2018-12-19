@@ -163,7 +163,12 @@ func (i *InvoiceRegistry) invoiceEventNotifier() {
 		// A sub-systems has just modified the invoice state, so we'll
 		// dispatch notifications to all registered clients.
 		case event := <-i.invoiceEvents:
-			i.dispatchToClients(event)
+			// Accepted events are not reported to all invoice
+			// subscribers.
+			if event.state != channeldb.ContractAccepted {
+				i.dispatchToClients(event)
+			}
+
 			i.dispatchToSingleClients(event)
 
 		case <-i.quit:
@@ -456,6 +461,29 @@ func (i *InvoiceRegistry) SettleInvoice(rHash chainhash.Hash,
 	log.Infof("Payment received: %v", spew.Sdump(invoice))
 
 	i.notifyClients(rHash, invoice, channeldb.ContractSettled)
+
+	return nil
+}
+
+// AcceptInvoice attempts to mark an invoice as settled. If the invoice is a
+// debug invoice, then this method is a noop as debug invoices are never fully
+// settled.
+func (i *InvoiceRegistry) AcceptInvoice(rHash chainhash.Hash,
+	amtPaid lnwire.MilliSatoshi) error {
+
+	i.Lock()
+	defer i.Unlock()
+
+	log.Debugf("Accepting invoice %x", rHash[:])
+
+	invoice, err := i.cdb.AcceptInvoice(rHash, amtPaid)
+	if err != nil {
+		return err
+	}
+
+	log.Infof("Invoice accepted: %v", spew.Sdump(invoice))
+
+	i.notifyClients(rHash, invoice, channeldb.ContractAccepted)
 
 	return nil
 }

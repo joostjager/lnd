@@ -57,6 +57,8 @@ func CreateRPCInvoice(invoice *channeldb.Invoice,
 		state = Invoice_OPEN
 	case channeldb.ContractSettled:
 		state = Invoice_SETTLED
+	case channeldb.ContractAccepted:
+		state = Invoice_ACCEPTED
 	default:
 		return nil, fmt.Errorf("unknown invoice state")
 	}
