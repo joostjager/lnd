@@ -2614,10 +2614,14 @@ var subscribeInvoicesCommand = cli.Command{
 
 	// TODO: Add description.
 	Description: ``,
-	Flags:       []cli.Flag{
-		// TODO: Add add, accepted and settle index flags. Or better,
-		// provide ability to pass in a single invoice hash to monitor
-		// just one invoice.
+	Flags: []cli.Flag{
+		// TODO: Add add, accepted and settle index flags.
+
+		cli.StringFlag{
+			Name: "paymenthash",
+			Usage: "the hex-encoded payment hash (32 byte) of the " +
+				"invoice to subscribe to.",
+		},
 	},
 	Action: actionDecorator(subscribeInvoices),
 }
@@ -2626,17 +2630,35 @@ func subscribeInvoices(ctx *cli.Context) error {
 	client, cleanUp := getClient(ctx)
 	defer cleanUp()
 
-	req := &lnrpc.InvoiceSubscription{}
+	var recv func() (*lnrpc.Invoice, error)
 
-	invoiceStream, err := client.SubscribeInvoices(context.Background(), req)
-	if err != nil {
-		return err
+	if ctx.IsSet("paymenthash") {
+		paymentHash, err := hex.DecodeString(ctx.String("paymenthash"))
+		if err != nil {
+			return fmt.Errorf("unable to parse preimage: %v", err)
+		}
+		req := &lnrpc.PaymentHash{
+			RHash: paymentHash,
+		}
+		invoiceStream, err := client.SubscribeSingleInvoice(
+			context.Background(), req,
+		)
+		if err != nil {
+			return err
+		}
+		recv = invoiceStream.Recv
+	} else {
+		req := &lnrpc.InvoiceSubscription{}
+		invoiceStream, err := client.SubscribeInvoices(context.Background(), req)
+		if err != nil {
+			return err
+		}
+		recv = invoiceStream.Recv
 	}
 
 	for {
-		invoice, err := invoiceStream.Recv()
+		invoice, err := recv()
 		if err != nil {
-			invoiceStream.CloseSend()
 			return err
 		}
 

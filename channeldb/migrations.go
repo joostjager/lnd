@@ -234,6 +234,8 @@ func migrateInvoiceTimeSeries(tx *bbolt.Tx) error {
 	return nil
 }
 
+// TODO: migrate hold invoices
+
 // migrateInvoiceTimeSeriesOutgoingPayments is a follow up to the
 // migrateInvoiceTimeSeries migration. As at the time of writing, the
 // OutgoingPayment struct embeddeds an instance of the Invoice struct. As a

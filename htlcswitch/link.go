@@ -56,6 +56,10 @@ const (
 	DefaultMaxLinkFeeUpdateTimeout = 60 * time.Minute
 )
 
+var (
+	unknownPreimage [32]byte
+)
+
 // ForwardingPolicy describes the set of constraints that a given ChannelLink
 // is to adhere to when forwarding HTLC's. For each incoming HTLC, this set of
 // constraints will be consulted in order to ensure that adequate fees are

@@ -3293,6 +3293,8 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 	switch invoice.Terms.State {
 	case channeldb.ContractOpen:
 		state = lnrpc.Invoice_OPEN
+	case channeldb.ContractAccepted:
+		state = lnrpc.Invoice_ACCEPTED
 	case channeldb.ContractSettled:
 		state = lnrpc.Invoice_SETTLED
 	default:
@@ -3469,6 +3471,35 @@ func (r *rpcServer) SubscribeInvoices(req *lnrpc.InvoiceSubscription,
 
 		case settledInvoice := <-invoiceClient.SettledInvoices:
 			rpcInvoice, err := createRPCInvoice(settledInvoice)
+			if err != nil {
+				return err
+			}
+
+			if err := updateStream.Send(rpcInvoice); err != nil {
+				return err
+			}
+
+		case <-r.quit:
+			return nil
+		}
+	}
+}
+
+func (r *rpcServer) SubscribeSingleInvoice(req *lnrpc.PaymentHash,
+	updateStream lnrpc.Lightning_SubscribeSingleInvoiceServer) error {
+
+	hash, err := chainhash.NewHash(req.RHash)
+	if err != nil {
+		return err
+	}
+
+	invoiceClient := r.server.invoices.SubscribeSingleInvoice(*hash)
+	defer invoiceClient.Cancel()
+
+	for {
+		select {
+		case newInvoice := <-invoiceClient.updates:
+			rpcInvoice, err := createRPCInvoice(newInvoice)
 			if err != nil {
 				return err
 			}

@@ -36,13 +36,15 @@ type invoiceRegistry struct {
 
 	cdb *channeldb.DB
 
-	clientMtx           sync.Mutex
-	nextClientID        uint32
-	notificationClients map[uint32]*invoiceSubscription
+	clientMtx                 sync.Mutex
+	nextClientID              uint32
+	notificationClients       map[uint32]*invoiceSubscription
+	singleNotificationClients map[uint32]*singleInvoiceSubscription
 
-	newSubscriptions    chan *invoiceSubscription
-	subscriptionCancels chan uint32
-	invoiceEvents       chan *invoiceEvent
+	newSubscriptions       chan *invoiceSubscription
+	newSingleSubscriptions chan *singleInvoiceSubscription
+	subscriptionCancels    chan uint32
+	invoiceEvents          chan *invoiceEvent
 
 	// debugInvoices is a map which stores special "debug" invoices which
 	// should be only created/used when manual tests require an invoice
@@ -59,13 +61,15 @@ type invoiceRegistry struct {
 // which are volatile yet available system wide within the daemon.
 func newInvoiceRegistry(cdb *channeldb.DB) *invoiceRegistry {
 	return &invoiceRegistry{
-		cdb:                 cdb,
-		debugInvoices:       make(map[chainhash.Hash]*channeldb.Invoice),
-		notificationClients: make(map[uint32]*invoiceSubscription),
-		newSubscriptions:    make(chan *invoiceSubscription),
-		subscriptionCancels: make(chan uint32),
-		invoiceEvents:       make(chan *invoiceEvent, 100),
-		quit:                make(chan struct{}),
+		cdb:                       cdb,
+		debugInvoices:             make(map[chainhash.Hash]*channeldb.Invoice),
+		notificationClients:       make(map[uint32]*invoiceSubscription),
+		singleNotificationClients: make(map[uint32]*singleInvoiceSubscription),
+		newSubscriptions:          make(chan *invoiceSubscription),
+		newSingleSubscriptions:    make(chan *singleInvoiceSubscription),
+		subscriptionCancels:       make(chan uint32),
+		invoiceEvents:             make(chan *invoiceEvent, 100),
+		quit:                      make(chan struct{}),
 	}
 }
 
@@ -91,6 +95,7 @@ func (i *invoiceRegistry) Stop() {
 type invoiceEvent struct {
 	newState channeldb.ContractState
 
+	hash    chainhash.Hash
 	invoice *channeldb.Invoice
 }
 
@@ -123,6 +128,20 @@ func (i *invoiceRegistry) invoiceEventNotifier() {
 			// continue.
 			i.notificationClients[newClient.id] = newClient
 
+		case newClient := <-i.newSingleSubscriptions:
+			err := i.deliverSingleBacklogEvents(newClient)
+			if err != nil {
+				ltndLog.Errorf("unable to deliver backlog invoice "+
+					"notifications: %v", err)
+			}
+
+			ltndLog.Infof("New single invoice subscription "+
+				"client: id=%v, hash=%v",
+				newClient.id, newClient.hash,
+			)
+
+			i.singleNotificationClients[newClient.id] = newClient
+
 		// A client no longer wishes to receive invoice notifications.
 		// So we'll remove them from the set of active clients.
 		case clientID := <-i.subscriptionCancels:
@@ -130,12 +149,37 @@ func (i *invoiceRegistry) invoiceEventNotifier() {
 				"client=%v", clientID)
 
 			delete(i.notificationClients, clientID)
+			delete(i.singleNotificationClients, clientID)
 
 		// A sub-systems has just modified the invoice state, so we'll
 		// dispatch notifications to all registered clients.
 		case event := <-i.invoiceEvents:
-			i.dispatchToClients(event)
+			// Accepted events are not reported to all invoice
+			// subscribers.
+			if event.newState != channeldb.ContractAccepted {
+				i.dispatchToClients(event)
+			}
 
+			i.dispatchToSingleClients(event)
+
+		case <-i.quit:
+			return
+		}
+	}
+}
+
+func (i *invoiceRegistry) dispatchToSingleClients(event *invoiceEvent) {
+	// Dispatch to single invoice subscribers.
+	for _, client := range i.singleNotificationClients {
+		if client.hash != event.hash {
+			continue
+		}
+
+		select {
+		case client.ntfnQueue.ChanIn() <- &invoiceEvent{
+			newState: event.newState,
+			invoice:  event.invoice,
+		}:
 		case <-i.quit:
 			return
 		}
@@ -218,6 +262,7 @@ func (i *invoiceRegistry) deliverBacklogEvents(client *invoiceSubscription) erro
 	if err != nil {
 		return err
 	}
+
 	settleEvents, err := i.cdb.InvoicesSettledSince(client.settleIndex)
 	if err != nil {
 		return err
@@ -240,6 +285,7 @@ func (i *invoiceRegistry) deliverBacklogEvents(client *invoiceSubscription) erro
 			return fmt.Errorf("registry shutting down")
 		}
 	}
+
 	for _, settleEvent := range settleEvents {
 		// We re-bind the loop variable to ensure we don't hold onto
 		// the loop reference causing is to point to the same item.
@@ -253,6 +299,26 @@ func (i *invoiceRegistry) deliverBacklogEvents(client *invoiceSubscription) erro
 		case <-i.quit:
 			return fmt.Errorf("registry shutting down")
 		}
+	}
+
+	return nil
+}
+
+func (i *invoiceRegistry) deliverSingleBacklogEvents(
+	client *singleInvoiceSubscription) error {
+
+	invoice, err := i.cdb.LookupInvoice(client.hash)
+	if err != nil {
+		return err
+	}
+
+	err = client.notify(&invoiceEvent{
+		hash:     client.hash,
+		invoice:  &invoice,
+		newState: invoice.Terms.State,
+	})
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -306,7 +372,7 @@ func (i *invoiceRegistry) AddInvoice(invoice *channeldb.Invoice,
 
 	// Now that we've added the invoice, we'll send dispatch a message to
 	// notify the clients of this new invoice.
-	i.notifyClients(invoice, channeldb.ContractOpen)
+	i.notifyClients(paymentHash, invoice, channeldb.ContractOpen)
 
 	return addIndex, nil
 }
@@ -375,19 +441,44 @@ func (i *invoiceRegistry) SettleInvoice(rHash chainhash.Hash,
 
 	ltndLog.Infof("Payment received: %v", spew.Sdump(invoice))
 
-	i.notifyClients(invoice, channeldb.ContractSettled)
+	i.notifyClients(rHash, invoice, channeldb.ContractSettled)
+
+	return nil
+}
+
+// SettleInvoice attempts to mark an invoice as settled. If the invoice is a
+// debug invoice, then this method is a noop as debug invoices are never fully
+// settled.
+func (i *invoiceRegistry) AcceptInvoice(rHash chainhash.Hash,
+	amtPaid lnwire.MilliSatoshi) error {
+
+	i.Lock()
+	defer i.Unlock()
+
+	ltndLog.Debugf("Accepting invoice %x", rHash[:])
+
+	invoice, err := i.cdb.AcceptInvoice(rHash, amtPaid)
+	if err != nil {
+		return err
+	}
+
+	ltndLog.Infof("Invoice accepted: %v", spew.Sdump(invoice))
+
+	i.notifyClients(rHash, invoice, channeldb.ContractAccepted)
 
 	return nil
 }
 
 // notifyClients notifies all currently registered invoice notification clients
 // of a newly added/settled invoice.
-func (i *invoiceRegistry) notifyClients(invoice *channeldb.Invoice,
+func (i *invoiceRegistry) notifyClients(hash chainhash.Hash,
+	invoice *channeldb.Invoice,
 	newState channeldb.ContractState) {
 
 	event := &invoiceEvent{
 		newState: newState,
 		invoice:  invoice,
+		hash:     hash,
 	}
 
 	select {
@@ -396,13 +487,27 @@ func (i *invoiceRegistry) notifyClients(invoice *channeldb.Invoice,
 	}
 }
 
+type invoiceSubscriptionKit struct {
+	cancelled uint32 // To be used atomically.
+
+	id uint32
+
+	inv *invoiceRegistry
+
+	cancelChan chan struct{}
+
+	wg sync.WaitGroup
+
+	ntfnQueue *queue.ConcurrentQueue
+}
+
 // invoiceSubscription represents an intent to receive updates for newly added
 // or settled invoices. For each newly added invoice, a copy of the invoice
 // will be sent over the NewInvoices channel. Similarly, for each newly settled
 // invoice, a copy of the invoice will be sent over the SettledInvoices
 // channel.
 type invoiceSubscription struct {
-	cancelled uint32 // To be used atomically.
+	invoiceSubscriptionKit
 
 	// NewInvoices is a channel that we'll use to send all newly created
 	// invoices with an invoice index greater than the specified
@@ -426,21 +531,19 @@ type invoiceSubscription struct {
 	// greater than this will be dispatched before any new notifications
 	// are sent out.
 	settleIndex uint64
+}
 
-	ntfnQueue *queue.ConcurrentQueue
+type singleInvoiceSubscription struct {
+	invoiceSubscriptionKit
 
-	id uint32
+	hash chainhash.Hash
 
-	inv *invoiceRegistry
-
-	cancelChan chan struct{}
-
-	wg sync.WaitGroup
+	updates chan *channeldb.Invoice
 }
 
 // Cancel unregisters the invoiceSubscription, freeing any previously allocated
 // resources.
-func (i *invoiceSubscription) Cancel() {
+func (i *invoiceSubscriptionKit) Cancel() {
 	if !atomic.CompareAndSwapUint32(&i.cancelled, 0, 1) {
 		return
 	}
@@ -456,6 +559,16 @@ func (i *invoiceSubscription) Cancel() {
 	i.wg.Wait()
 }
 
+func (i *invoiceSubscriptionKit) notify(event *invoiceEvent) error {
+	select {
+	case i.ntfnQueue.ChanIn() <- event:
+	case <-i.inv.quit:
+		return fmt.Errorf("registry shutting down")
+	}
+
+	return nil
+}
+
 // SubscribeNotifications returns an invoiceSubscription which allows the
 // caller to receive async notifications when any invoices are settled or
 // added. The invoiceIndex parameter is a streaming "checkpoint". We'll start
@@ -467,9 +580,11 @@ func (i *invoiceRegistry) SubscribeNotifications(addIndex, settleIndex uint64) *
 		SettledInvoices: make(chan *channeldb.Invoice),
 		addIndex:        addIndex,
 		settleIndex:     settleIndex,
-		inv:             i,
-		ntfnQueue:       queue.NewConcurrentQueue(20),
-		cancelChan:      make(chan struct{}),
+		invoiceSubscriptionKit: invoiceSubscriptionKit{
+			inv:        i,
+			ntfnQueue:  queue.NewConcurrentQueue(20),
+			cancelChan: make(chan struct{}),
+		},
 	}
 	client.ntfnQueue.Start()
 
@@ -524,6 +639,67 @@ func (i *invoiceRegistry) SubscribeNotifications(addIndex, settleIndex uint64) *
 
 	select {
 	case i.newSubscriptions <- client:
+	case <-i.quit:
+	}
+
+	return client
+}
+
+func (i *invoiceRegistry) SubscribeSingleInvoice(hash chainhash.Hash) *singleInvoiceSubscription {
+	client := &singleInvoiceSubscription{
+		updates: make(chan *channeldb.Invoice),
+		invoiceSubscriptionKit: invoiceSubscriptionKit{
+			inv:        i,
+			ntfnQueue:  queue.NewConcurrentQueue(20),
+			cancelChan: make(chan struct{}),
+		},
+		hash: hash,
+	}
+	client.ntfnQueue.Start()
+
+	i.clientMtx.Lock()
+	client.id = i.nextClientID
+	i.nextClientID++
+	i.clientMtx.Unlock()
+
+	// Before we register this new invoice subscription, we'll launch a new
+	// goroutine that will proxy all notifications appended to the end of
+	// the concurrent queue to the two client-side channels the caller will
+	// feed off of.
+	i.wg.Add(1)
+	go func() {
+		defer i.wg.Done()
+
+		for {
+			select {
+			// A new invoice event has been sent by the
+			// invoiceRegistry! We'll figure out if this is an add
+			// event or a settle event, then dispatch the event to
+			// the client.
+			case ntfn := <-client.ntfnQueue.ChanOut():
+				invoiceEvent := ntfn.(*invoiceEvent)
+
+				select {
+				case client.updates <- invoiceEvent.invoice:
+
+				case <-client.cancelChan:
+					return
+
+				case <-i.quit:
+					return
+				}
+
+			case <-client.cancelChan:
+				return
+
+			case <-i.quit:
+				return
+			}
+		}
+	}()
+
+	select {
+	case i.newSingleSubscriptions <- client:
 	case <-i.quit:
 	}
 

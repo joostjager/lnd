@@ -517,6 +517,8 @@ service Lightning {
         };
     }
 
+    rpc SubscribeSingleInvoice (PaymentHash) returns (stream Invoice);
+
     /** lncli: `decodepayreq`
     DecodePayReq takes an encoded payment request string and attempts to decode
     it, returning a full description of the conditions encoded within the
@@ -1783,6 +1785,7 @@ message Invoice {
     enum InvoiceState {
         OPEN = 0;
         SETTLED = 1;
+        ACCEPTED = 2;
     }
 
     /**
