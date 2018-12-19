@@ -134,69 +134,76 @@ func (i *invoiceRegistry) invoiceEventNotifier() {
 		// A sub-systems has just modified the invoice state, so we'll
 		// dispatch notifications to all registered clients.
 		case event := <-i.invoiceEvents:
-			for clientID, client := range i.notificationClients {
-				// Before we dispatch this event, we'll check
-				// to ensure that this client hasn't already
-				// received this notification in order to
-				// ensure we don't duplicate any events.
-				invoice := event.invoice
-				switch {
-				// If we've already sent this settle event to
-				// the client, then we can skip this.
-				case event.newState == channeldb.ContractSettled &&
-					client.settleIndex >= invoice.SettleIndex:
-					continue
-
-				// Similarly, if we've already sent this add to
-				// the client then we can skip this one.
-				case event.newState == channeldb.ContractOpen &&
-					client.addIndex >= invoice.AddIndex:
-					continue
-
-				// These two states should never happen, but we
-				// log them just in case so we can detect this
-				// instance.
-				case event.newState == channeldb.ContractOpen &&
-					client.addIndex+1 != invoice.AddIndex:
-					ltndLog.Warnf("client=%v for invoice "+
-						"notifications missed an update, "+
-						"add_index=%v, new add event index=%v",
-						clientID, client.addIndex,
-						invoice.AddIndex)
-				case event.newState == channeldb.ContractSettled &&
-					client.settleIndex+1 != invoice.SettleIndex:
-					ltndLog.Warnf("client=%v for invoice "+
-						"notifications missed an update, "+
-						"settle_index=%v, new settle event index=%v",
-						clientID, client.settleIndex,
-						invoice.SettleIndex)
-				}
-
-				select {
-				case client.ntfnQueue.ChanIn() <- &invoiceEvent{
-					newState: event.newState,
-					invoice:  invoice,
-				}:
-				case <-i.quit:
-					return
-				}
-
-				// Each time we send a notification to a
-				// client, we'll record the latest add/settle
-				// index it has. We'll use this to ensure we
-				// don't send a notification twice, which can
-				// happen if a new event is added while we're
-				// catching up a new client.
-				switch event.newState {
-				case channeldb.ContractSettled:
-					client.settleIndex = invoice.SettleIndex
-				case channeldb.ContractOpen:
-					client.addIndex = invoice.AddIndex
-				}
-			}
+			i.dispatchToClients(event)
 
 		case <-i.quit:
 			return
+		}
+	}
+}
+
+func (i *invoiceRegistry) dispatchToClients(event *invoiceEvent) {
+	invoice := event.invoice
+
+	for clientID, client := range i.notificationClients {
+		// Before we dispatch this event, we'll check
+		// to ensure that this client hasn't already
+		// received this notification in order to
+		// ensure we don't duplicate any events.
+
+		// TODO(joostjager): Refactor switches.
+		switch {
+		// If we've already sent this settle event to
+		// the client, then we can skip this.
+		case event.newState == channeldb.ContractSettled &&
+			client.settleIndex >= invoice.SettleIndex:
+			continue
+
+		// Similarly, if we've already sent this add to
+		// the client then we can skip this one.
+		case event.newState == channeldb.ContractOpen &&
+			client.addIndex >= invoice.AddIndex:
+			continue
+
+		// These two states should never happen, but we
+		// log them just in case so we can detect this
+		// instance.
+		case event.newState == channeldb.ContractOpen &&
+			client.addIndex+1 != invoice.AddIndex:
+			ltndLog.Warnf("client=%v for invoice "+
+				"notifications missed an update, "+
+				"add_index=%v, new add event index=%v",
+				clientID, client.addIndex,
+				invoice.AddIndex)
+		case event.newState == channeldb.ContractSettled &&
+			client.settleIndex+1 != invoice.SettleIndex:
+			ltndLog.Warnf("client=%v for invoice "+
+				"notifications missed an update, "+
+				"settle_index=%v, new settle event index=%v",
+				clientID, client.settleIndex,
+				invoice.SettleIndex)
+		}
+
+		select {
+		case client.ntfnQueue.ChanIn() <- &invoiceEvent{
+			newState: event.newState,
+			invoice:  invoice,
+		}:
+		case <-i.quit:
+			return
+		}
+
+		// Each time we send a notification to a
+		// client, we'll record the latest add/settle
+		// index it has. We'll use this to ensure we
+		// don't send a notification twice, which can
+		// happen if a new event is added while we're
+		// catching up a new client.
+		switch event.newState {
+		case channeldb.ContractSettled:
+			client.settleIndex = invoice.SettleIndex
+		case channeldb.ContractOpen:
+			client.addIndex = invoice.AddIndex
 		}
 	}
 }
