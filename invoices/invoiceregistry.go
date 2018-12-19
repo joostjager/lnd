@@ -164,10 +164,13 @@ func (i *InvoiceRegistry) invoiceEventNotifier() {
 		// dispatch notifications to all registered clients.
 		case event := <-i.invoiceEvents:
 			// For backwards compatibility, do not notify all
-			// invoice subscribers of cancel events
-			if event.state != channeldb.ContractCanceled {
+			// invoice subscribers of cancel and accept events.
+			if event.state != channeldb.ContractCanceled &&
+				event.state != channeldb.ContractAccepted {
+
 				i.dispatchToClients(event)
 			}
+
 			i.dispatchToSingleClients(event)
 
 		case <-i.quit:
@@ -504,6 +507,36 @@ func (i *InvoiceRegistry) CancelInvoice(payHash lnhash.Hash) error {
 	log.Infof("Invoice canceled: %v", spew.Sdump(invoice))
 
 	i.notifyClients(payHash, invoice, channeldb.ContractCanceled)
+
+	return nil
+}
+
+// AcceptInvoice attempts to mark an invoice as settled. If the invoice is a
+// debug invoice, then this method is a noop as debug invoices are never fully
+// settled.
+func (i *InvoiceRegistry) AcceptInvoice(rHash lnhash.Hash,
+	amtPaid lnwire.MilliSatoshi) error {
+
+	i.Lock()
+	defer i.Unlock()
+
+	log.Debugf("Accepting invoice %v", rHash)
+
+	invoice, err := i.cdb.AcceptInvoice(rHash, amtPaid)
+
+	// Implement idempotency by returning success if the invoice was already
+	// accepted.
+	if err == channeldb.ErrInvoiceAlreadyAccepted {
+		log.Debugf("Invoice %v already accepted", rHash)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	log.Infof("Invoice accepted: %v", spew.Sdump(invoice))
+
+	i.notifyClients(rHash, invoice, channeldb.ContractAccepted)
 
 	return nil
 }
