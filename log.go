@@ -21,6 +21,7 @@ import (
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -75,6 +76,7 @@ var (
 	arpcLog = build.NewSubLogger("ARPC", backendLog.Logger)
 	invcLog = build.NewSubLogger("INVC", backendLog.Logger)
 	nannLog = build.NewSubLogger("NANN", backendLog.Logger)
+	irpcLog = build.NewSubLogger("IRPC", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
@@ -97,6 +99,7 @@ func init() {
 	autopilotrpc.UseLogger(arpcLog)
 	invoices.UseLogger(invcLog)
 	netann.UseLogger(nannLog)
+	invoicesrpc.UseLogger(irpcLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
@@ -125,6 +128,7 @@ var subsystemLoggers = map[string]btclog.Logger{
 	"ARPC": arpcLog,
 	"INVC": invcLog,
 	"NANN": nannLog,
+	"IRPC": irpcLog,
 }
 
 // initLogRotator initializes the logging rotator to write logs to logFile and
