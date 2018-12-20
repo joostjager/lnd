@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"github.com/lightningnetwork/lnd/invoices"
 	"reflect"
 
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
@@ -31,6 +33,10 @@ type subRPCServerConfigs struct {
 	// AutopilotRPC is a sub-RPC server that exposes methods on the running
 	// autopilot as a gRPC service.
 	AutopilotRPC *autopilotrpc.Config `group:"autopilotrpc" namespace:"autopilotrpc"`
+
+	// InvociesRPC is a sub-RPC server that exposes invoice related methods
+	// as a gRPC service.
+	InvoicesRPC *invoicesrpc.Config `group:"invoicesrpc" namespace:"invoicesrpc"`
 }
 
 // PopulateDependencies attempts to iterate through all the sub-server configs
@@ -41,7 +47,8 @@ type subRPCServerConfigs struct {
 // FetchConfig method.
 func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 	networkDir string, macService *macaroons.Service,
-	atpl *autopilot.Manager) error {
+	atpl *autopilot.Manager,
+	invoiceRegistry *invoices.InvoiceRegistry) error {
 
 	// First, we'll use reflect to obtain a version of the config struct
 	// that allows us to programmatically inspect its fields.
@@ -104,6 +111,13 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 
 			subCfgValue.FieldByName("Manager").Set(
 				reflect.ValueOf(atpl),
+			)
+
+		case *invoicesrpc.Config:
+			subCfgValue := extractReflectValue(cfg)
+
+			subCfgValue.FieldByName("InvoiceRegistry").Set(
+				reflect.ValueOf(invoiceRegistry),
 			)
 
 		default:
