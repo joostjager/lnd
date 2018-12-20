@@ -31,11 +31,11 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
+	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/signal"
@@ -1420,7 +1420,7 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 		chanPoint, force)
 
 	var (
-		updateChan chan *lnrpc.CloseStatusUpdate
+		updateChan chan interface{}
 		errChan    chan error
 	)
 
@@ -1473,13 +1473,9 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 
 		// With the transaction broadcast, we send our first update to
 		// the client.
-		updateChan = make(chan *lnrpc.CloseStatusUpdate, 2)
-		updateChan <- &lnrpc.CloseStatusUpdate{
-			Update: &lnrpc.CloseStatusUpdate_ClosePending{
-				ClosePending: &lnrpc.PendingUpdate{
-					Txid: closingTxid[:],
-				},
-			},
+		updateChan = make(chan interface{}, 2)
+		updateChan <- &pendingUpdate{
+			Txid: closingTxid[:],
 		}
 
 		errChan = make(chan error, 1)
@@ -1488,13 +1484,9 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 			&closingTxid, closingTx.TxOut[0].PkScript, func() {
 				// Respond to the local subsystem which
 				// requested the channel closure.
-				updateChan <- &lnrpc.CloseStatusUpdate{
-					Update: &lnrpc.CloseStatusUpdate_ChanClose{
-						ChanClose: &lnrpc.ChannelCloseUpdate{
-							ClosingTxid: closingTxid[:],
-							Success:     true,
-						},
-					},
+				updateChan <- &channelCloseUpdate{
+					ClosingTxid: closingTxid[:],
+					Success:     true,
 				}
 			})
 	} else {
@@ -1545,18 +1537,26 @@ out:
 				"ChannelPoint(%v): %v", chanPoint, err)
 			return err
 		case closingUpdate := <-updateChan:
+			rpcClosingUpdate, err := createRPCCloseUpdate(
+				closingUpdate,
+			)
+			if err != nil {
+				return err
+			}
+
 			rpcsLog.Tracef("[closechannel] sending update: %v",
-				closingUpdate)
-			if err := updateStream.Send(closingUpdate); err != nil {
+				rpcClosingUpdate)
+
+			if err := updateStream.Send(rpcClosingUpdate); err != nil {
 				return err
 			}
 
 			// If a final channel closing updates is being sent,
 			// then we can break out of our dispatch loop as we no
 			// longer need to process any further updates.
-			switch closeUpdate := closingUpdate.Update.(type) {
-			case *lnrpc.CloseStatusUpdate_ChanClose:
-				h, _ := chainhash.NewHash(closeUpdate.ChanClose.ClosingTxid)
+			switch closeUpdate := closingUpdate.(type) {
+			case *channelCloseUpdate:
+				h, _ := chainhash.NewHash(closeUpdate.ClosingTxid)
 				rpcsLog.Infof("[closechannel] close completed: "+
 					"txid(%v)", h)
 				break out
@@ -1567,6 +1567,32 @@ out:
 	}
 
 	return nil
+}
+
+func createRPCCloseUpdate(update interface{}) (
+	*lnrpc.CloseStatusUpdate, error) {
+
+	switch u := update.(type) {
+	case *channelCloseUpdate:
+		return &lnrpc.CloseStatusUpdate{
+			Update: &lnrpc.CloseStatusUpdate_ChanClose{
+				ChanClose: &lnrpc.ChannelCloseUpdate{
+					ClosingTxid: u.ClosingTxid,
+				},
+			},
+		}, nil
+	case *pendingUpdate:
+		return &lnrpc.CloseStatusUpdate{
+			Update: &lnrpc.CloseStatusUpdate_ClosePending{
+				ClosePending: &lnrpc.PendingUpdate{
+					Txid:        u.Txid,
+					OutputIndex: u.OutputIndex,
+				},
+			},
+		}, nil
+	}
+
+	return nil, errors.New("unknown close status update")
 }
 
 // AbandonChannel removes all channel state from the database except for a
