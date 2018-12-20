@@ -5,6 +5,7 @@ import (
 	"github.com/lightningnetwork/lnd/invoices"
 	"reflect"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
@@ -48,7 +49,8 @@ type subRPCServerConfigs struct {
 func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 	networkDir string, macService *macaroons.Service,
 	atpl *autopilot.Manager,
-	invoiceRegistry *invoices.InvoiceRegistry) error {
+	invoiceRegistry *invoices.InvoiceRegistry,
+	activeNetParams *chaincfg.Params) error {
 
 	// First, we'll use reflect to obtain a version of the config struct
 	// that allows us to programmatically inspect its fields.
@@ -118,6 +120,10 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 
 			subCfgValue.FieldByName("InvoiceRegistry").Set(
 				reflect.ValueOf(invoiceRegistry),
+			)
+
+			subCfgValue.FieldByName("ChainParams").Set(
+				reflect.ValueOf(activeNetParams),
 			)
 
 		default:

@@ -3,6 +3,7 @@
 package invoicesrpc
 
 import (
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/lightningnetwork/lnd/invoices"
 )
 
@@ -13,4 +14,6 @@ import (
 // also be specified.
 type Config struct {
 	InvoiceRegistry *invoices.InvoiceRegistry
+
+	ChainParams *chaincfg.Params
 }

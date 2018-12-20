@@ -3,6 +3,7 @@
 package invoicesrpc
 
 import (
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"os"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -30,6 +31,8 @@ type Server struct {
 	started  int32 // To be used atomically.
 	shutdown int32 // To be used atomically.
 
+	quit chan struct{}
+
 	cfg *Config
 }
 
@@ -56,7 +59,8 @@ func New(cfg *Config) (*Server, lnrpc.MacaroonPerms, error) {
 	// We don't create any new macaroons for this subserver, instead reuse
 	// existing onchain/offchain permissions.
 	server := &Server{
-		cfg: cfg,
+		cfg:  cfg,
+		quit: make(chan struct{}, 1),
 	}
 
 	return server, macPermissions, nil
@@ -73,6 +77,8 @@ func (s *Server) Start() error {
 //
 // NOTE: This is part of the lnrpc.SubServer interface.
 func (s *Server) Stop() error {
+	close(s.quit)
+
 	return nil
 }
 
@@ -95,8 +101,41 @@ func (s *Server) RegisterWithRootServer(grpcServer *grpc.Server) error {
 	// all our methods are routed properly.
 	RegisterInvoicesServer(grpcServer, s)
 
-	log.Debugf("Invoices RPC server successfully register with root " +
+	log.Debugf("Invoices RPC server successfully registered with root " +
 		"gRPC server")
 
 	return nil
+}
+
+// SubscribeInvoices returns a uni-directional stream (server -> client) for
+// notifying the client of invoice state changes.
+func (s *Server) SubscribeSingleInvoice(req *lnrpc.PaymentHash,
+	updateStream Invoices_SubscribeSingleInvoiceServer) error {
+
+	hash, err := chainhash.NewHash(req.RHash)
+	if err != nil {
+		return err
+	}
+
+	invoiceClient := s.cfg.InvoiceRegistry.SubscribeSingleInvoice(*hash)
+	defer invoiceClient.Cancel()
+
+	for {
+		select {
+		case newInvoice := <-invoiceClient.Updates:
+			rpcInvoice, err := lnrpc.CreateRPCInvoice(
+				newInvoice, s.cfg.ChainParams,
+			)
+			if err != nil {
+				return err
+			}
+
+			if err := updateStream.Send(rpcInvoice); err != nil {
+				return err
+			}
+
+		case <-s.quit:
+			return nil
+		}
+	}
 }
