@@ -31,11 +31,11 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
+	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/signal"
@@ -395,6 +395,7 @@ var _ lnrpc.LightningServer = (*rpcServer)(nil)
 func newRPCServer(s *server, macService *macaroons.Service,
 	subServerCgs *subRPCServerConfigs, serverOpts []grpc.ServerOption,
 	restServerOpts []grpc.DialOption, atpl *autopilot.Manager,
+	invoiceRegistry *invoices.InvoiceRegistry,
 	tlsCfg *tls.Config) (*rpcServer, error) {
 
 	var (
@@ -406,7 +407,7 @@ func newRPCServer(s *server, macService *macaroons.Service,
 	// the dependencies they need are properly populated within each sub
 	// server configuration struct.
 	err := subServerCgs.PopulateDependencies(
-		s.cc, networkDir, macService, atpl,
+		s.cc, networkDir, macService, atpl, invoiceRegistry,
 	)
 	if err != nil {
 		return nil, err

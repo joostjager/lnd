@@ -20,6 +20,7 @@ import (
 	"github.com/lightningnetwork/lnd/discovery"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -71,6 +72,7 @@ var (
 	sgnrLog = build.NewSubLogger("SGNR", backendLog.Logger)
 	wlktLog = build.NewSubLogger("WLKT", backendLog.Logger)
 	arpcLog = build.NewSubLogger("ARPC", backendLog.Logger)
+	invcLog = build.NewSubLogger("INVC", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
@@ -91,6 +93,7 @@ func init() {
 	signrpc.UseLogger(sgnrLog)
 	walletrpc.UseLogger(wlktLog)
 	autopilotrpc.UseLogger(arpcLog)
+	invoicesrpc.UseLogger(invcLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
