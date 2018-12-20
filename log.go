@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/lightningnetwork/lnd/invoices"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/lightningnetwork/lnd/discovery"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -49,28 +51,30 @@ var (
 	// application shutdown.
 	logRotator *rotator.Rotator
 
-	ltndLog = build.NewSubLogger("LTND", backendLog.Logger)
-	lnwlLog = build.NewSubLogger("LNWL", backendLog.Logger)
-	peerLog = build.NewSubLogger("PEER", backendLog.Logger)
-	discLog = build.NewSubLogger("DISC", backendLog.Logger)
-	rpcsLog = build.NewSubLogger("RPCS", backendLog.Logger)
-	srvrLog = build.NewSubLogger("SRVR", backendLog.Logger)
-	ntfnLog = build.NewSubLogger("NTFN", backendLog.Logger)
-	chdbLog = build.NewSubLogger("CHDB", backendLog.Logger)
-	fndgLog = build.NewSubLogger("FNDG", backendLog.Logger)
-	hswcLog = build.NewSubLogger("HSWC", backendLog.Logger)
-	utxnLog = build.NewSubLogger("UTXN", backendLog.Logger)
-	brarLog = build.NewSubLogger("BRAR", backendLog.Logger)
-	cmgrLog = build.NewSubLogger("CMGR", backendLog.Logger)
-	crtrLog = build.NewSubLogger("CRTR", backendLog.Logger)
-	btcnLog = build.NewSubLogger("BTCN", backendLog.Logger)
-	atplLog = build.NewSubLogger("ATPL", backendLog.Logger)
-	cnctLog = build.NewSubLogger("CNCT", backendLog.Logger)
-	sphxLog = build.NewSubLogger("SPHX", backendLog.Logger)
-	swprLog = build.NewSubLogger("SWPR", backendLog.Logger)
-	sgnrLog = build.NewSubLogger("SGNR", backendLog.Logger)
-	wlktLog = build.NewSubLogger("WLKT", backendLog.Logger)
-	arpcLog = build.NewSubLogger("ARPC", backendLog.Logger)
+	ltndLog    = build.NewSubLogger("LTND", backendLog.Logger)
+	lnwlLog    = build.NewSubLogger("LNWL", backendLog.Logger)
+	peerLog    = build.NewSubLogger("PEER", backendLog.Logger)
+	discLog    = build.NewSubLogger("DISC", backendLog.Logger)
+	rpcsLog    = build.NewSubLogger("RPCS", backendLog.Logger)
+	srvrLog    = build.NewSubLogger("SRVR", backendLog.Logger)
+	ntfnLog    = build.NewSubLogger("NTFN", backendLog.Logger)
+	chdbLog    = build.NewSubLogger("CHDB", backendLog.Logger)
+	fndgLog    = build.NewSubLogger("FNDG", backendLog.Logger)
+	hswcLog    = build.NewSubLogger("HSWC", backendLog.Logger)
+	utxnLog    = build.NewSubLogger("UTXN", backendLog.Logger)
+	brarLog    = build.NewSubLogger("BRAR", backendLog.Logger)
+	cmgrLog    = build.NewSubLogger("CMGR", backendLog.Logger)
+	crtrLog    = build.NewSubLogger("CRTR", backendLog.Logger)
+	btcnLog    = build.NewSubLogger("BTCN", backendLog.Logger)
+	atplLog    = build.NewSubLogger("ATPL", backendLog.Logger)
+	cnctLog    = build.NewSubLogger("CNCT", backendLog.Logger)
+	sphxLog    = build.NewSubLogger("SPHX", backendLog.Logger)
+	swprLog    = build.NewSubLogger("SWPR", backendLog.Logger)
+	sgnrLog    = build.NewSubLogger("SGNR", backendLog.Logger)
+	wlktLog    = build.NewSubLogger("WLKT", backendLog.Logger)
+	arpcLog    = build.NewSubLogger("ARPC", backendLog.Logger)
+	invcLog    = build.NewSubLogger("INVC", backendLog.Logger)
+	invcRPCLog = build.NewSubLogger("INVC_RPC", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
@@ -91,32 +95,36 @@ func init() {
 	signrpc.UseLogger(sgnrLog)
 	walletrpc.UseLogger(wlktLog)
 	autopilotrpc.UseLogger(arpcLog)
+	invoicesrpc.UseLogger(invcRPCLog)
+	invoices.UseLogger(invcLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
 var subsystemLoggers = map[string]btclog.Logger{
-	"LTND": ltndLog,
-	"LNWL": lnwlLog,
-	"PEER": peerLog,
-	"DISC": discLog,
-	"RPCS": rpcsLog,
-	"SRVR": srvrLog,
-	"NTFN": ntfnLog,
-	"CHDB": chdbLog,
-	"FNDG": fndgLog,
-	"HSWC": hswcLog,
-	"UTXN": utxnLog,
-	"BRAR": brarLog,
-	"CMGR": cmgrLog,
-	"CRTR": crtrLog,
-	"BTCN": btcnLog,
-	"ATPL": atplLog,
-	"CNCT": cnctLog,
-	"SPHX": sphxLog,
-	"SWPR": swprLog,
-	"SGNR": sgnrLog,
-	"WLKT": wlktLog,
-	"ARPC": arpcLog,
+	"LTND":     ltndLog,
+	"LNWL":     lnwlLog,
+	"PEER":     peerLog,
+	"DISC":     discLog,
+	"RPCS":     rpcsLog,
+	"SRVR":     srvrLog,
+	"NTFN":     ntfnLog,
+	"CHDB":     chdbLog,
+	"FNDG":     fndgLog,
+	"HSWC":     hswcLog,
+	"UTXN":     utxnLog,
+	"BRAR":     brarLog,
+	"CMGR":     cmgrLog,
+	"CRTR":     crtrLog,
+	"BTCN":     btcnLog,
+	"ATPL":     atplLog,
+	"CNCT":     cnctLog,
+	"SPHX":     sphxLog,
+	"SWPR":     swprLog,
+	"SGNR":     sgnrLog,
+	"WLKT":     wlktLog,
+	"ARPC":     arpcLog,
+	"INVC":     invcLog,
+	"INVC_RPC": invcRPCLog,
 }
 
 // initLogRotator initializes the logging rotator to write logs to logFile and
