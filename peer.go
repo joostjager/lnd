@@ -23,7 +23,6 @@ import (
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnpeer"
-	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/ticker"
@@ -2037,12 +2036,8 @@ func (p *peer) finalizeChanClosure(chanCloser *channelCloser) {
 	// If this is a locally requested shutdown, update the caller with a
 	// new event detailing the current pending state of this request.
 	if closeReq != nil {
-		closeReq.Updates <- &lnrpc.CloseStatusUpdate{
-			Update: &lnrpc.CloseStatusUpdate_ClosePending{
-				ClosePending: &lnrpc.PendingUpdate{
-					Txid: closingTxid[:],
-				},
-			},
+		closeReq.Updates <- &htlcswitch.PendingUpdate{
+			Txid: closingTxid[:],
 		}
 	}
 
@@ -2052,13 +2047,9 @@ func (p *peer) finalizeChanClosure(chanCloser *channelCloser) {
 			// Respond to the local subsystem which requested the
 			// channel closure.
 			if closeReq != nil {
-				closeReq.Updates <- &lnrpc.CloseStatusUpdate{
-					Update: &lnrpc.CloseStatusUpdate_ChanClose{
-						ChanClose: &lnrpc.ChannelCloseUpdate{
-							ClosingTxid: closingTxid[:],
-							Success:     true,
-						},
-					},
+				closeReq.Updates <- &htlcswitch.ChannelCloseUpdate{
+					ClosingTxid: closingTxid[:],
+					Success:     true,
 				}
 			}
 		})

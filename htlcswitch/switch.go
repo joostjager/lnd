@@ -17,7 +17,6 @@ import (
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/contractcourt"
-	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/ticker"
@@ -101,6 +100,18 @@ const (
 	CloseBreach
 )
 
+// PendingUpdate describes the pending state of a closing channel.
+type PendingUpdate struct {
+	Txid        []byte
+	OutputIndex uint32
+}
+
+// ChannelCloseUpdate contains the outcome of the close channel operation.
+type ChannelCloseUpdate struct {
+	ClosingTxid []byte
+	Success     bool
+}
+
 // ChanClose represents a request which close a particular channel specified by
 // its id.
 type ChanClose struct {
@@ -119,7 +130,7 @@ type ChanClose struct {
 
 	// Updates is used by request creator to receive the notifications about
 	// execution of the close channel request.
-	Updates chan *lnrpc.CloseStatusUpdate
+	Updates chan interface{}
 
 	// Err is used by request creator to receive request execution error.
 	Err chan error
@@ -1415,11 +1426,11 @@ func (s *Switch) teardownCircuit(pkt *htlcPacket) error {
 // then the last parameter should be the ideal fee-per-kw that will be used as
 // a starting point for close negotiation.
 func (s *Switch) CloseLink(chanPoint *wire.OutPoint, closeType ChannelCloseType,
-	targetFeePerKw lnwallet.SatPerKWeight) (chan *lnrpc.CloseStatusUpdate,
+	targetFeePerKw lnwallet.SatPerKWeight) (chan interface{},
 	chan error) {
 
 	// TODO(roasbeef) abstract out the close updates.
-	updateChan := make(chan *lnrpc.CloseStatusUpdate, 2)
+	updateChan := make(chan interface{}, 2)
 	errChan := make(chan error, 1)
 
 	command := &ChanClose{
