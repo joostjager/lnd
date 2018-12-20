@@ -26,6 +26,7 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/htlcswitch/hodl"
+	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnpeer"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -1563,7 +1564,7 @@ func newSingleLinkTestHarness(chanAmt, chanReserve btcutil.Amount) (
 		UpdateContractSignals: func(*contractcourt.ContractSignals) error {
 			return nil
 		},
-		Registry:       invoiceRegistry,
+		Registry:       invoices.InvoiceRegistry,
 		ChainEvents:    &contractcourt.ChainEventSubscription{},
 		BatchTicker:    bticker,
 		FwdPkgGCTicker: ticker.MockNew(15 * time.Second),
@@ -4078,7 +4079,7 @@ func restartLink(aliceChannel *lnwallet.LightningChannel, aliceSwitch *Switch,
 		UpdateContractSignals: func(*contractcourt.ContractSignals) error {
 			return nil
 		},
-		Registry:       invoiceRegistry,
+		Registry:       invoices.InvoiceRegistry,
 		ChainEvents:    &contractcourt.ChainEventSubscription{},
 		BatchTicker:    bticker,
 		FwdPkgGCTicker: ticker.New(5 * time.Second),
