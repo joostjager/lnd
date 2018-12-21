@@ -18,7 +18,6 @@ func makeFakePayment() *OutgoingPayment {
 		// failures due to the monotonic time component.
 		CreationDate:   time.Unix(time.Now().Unix(), 0),
 		Memo:           []byte("fake memo"),
-		Receipt:        []byte("fake receipt"),
 		PaymentRequest: []byte(""),
 	}
 
@@ -69,11 +68,6 @@ func makeRandomFakePayment() (*OutgoingPayment, error) {
 	}
 
 	fakeInvoice.Memo, err = randomBytes(1, 50)
-	if err != nil {
-		return nil, err
-	}
-
-	fakeInvoice.Receipt, err = randomBytes(1, 50)
 	if err != nil {
 		return nil, err
 	}

@@ -2955,15 +2955,11 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		copy(paymentPreimage[:], invoice.RPreimage[:])
 	}
 
-	// The size of the memo, receipt and description hash attached must not
-	// exceed the maximum values for either of the fields.
+	// The size of the memo and description hash attached must not exceed
+	// the maximum values for either of the fields.
 	if len(invoice.Memo) > channeldb.MaxMemoSize {
 		return nil, fmt.Errorf("memo too large: %v bytes "+
 			"(maxsize=%v)", len(invoice.Memo), channeldb.MaxMemoSize)
-	}
-	if len(invoice.Receipt) > channeldb.MaxReceiptSize {
-		return nil, fmt.Errorf("receipt too large: %v bytes "+
-			"(maxsize=%v)", len(invoice.Receipt), channeldb.MaxReceiptSize)
 	}
 	if len(invoice.DescriptionHash) > 0 && len(invoice.DescriptionHash) != 32 {
 		return nil, fmt.Errorf("description hash is %v bytes, must be %v",
@@ -3212,7 +3208,6 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	newInvoice := &channeldb.Invoice{
 		CreationDate:   creationDate,
 		Memo:           []byte(invoice.Memo),
-		Receipt:        invoice.Receipt,
 		PaymentRequest: []byte(payReqString),
 		Terms: channeldb.ContractTerm{
 			Value: amtMSat,
@@ -3279,7 +3274,6 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 
 	return &lnrpc.Invoice{
 		Memo:            string(invoice.Memo[:]),
-		Receipt:         invoice.Receipt[:],
 		RHash:           decoded.PaymentHash[:],
 		RPreimage:       preimage[:],
 		Value:           int64(satAmt),

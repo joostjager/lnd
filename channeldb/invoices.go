@@ -108,12 +108,6 @@ type Invoice struct {
 	// or any other message which fits within the size constraints.
 	Memo []byte
 
-	// Receipt is an optional field dedicated for storing a
-	// cryptographically binding receipt of payment.
-	//
-	// TODO(roasbeef): document scheme.
-	Receipt []byte
-
 	// PaymentRequest is an optional field where a payment request created
 	// for this invoice can be stored.
 	PaymentRequest []byte
@@ -161,11 +155,6 @@ func validateInvoice(i *Invoice) error {
 	if len(i.Memo) > MaxMemoSize {
 		return fmt.Errorf("max length a memo is %v, and invoice "+
 			"of length %v was provided", MaxMemoSize, len(i.Memo))
-	}
-	if len(i.Receipt) > MaxReceiptSize {
-		return fmt.Errorf("max length a receipt is %v, and invoice "+
-			"of length %v was provided", MaxReceiptSize,
-			len(i.Receipt))
 	}
 	if len(i.PaymentRequest) > MaxPaymentRequestSize {
 		return fmt.Errorf("max length of payment request is %v, length "+
@@ -738,9 +727,12 @@ func serializeInvoice(w io.Writer, i *Invoice) error {
 	if err := wire.WriteVarBytes(w, 0, i.Memo[:]); err != nil {
 		return err
 	}
-	if err := wire.WriteVarBytes(w, 0, i.Receipt[:]); err != nil {
+
+	// Receipt is not used anymore, write 0 bytes.
+	if err := wire.WriteVarBytes(w, 0, nil); err != nil {
 		return err
 	}
+
 	if err := wire.WriteVarBytes(w, 0, i.PaymentRequest[:]); err != nil {
 		return err
 	}
@@ -810,7 +802,9 @@ func deserializeInvoice(r io.Reader) (Invoice, error) {
 	if err != nil {
 		return invoice, err
 	}
-	invoice.Receipt, err = wire.ReadVarBytes(r, 0, MaxReceiptSize, "")
+
+	// Receipt is not used anymore.
+	_, err = wire.ReadVarBytes(r, 0, MaxReceiptSize, "")
 	if err != nil {
 		return invoice, err
 	}
