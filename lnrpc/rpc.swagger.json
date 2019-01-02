@@ -1889,6 +1889,10 @@
           "type": "integer",
           "format": "int64",
           "title": "/ Number of inactive channels"
+        },
+        "network": {
+          "type": "string",
+          "title": "/ The network the node is connected to"
         }
       }
     },

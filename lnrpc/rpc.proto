@@ -1151,6 +1151,9 @@ message GetInfoResponse {
 
     /// Number of inactive channels
     uint32 num_inactive_channels = 15 [json_name = "num_inactive_channels"];
+
+    /// The network the node is connected to
+    string network = 16 [json_name = "network"];
 }
 
 message ConfirmationUpdate {
