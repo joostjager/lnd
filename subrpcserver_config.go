@@ -9,6 +9,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/chainrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
@@ -39,6 +40,10 @@ type subRPCServerConfigs struct {
 	// InvociesRPC is a sub-RPC server that exposes invoice related methods
 	// as a gRPC service.
 	InvoicesRPC *invoicesrpc.Config `group:"invoicesrpc" namespace:"invoicesrpc"`
+	// ChainRPC is a sub-RPC server that exposes functionality allowing a
+	// client to be notified of certain on-chain events (new blocks,
+	// confirmations, spends).
+	ChainRPC *chainrpc.Config `group:"chainrpc" namespace:"chainrpc"`
 }
 
 // PopulateDependencies attempts to iterate through all the sub-server configs
@@ -134,6 +139,19 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			)
 			subCfgValue.FieldByName("ChainParams").Set(
 				reflect.ValueOf(activeNetParams),
+			)
+
+		case *chainrpc.Config:
+			subCfgValue := extractReflectValue(cfg)
+
+			subCfgValue.FieldByName("NetworkDir").Set(
+				reflect.ValueOf(networkDir),
+			)
+			subCfgValue.FieldByName("MacService").Set(
+				reflect.ValueOf(macService),
+			)
+			subCfgValue.FieldByName("ChainNotifier").Set(
+				reflect.ValueOf(cc.chainNotifier),
 			)
 
 		default:

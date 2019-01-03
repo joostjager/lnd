@@ -75,6 +75,7 @@ var (
 	arpcLog    = build.NewSubLogger("ARPC", backendLog.Logger)
 	invcLog    = build.NewSubLogger("INVC", backendLog.Logger)
 	invcRPCLog = build.NewSubLogger("INVC_RPC", backendLog.Logger)
+	ntfrLog    = build.NewSubLogger("NTFR", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
