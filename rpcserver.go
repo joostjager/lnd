@@ -3278,111 +3278,6 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	}, nil
 }
 
-// createRPCInvoice creates an *lnrpc.Invoice from the *channeldb.Invoice.
-func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
-	paymentRequest := string(invoice.PaymentRequest)
-	decoded, err := zpay32.Decode(paymentRequest, activeNetParams.Params)
-	if err != nil {
-		return nil, fmt.Errorf("unable to decode payment request: %v",
-			err)
-	}
-
-	descHash := []byte("")
-	if decoded.DescriptionHash != nil {
-		descHash = decoded.DescriptionHash[:]
-	}
-
-	fallbackAddr := ""
-	if decoded.FallbackAddr != nil {
-		fallbackAddr = decoded.FallbackAddr.String()
-	}
-
-	settleDate := int64(0)
-	if !invoice.SettleDate.IsZero() {
-		settleDate = invoice.SettleDate.Unix()
-	}
-
-	// Expiry time will default to 3600 seconds if not specified
-	// explicitly.
-	expiry := int64(decoded.Expiry().Seconds())
-
-	// The expiry will default to 9 blocks if not specified explicitly.
-	cltvExpiry := decoded.MinFinalCLTVExpiry()
-
-	// Convert between the `lnrpc` and `routing` types.
-	routeHints := createRPCRouteHints(decoded.RouteHints)
-
-	preimage := invoice.Terms.PaymentPreimage
-	satAmt := invoice.Terms.Value.ToSatoshis()
-	satAmtPaid := invoice.AmtPaid.ToSatoshis()
-
-	isSettled := invoice.Terms.State == channeldb.ContractSettled
-
-	var state lnrpc.Invoice_InvoiceState
-	switch invoice.Terms.State {
-	case channeldb.ContractOpen:
-		state = lnrpc.Invoice_OPEN
-	case channeldb.ContractSettled:
-		state = lnrpc.Invoice_SETTLED
-	default:
-		return nil, fmt.Errorf("unknown invoice state")
-	}
-
-	return &lnrpc.Invoice{
-		Memo:            string(invoice.Memo[:]),
-		Receipt:         invoice.Receipt[:],
-		RHash:           decoded.PaymentHash[:],
-		RPreimage:       preimage[:],
-		Value:           int64(satAmt),
-		CreationDate:    invoice.CreationDate.Unix(),
-		SettleDate:      settleDate,
-		Settled:         isSettled,
-		PaymentRequest:  paymentRequest,
-		DescriptionHash: descHash,
-		Expiry:          expiry,
-		CltvExpiry:      cltvExpiry,
-		FallbackAddr:    fallbackAddr,
-		RouteHints:      routeHints,
-		AddIndex:        invoice.AddIndex,
-		Private:         len(routeHints) > 0,
-		SettleIndex:     invoice.SettleIndex,
-		AmtPaidSat:      int64(satAmtPaid),
-		AmtPaidMsat:     int64(invoice.AmtPaid),
-		AmtPaid:         int64(invoice.AmtPaid),
-		State:           state,
-	}, nil
-}
-
-// createRPCRouteHints takes in the decoded form of an invoice's route hints
-// and converts them into the lnrpc type.
-func createRPCRouteHints(routeHints [][]routing.HopHint) []*lnrpc.RouteHint {
-	var res []*lnrpc.RouteHint
-
-	for _, route := range routeHints {
-		hopHints := make([]*lnrpc.HopHint, 0, len(route))
-		for _, hop := range route {
-			pubKey := hex.EncodeToString(
-				hop.NodeID.SerializeCompressed(),
-			)
-
-			hint := &lnrpc.HopHint{
-				NodeId:                    pubKey,
-				ChanId:                    hop.ChannelID,
-				FeeBaseMsat:               hop.FeeBaseMSat,
-				FeeProportionalMillionths: hop.FeeProportionalMillionths,
-				CltvExpiryDelta:           uint32(hop.CLTVExpiryDelta),
-			}
-
-			hopHints = append(hopHints, hint)
-		}
-
-		routeHint := &lnrpc.RouteHint{HopHints: hopHints}
-		res = append(res, routeHint)
-	}
-
-	return res
-}
-
 // LookupInvoice attempts to look up an invoice according to its payment hash.
 // The passed payment hash *must* be exactly 32 bytes, if not an error is
 // returned.
@@ -3425,7 +3320,9 @@ func (r *rpcServer) LookupInvoice(ctx context.Context,
 			return spew.Sdump(invoice)
 		}))
 
-	rpcInvoice, err := createRPCInvoice(&invoice)
+	rpcInvoice, err := lnrpc.CreateRPCInvoice(
+		&invoice, activeNetParams.Params,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -3465,7 +3362,9 @@ func (r *rpcServer) ListInvoices(ctx context.Context,
 		LastIndexOffset:  invoiceSlice.LastIndexOffset,
 	}
 	for i, invoice := range invoiceSlice.Invoices {
-		resp.Invoices[i], err = createRPCInvoice(&invoice)
+		resp.Invoices[i], err = lnrpc.CreateRPCInvoice(
+			&invoice, activeNetParams.Params,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -3487,7 +3386,9 @@ func (r *rpcServer) SubscribeInvoices(req *lnrpc.InvoiceSubscription,
 	for {
 		select {
 		case newInvoice := <-invoiceClient.NewInvoices:
-			rpcInvoice, err := createRPCInvoice(newInvoice)
+			rpcInvoice, err := lnrpc.CreateRPCInvoice(
+				newInvoice, activeNetParams.Params,
+			)
 			if err != nil {
 				return err
 			}
@@ -3497,7 +3398,9 @@ func (r *rpcServer) SubscribeInvoices(req *lnrpc.InvoiceSubscription,
 			}
 
 		case settledInvoice := <-invoiceClient.SettledInvoices:
-			rpcInvoice, err := createRPCInvoice(settledInvoice)
+			rpcInvoice, err := lnrpc.CreateRPCInvoice(
+				settledInvoice, activeNetParams.Params,
+			)
 			if err != nil {
 				return err
 			}
@@ -4401,7 +4304,7 @@ func (r *rpcServer) DecodePayReq(ctx context.Context,
 	expiry := int64(payReq.Expiry().Seconds())
 
 	// Convert between the `lnrpc` and `routing` types.
-	routeHints := createRPCRouteHints(payReq.RouteHints)
+	routeHints := lnrpc.CreateRPCRouteHints(payReq.RouteHints)
 
 	amt := int64(0)
 	if payReq.MilliSat != nil {
