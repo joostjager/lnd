@@ -143,8 +143,121 @@ func TestSettleInvoice(t *testing.T) {
 		t.Fatal("expected duplicate settle to succeed")
 	}
 
+	// Try to cancel.
+	err = registry.CancelInvoice(hash)
+	if err == nil {
+		t.Fatal("expected cancelation of a settled invoice to fail")
+	}
+
 	subscription.Cancel()
 	allSubscriptions.Cancel()
 
 	registry.Stop()
+}
+
+// TestCancelInvoice tests cancelation of an invoice and related notifications.
+func TestCancelInvoice(t *testing.T) {
+	defer leaktest.Check(t)()
+
+	// Create a temporary database for this test.
+	tempDirName, err := ioutil.TempDir("", "channeldb")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cdb, err := channeldb.Open(tempDirName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Instantiate and start the invoice registry.
+	registry := NewRegistry(cdb, &chaincfg.MainNetParams)
+
+	err = registry.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allSubscriptions := registry.SubscribeNotifications(0, 0)
+
+	// Subscribe to the not yet existing invoice.
+	subscription := registry.SubscribeSingleInvoice(hash)
+
+	if subscription.hash != hash {
+		t.Fatalf("expected subscription for provided hash")
+	}
+
+	// Add the invoice.
+	invoice := &channeldb.Invoice{
+		Terms: channeldb.ContractTerm{
+			PaymentPreimage: preimage,
+			Value:           lnwire.MilliSatoshi(100000),
+		},
+	}
+
+	_, err = registry.AddInvoice(invoice, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// We expect the open state to be sent to the single invoice subscriber.
+	select {
+	case update := <-subscription.Updates:
+		if update.Terms.State != channeldb.ContractOpen {
+			t.Fatalf(
+				"expected state ContractOpen, but got %v",
+				update.Terms.State,
+			)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("no update received")
+	}
+
+	// We expect a new invoice notification to be sent out.
+	select {
+	case newInvoice := <-allSubscriptions.NewInvoices:
+		if newInvoice.Terms.State != channeldb.ContractOpen {
+			t.Fatalf(
+				"expected state ContractOpen, but got %v",
+				newInvoice.Terms.State,
+			)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("no update received")
+	}
+
+	// Cancel invoice.
+	err = registry.CancelInvoice(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// We expect the canceled state to be sent to the single invoice
+	// subscriber.
+	select {
+	case update := <-subscription.Updates:
+		if update.Terms.State != channeldb.ContractCanceled {
+			t.Fatalf(
+				"expected state ContractOpen, but got %v",
+				update.Terms.State,
+			)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("no update received")
+	}
+
+	// We expect no cancel notification to be sent to all invoice
+	// subscribers (backwards compatibility).
+
+	// Try to cancel again.
+	err = registry.CancelInvoice(hash)
+	if err != nil {
+		t.Fatal("expected cancelation of a canceled invoice to succeed")
+	}
+
+	subscription.Cancel()
+	allSubscriptions.Cancel()
+
+	registry.Stop()
+
 }

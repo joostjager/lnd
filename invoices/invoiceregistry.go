@@ -163,7 +163,11 @@ func (i *InvoiceRegistry) invoiceEventNotifier() {
 		// A sub-systems has just modified the invoice state, so we'll
 		// dispatch notifications to all registered clients.
 		case event := <-i.invoiceEvents:
-			i.dispatchToClients(event)
+			// For backwards compatibility, do not notify all
+			// invoice subscribers of cancel events
+			if event.state != channeldb.ContractCanceled {
+				i.dispatchToClients(event)
+			}
 			i.dispatchToSingleClients(event)
 
 		case <-i.quit:
@@ -257,7 +261,7 @@ func (i *InvoiceRegistry) dispatchToClients(event *invoiceEvent) {
 		case channeldb.ContractOpen:
 			client.addIndex = invoice.AddIndex
 		default:
-			log.Errorf("unknown invoice state: %v", event.state)
+			log.Errorf("unexpected invoice state: %v", event.state)
 		}
 	}
 }
@@ -471,6 +475,34 @@ func (i *InvoiceRegistry) SettleInvoice(rHash chainhash.Hash,
 	log.Infof("Payment received: %v", spew.Sdump(invoice))
 
 	i.notifyClients(rHash, invoice, channeldb.ContractSettled)
+
+	return nil
+}
+
+// CancelInvoice attempts to cancel the invoice corresponding to the passed
+// payment hash.
+func (i *InvoiceRegistry) CancelInvoice(payHash chainhash.Hash) error {
+	i.Lock()
+	defer i.Unlock()
+
+	log.Debugf("Canceling invoice %x", payHash[:])
+
+	invoice, err := i.cdb.CancelInvoice(payHash)
+
+	// Implement idempotency by returning success if the invoice was already
+	// canceled.
+	if err == channeldb.ErrInvoiceAlreadyCanceled {
+		log.Debugf("Invoice %x already canceled", payHash[:])
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	log.Infof("Invoice canceled: %v", spew.Sdump(invoice))
+
+	i.notifyClients(payHash, invoice, channeldb.ContractCanceled)
 
 	return nil
 }

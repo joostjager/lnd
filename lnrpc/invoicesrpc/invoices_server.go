@@ -4,6 +4,7 @@ package invoicesrpc
 
 import (
 	"context"
+	"fmt"
 	"google.golang.org/grpc"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 	"io/ioutil"
@@ -28,6 +29,10 @@ var (
 	macaroonOps = []bakery.Op{
 		{
 			Entity: "invoices",
+			Action: "write",
+		},
+		{
+			Entity: "invoices",
 			Action: "read",
 		},
 	}
@@ -37,6 +42,10 @@ var (
 		"/invoicesrpc.Invoices/SubscribeSingleInvoice": {{
 			Entity: "invoices",
 			Action: "read",
+		}},
+		"/invoicesrpc.Invoices/CancelInvoice": {{
+			Entity: "invoices",
+			Action: "write",
 		}},
 	}
 
@@ -180,4 +189,24 @@ func (s *Server) SubscribeSingleInvoice(req *lnrpc.PaymentHash,
 			return nil
 		}
 	}
+}
+
+func (s *Server) CancelInvoice(ctx context.Context,
+	in *CancelInvoiceMsg) (*CancelInvoiceResp, error) {
+
+	if len(in.PaymentHash) != 32 {
+		return nil, fmt.Errorf("invalid hash length")
+	}
+
+	var paymentHash [32]byte
+	copy(paymentHash[:], in.PaymentHash)
+
+	err := s.cfg.InvoiceRegistry.CancelInvoice(paymentHash)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Infof("Canceled invoice %x", paymentHash)
+
+	return &CancelInvoiceResp{}, nil
 }
