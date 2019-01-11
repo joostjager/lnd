@@ -1813,6 +1813,7 @@ message Invoice {
     enum InvoiceState {
         OPEN = 0;
         SETTLED = 1;
+        CANCELED = 2;
     }
 
     /**
