@@ -28,6 +28,10 @@ var (
 	macaroonOps = []bakery.Op{
 		{
 			Entity: "invoices",
+			Action: "write",
+		},
+		{
+			Entity: "invoices",
 			Action: "read",
 		},
 	}
@@ -37,6 +41,10 @@ var (
 		"/invoicesrpc.Invoices/SubscribeSingleInvoice": {{
 			Entity: "invoices",
 			Action: "read",
+		}},
+		"/invoicesrpc.Invoices/CancelInvoice": {{
+			Entity: "invoices",
+			Action: "write",
 		}},
 	}
 
@@ -180,4 +188,22 @@ func (s *Server) SubscribeSingleInvoice(req *lnrpc.PaymentHash,
 			return nil
 		}
 	}
+}
+
+func (s *Server) CancelInvoice(ctx context.Context,
+	in *CancelInvoiceMsg) (*CancelInvoiceResp, error) {
+
+	paymentHash, err := lnhash.NewHash(in.PaymentHash)
+	if err != nil {
+		return nil, err
+	}
+
+	err = s.cfg.InvoiceRegistry.CancelInvoice(*paymentHash)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Infof("Canceled invoice %v", paymentHash)
+
+	return &CancelInvoiceResp{}, nil
 }
