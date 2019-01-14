@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -56,6 +57,10 @@ var (
 	//
 	//   settleIndexNo => invoiceKey
 	settleIndexBucket = []byte("invoice-settle-index")
+
+	// ErrInvoiceAlreadySettled is returned when the invoice is already
+	// settled.
+	ErrInvoiceAlreadySettled = errors.New("invoice already settled")
 )
 
 const (
@@ -625,21 +630,14 @@ func (d *DB) SettleInvoice(paymentHash [32]byte,
 			return ErrInvoiceNotFound
 		}
 
-		invoice, err := settleInvoice(
+		settledInvoice, err = settleInvoice(
 			invoices, settleIndex, invoiceNum, amtPaid,
 		)
-		if err != nil {
-			return err
-		}
 
-		settledInvoice = invoice
-		return nil
+		return err
 	})
-	if err != nil {
-		return nil, err
-	}
 
-	return settledInvoice, nil
+	return settledInvoice, err
 }
 
 // InvoicesSettledSince can be used by callers to catch up any settled invoices
@@ -897,10 +895,8 @@ func settleInvoice(invoices, settleIndex *bbolt.Bucket, invoiceNum []byte,
 		return nil, err
 	}
 
-	// Add idempotency to duplicate settles, return here to avoid
-	// overwriting the previous info.
 	if invoice.Terms.State == ContractSettled {
-		return &invoice, nil
+		return &invoice, ErrInvoiceAlreadySettled
 	}
 
 	// Now that we know the invoice hasn't already been settled, we'll
