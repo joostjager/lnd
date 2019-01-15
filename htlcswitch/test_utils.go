@@ -26,6 +26,7 @@ import (
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnpeer"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/shachain"
@@ -650,11 +651,11 @@ func generateHops(payAmt lnwire.MilliSatoshi, startingHeight uint32,
 }
 
 type paymentResponse struct {
-	rhash chainhash.Hash
+	rhash lntypes.Hash
 	err   chan error
 }
 
-func (r *paymentResponse) Wait(d time.Duration) (chainhash.Hash, error) {
+func (r *paymentResponse) Wait(d time.Duration) (lntypes.Hash, error) {
 	select {
 	case err := <-r.err:
 		close(r.err)
@@ -679,7 +680,7 @@ func (n *threeHopNetwork) makePayment(sendingPeer, receivingPeer lnpeer.Peer,
 
 	paymentErr := make(chan error, 1)
 
-	var rhash chainhash.Hash
+	var rhash lntypes.Hash
 
 	sender := sendingPeer.(*mockServer)
 	receiver := receivingPeer.(*mockServer)
