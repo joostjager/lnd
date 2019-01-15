@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"github.com/lightningnetwork/lnd/lnhash"
 	prand "math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -2301,7 +2301,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// We're the designated payment destination.  Therefore
 			// we attempt to see if we have an invoice locally
 			// which'll allow us to settle this htlc.
-			invoiceHash := chainhash.Hash(pd.RHash)
+			invoiceHash := lnhash.Hash(pd.RHash)
 			invoice, minCltvDelta, err := l.cfg.Registry.LookupInvoice(
 				invoiceHash,
 			)

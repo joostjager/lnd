@@ -1,9 +1,9 @@
 package main
 
 import (
+	"github.com/lightningnetwork/lnd/lnhash"
 	"sync"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/invoices"
@@ -72,7 +72,7 @@ func (p *preimageBeacon) LookupPreimage(payHash []byte) ([]byte, bool) {
 
 	// First, we'll check the invoice registry to see if we already know of
 	// the preimage as it's on that we created ourselves.
-	var invoiceKey chainhash.Hash
+	var invoiceKey lnhash.Hash
 	copy(invoiceKey[:], payHash)
 	invoice, _, err := p.invoices.LookupInvoice(invoiceKey)
 	switch {

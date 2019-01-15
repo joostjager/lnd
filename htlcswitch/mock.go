@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"github.com/lightningnetwork/lnd/lnhash"
 	"io"
 	"io/ioutil"
 	"net"
@@ -685,18 +686,18 @@ var _ ChannelLink = (*mockChannelLink)(nil)
 type mockInvoiceRegistry struct {
 	sync.Mutex
 
-	invoices   map[chainhash.Hash]channeldb.Invoice
+	invoices   map[lnhash.Hash]channeldb.Invoice
 	finalDelta uint32
 }
 
 func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
 	return &mockInvoiceRegistry{
 		finalDelta: minDelta,
-		invoices:   make(map[chainhash.Hash]channeldb.Invoice),
+		invoices:   make(map[lnhash.Hash]channeldb.Invoice),
 	}
 }
 
-func (i *mockInvoiceRegistry) LookupInvoice(rHash chainhash.Hash) (channeldb.Invoice, uint32, error) {
+func (i *mockInvoiceRegistry) LookupInvoice(rHash lnhash.Hash) (channeldb.Invoice, uint32, error) {
 	i.Lock()
 	defer i.Unlock()
 
@@ -709,7 +710,7 @@ func (i *mockInvoiceRegistry) LookupInvoice(rHash chainhash.Hash) (channeldb.Inv
 	return invoice, i.finalDelta, nil
 }
 
-func (i *mockInvoiceRegistry) SettleInvoice(rhash chainhash.Hash,
+func (i *mockInvoiceRegistry) SettleInvoice(rhash lnhash.Hash,
 	amt lnwire.MilliSatoshi) error {
 
 	i.Lock()
@@ -736,7 +737,7 @@ func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
 	defer i.Unlock()
 
 	rhash := fastsha256.Sum256(invoice.Terms.PaymentPreimage[:])
-	i.invoices[chainhash.Hash(rhash)] = invoice
+	i.invoices[lnhash.Hash(rhash)] = invoice
 
 	return nil
 }

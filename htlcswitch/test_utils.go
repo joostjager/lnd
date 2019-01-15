@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"github.com/lightningnetwork/lnd/lnhash"
 	"io/ioutil"
 	"math/big"
 	"net"
@@ -650,11 +651,11 @@ func generateHops(payAmt lnwire.MilliSatoshi, startingHeight uint32,
 }
 
 type paymentResponse struct {
-	rhash chainhash.Hash
+	rhash lnhash.Hash
 	err   chan error
 }
 
-func (r *paymentResponse) Wait(d time.Duration) (chainhash.Hash, error) {
+func (r *paymentResponse) Wait(d time.Duration) (lnhash.Hash, error) {
 	select {
 	case err := <-r.err:
 		close(r.err)
@@ -679,7 +680,7 @@ func (n *threeHopNetwork) makePayment(sendingPeer, receivingPeer lnpeer.Peer,
 
 	paymentErr := make(chan error, 1)
 
-	var rhash chainhash.Hash
+	var rhash lnhash.Hash
 
 	sender := sendingPeer.(*mockServer)
 	receiver := receivingPeer.(*mockServer)
