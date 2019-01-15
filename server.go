@@ -36,6 +36,7 @@ import (
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnpeer"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/nat"
@@ -735,8 +736,12 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		DisableChannel: func(op wire.OutPoint) error {
 			return s.announceChanStatus(op, true)
 		},
-		Sweeper:       s.sweeper,
-		SettleInvoice: s.invoices.SettleInvoice,
+		Sweeper: s.sweeper,
+		SettleInvoice: func(hash lntypes.Hash,
+			amt lnwire.MilliSatoshi) error {
+
+			return s.invoices.SettleInvoice(hash, amt, nil)
+		},
 	}, chanDB)
 
 	s.breachArbiter = newBreachArbiter(&BreachConfig{
