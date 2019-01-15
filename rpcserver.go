@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/lightningnetwork/lnd/lnhash"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"io"
 	"math"
@@ -2988,7 +2989,37 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		ChanDB:            r.server.chanDB,
 	}
 
-	return invoicesrpc.AddInvoice(ctx, addInvoiceCfg, invoice)
+	var preimage *lnhash.Hash
+	if invoice.RPreimage != nil {
+		var err error
+		preimage, err = lnhash.NewHash(invoice.RPreimage)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	addInvoiceData := &invoicesrpc.AddInvoiceData{
+		Memo:            invoice.Memo,
+		Receipt:         invoice.Receipt,
+		Preimage:        preimage,
+		Value:           invoice.Value,
+		DescriptionHash: invoice.DescriptionHash,
+		Expiry:          invoice.Expiry,
+		FallbackAddr:    invoice.FallbackAddr,
+		CltvExpiry:      invoice.CltvExpiry,
+		Private:         invoice.Private,
+	}
+
+	hash, dbInvoice, err := invoicesrpc.AddInvoice(ctx, addInvoiceCfg, addInvoiceData)
+	if err != nil {
+		return nil, err
+	}
+
+	return &lnrpc.AddInvoiceResponse{
+		AddIndex:       dbInvoice.AddIndex,
+		PaymentRequest: string(dbInvoice.PaymentRequest),
+		RHash:          hash[:],
+	}, nil
 }
 
 // LookupInvoice attempts to look up an invoice according to its payment hash.
