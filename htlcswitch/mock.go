@@ -711,7 +711,7 @@ func (i *mockInvoiceRegistry) LookupInvoice(rHash lnhash.Hash) (channeldb.Invoic
 }
 
 func (i *mockInvoiceRegistry) SettleInvoice(rhash lnhash.Hash,
-	amt lnwire.MilliSatoshi) error {
+	amt lnwire.MilliSatoshi, preimage *lnhash.Hash) error {
 
 	i.Lock()
 	defer i.Unlock()
