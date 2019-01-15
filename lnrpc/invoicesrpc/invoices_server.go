@@ -46,6 +46,10 @@ var (
 			Entity: "invoices",
 			Action: "write",
 		}},
+		"/invoicesrpc.Invoices/AddHoldInvoice": {{
+			Entity: "invoices",
+			Action: "write",
+		}},
 	}
 
 	// DefaultInvoicesMacFilename is the default name of the invoices
@@ -206,4 +210,47 @@ func (s *Server) CancelInvoice(ctx context.Context,
 	log.Infof("Canceled invoice %v", paymentHash)
 
 	return &CancelInvoiceResp{}, nil
+}
+
+// AddHoldInvoice attempts to add a new hold invoice to the invoice database.
+// Any duplicated invoices are rejected, therefore all invoices *must* have a
+// unique payment hash.
+func (s *Server) AddHoldInvoice(ctx context.Context,
+	invoice *AddHoldInvoiceRequest) (*AddHoldInvoiceResp, error) {
+
+	addInvoiceCfg := &AddInvoiceConfig{
+		InvoiceRegistry:   s.cfg.InvoiceRegistry,
+		Switch:            s.cfg.Switch,
+		ChainParams:       s.cfg.ChainParams,
+		NodeSigner:        s.cfg.NodeSigner,
+		MaxPaymentMSat:    s.cfg.MaxPaymentMSat,
+		DefaultCLTVExpiry: s.cfg.DefaultCLTVExpiry,
+		ChanDB:            s.cfg.ChanDB,
+	}
+
+	var err error
+	hash, err := lnhash.NewHash(invoice.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	addInvoiceData := &AddInvoiceData{
+		Memo:            invoice.Memo,
+		Hash:            hash,
+		Value:           invoice.Value,
+		DescriptionHash: invoice.DescriptionHash,
+		Expiry:          invoice.Expiry,
+		FallbackAddr:    invoice.FallbackAddr,
+		CltvExpiry:      invoice.CltvExpiry,
+		Private:         invoice.Private,
+	}
+
+	hash, dbInvoice, err := AddInvoice(ctx, addInvoiceCfg, addInvoiceData)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddHoldInvoiceResp{
+		PaymentRequest: string(dbInvoice.PaymentRequest),
+	}, nil
 }
