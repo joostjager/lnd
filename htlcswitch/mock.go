@@ -18,7 +18,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/chainntnfs"
@@ -688,6 +687,9 @@ type mockInvoiceRegistry struct {
 
 	invoices   map[lnhash.Hash]channeldb.Invoice
 	finalDelta uint32
+
+	acceptChan chan lnhash.Hash
+	settleChan chan lnhash.Hash
 }
 
 func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
@@ -729,6 +731,10 @@ func (i *mockInvoiceRegistry) SettleInvoice(rhash lnhash.Hash,
 	invoice.AmtPaid = amt
 	i.invoices[rhash] = invoice
 
+	if i.settleChan != nil {
+		i.settleChan <- rhash
+	}
+
 	return nil
 }
 
@@ -760,15 +766,20 @@ func (i *mockInvoiceRegistry) AcceptInvoice(rhash lnhash.Hash,
 	invoice.AmtPaid = amt
 	i.invoices[rhash] = invoice
 
+	if i.acceptChan != nil {
+		i.acceptChan <- rhash
+	}
+
 	return nil
 }
 
-func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
+func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice,
+	paymentHash lnhash.Hash) error {
+
 	i.Lock()
 	defer i.Unlock()
 
-	rhash := fastsha256.Sum256(invoice.Terms.PaymentPreimage[:])
-	i.invoices[lnhash.Hash(rhash)] = invoice
+	i.invoices[paymentHash] = invoice
 
 	return nil
 }
