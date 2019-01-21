@@ -1224,6 +1224,17 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket, isReProcess bool) {
 			return
 		}
 
+		// Settle invoice if possible.
+		preimage := lntypes.Preimage(htlc.PaymentPreimage)
+		paymentHash := preimage.Hash()
+		err = l.cfg.Registry.SettleInvoice(
+			paymentHash, lnwire.MilliSatoshi(0),
+			&preimage,
+		)
+		if err != nil && err != channeldb.ErrInvoiceNotFound {
+			log.Warnf("unable to settle invoice: %v", err)
+		}
+
 		l.debugf("Queueing removal of SETTLE closed circuit: %s->%s",
 			pkt.inKey(), pkt.outKey())
 
