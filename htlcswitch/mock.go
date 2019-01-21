@@ -691,6 +691,9 @@ type mockInvoiceRegistry struct {
 
 	invoices   map[lntypes.Hash]channeldb.Invoice
 	finalDelta uint32
+
+	acceptChan chan lntypes.Hash
+	settleChan chan lntypes.Hash
 }
 
 func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
@@ -731,6 +734,10 @@ func (i *mockInvoiceRegistry) SettleInvoice(rhash lntypes.Hash,
 	invoice.Terms.State = channeldb.ContractSettled
 	invoice.AmtPaid = amt
 	i.invoices[rhash] = invoice
+
+	if i.settleChan != nil {
+		i.settleChan <- rhash
+	}
 
 	return nil
 }
@@ -773,15 +780,20 @@ func (i *mockInvoiceRegistry) AcceptInvoice(rhash lntypes.Hash,
 	invoice.AmtPaid = amt
 	i.invoices[rhash] = invoice
 
+	if i.acceptChan != nil {
+		i.acceptChan <- rhash
+	}
+
 	return nil
 }
 
-func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
+func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice,
+	paymentHash lntypes.Hash) error {
+
 	i.Lock()
 	defer i.Unlock()
 
-	rhash := invoice.Terms.PaymentPreimage.Hash()
-	i.invoices[rhash] = invoice
+	i.invoices[paymentHash] = invoice
 
 	return nil
 }
