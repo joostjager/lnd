@@ -218,6 +218,7 @@ func (m *missionControl) NewPaymentSession(routeHints [][]HopHint,
 		additionalEdges:      edges,
 		bandwidthHints:       bandwidthHints,
 		errFailedPolicyChans: make(map[edgeLocator]struct{}),
+		probedChans:          make(map[edgeLocator]struct{}),
 		mc:                   m,
 	}, nil
 }
@@ -232,6 +233,7 @@ func (m *missionControl) NewPaymentSessionFromRoutes(routes []*Route) *paymentSe
 		haveRoutes:           true,
 		preBuiltRoutes:       routes,
 		errFailedPolicyChans: make(map[edgeLocator]struct{}),
+		probedChans:          make(map[edgeLocator]struct{}),
 		mc:                   m,
 	}
 }

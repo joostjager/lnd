@@ -2963,6 +2963,8 @@ func (r *rpcServer) dispatchPaymentIntent(
 			PaymentHash:       payIntent.rHash,
 			RouteHints:        payIntent.routeHints,
 			OutgoingChannelID: payIntent.outgoingChannelID,
+
+			Probe: true,
 		}
 
 		// If the final CLTV value was specified, then we'll use that

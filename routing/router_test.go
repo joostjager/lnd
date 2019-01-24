@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image/color"
+	"math"
 	"math/rand"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btclog"
 	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
 	sphinx "github.com/lightningnetwork/lightning-onion"
@@ -95,6 +97,7 @@ func createTestCtxFromGraphInstance(startingHeight uint32, graphInstance *testGr
 		},
 		ChannelPruneExpiry: time.Hour * 24,
 		GraphPruneInterval: time.Hour * 2,
+		ProbeTimeout:       time.Second,
 		QueryBandwidth: func(e *channeldb.ChannelEdgeInfo) lnwire.MilliSatoshi {
 			return lnwire.NewMSatFromSatoshis(e.Capacity)
 		},
@@ -2238,4 +2241,94 @@ func TestEmptyRoutesGenerateSphinxPacket(t *testing.T) {
 	if err != ErrNoRouteHopsProvided {
 		t.Fatalf("expected empty hops error: instead got: %v", err)
 	}
+}
+
+func TestProbe(t *testing.T) {
+	t.Parallel()
+
+	log.SetLevel(btclog.LevelDebug)
+
+	// Setup a network.
+	testChannels := []*testChannel{
+		symmetricTestChannel("a", "b", 100000, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 400,
+			MinHTLC: 1,
+		}, 1),
+		symmetricTestChannel("a", "c", 100000, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 400,
+			MinHTLC: 1,
+		}, 2),
+		symmetricTestChannel("b", "d", 100000, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 800,
+			MinHTLC: 1,
+		}, 3),
+		symmetricTestChannel("c", "d", 100000, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 400,
+			MinHTLC: 1,
+		}, 4),
+	}
+
+	testGraph, err := createTestGraphFromChannels(testChannels, "a")
+	defer testGraph.cleanUp()
+	if err != nil {
+		t.Fatalf("unable to create graph: %v", err)
+	}
+
+	const startingBlockHeight = 101
+
+	ctx, cleanUp, err := createTestCtxFromGraphInstance(startingBlockHeight,
+		testGraph)
+
+	defer cleanUp()
+	if err != nil {
+		t.Fatalf("unable to create router: %v", err)
+	}
+
+	var paymentHash [32]byte
+	paymentHash[0] = 1
+
+	// We'll modify the SendToSwitch method so that it simulates a failed
+	// payment with an error originating from the first hop of the route.
+	// The unsigned channel update is attached to the failure message.
+	ctx.router.cfg.SendToSwitch = func(firstHop lnwire.ShortChannelID,
+		add *lnwire.UpdateAddHTLC, circuit *sphinx.Circuit) ([32]byte, error) {
+
+		if firstHop == lnwire.NewShortChanIDFromInt(2) {
+			time.Sleep(30 * time.Second)
+		}
+
+		destNode := circuit.PaymentPath[len(circuit.PaymentPath)-1]
+
+		if add.PaymentHash != paymentHash {
+			return [32]byte{}, &htlcswitch.ForwardingError{
+				ErrorSource:    destNode,
+				FailureMessage: &lnwire.FailUnknownPaymentHash{},
+			}
+		}
+
+		return [32]byte{}, nil
+	}
+
+	// The payment parameter is mostly redundant in SendToRoute. Can be left
+	// empty for this test.
+	payment := &LightningPayment{
+		Amount:      10000,
+		Target:      testGraph.aliasMap["d"],
+		FeeLimit:    lnwire.MilliSatoshi(math.MaxUint64),
+		PaymentHash: paymentHash,
+		Probe:       true,
+	}
+
+	// Send off the payment request to the router. The specified route
+	// should be attempted and the channel update should be received by
+	// router and ignored because it is missing a valid signature.
+	_, _, err = ctx.router.SendPayment(payment)
+	if err != nil {
+		t.Fatalf("expected payment to succeed, but got %v", err)
+	}
+
 }
