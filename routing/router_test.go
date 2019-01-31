@@ -14,7 +14,6 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
-
 	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
@@ -378,7 +377,7 @@ func TestChannelUpdateValidation(t *testing.T) {
 		}, 2),
 	}
 
-	testGraph, err := createTestGraphFromChannels(testChannels)
+	testGraph, err := createTestGraphFromChannels(testChannels, "a")
 	defer testGraph.cleanUp()
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
@@ -1040,7 +1039,9 @@ func TestIgnoreChannelEdgePolicyForUnknownChannel(t *testing.T) {
 
 	// Setup an initially empty network.
 	testChannels := []*testChannel{}
-	testGraph, err := createTestGraphFromChannels(testChannels)
+	testGraph, err := createTestGraphFromChannels(
+		testChannels, "roasbeef",
+	)
 	if err != nil {
 		t.Fatalf("unable to create graph: %v", err)
 	}
