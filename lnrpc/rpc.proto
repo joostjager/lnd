@@ -768,6 +768,10 @@ message SendRequest {
     send the payment.
     */
     FeeLimit fee_limit = 8;
+
+    // outgoingChannelID is the channel that needs to be taken to the first
+    // hop. If zero, any channel may be used.
+    uint64 outgoingChannelID = 9;
 }
 message SendResponse {
     string payment_error = 1 [json_name = "payment_error"];

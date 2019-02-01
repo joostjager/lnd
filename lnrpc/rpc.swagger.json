@@ -2853,6 +2853,11 @@
         "fee_limit": {
           "$ref": "#/definitions/lnrpcFeeLimit",
           "description": "*\nThe maximum number of satoshis that will be paid as a fee of the payment.\nThis value can be represented either as a percentage of the amount being\nsent, or as a fixed amount of the maximum fee the user is willing the pay to\nsend the payment."
+        },
+        "outgoingChannelID": {
+          "type": "string",
+          "format": "uint64",
+          "description": "outgoingChannelID is the channel that needs to be taken to the first\nhop. If zero, any channel may be used."
         }
       }
     },
