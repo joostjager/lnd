@@ -2175,6 +2175,11 @@ var payInvoiceCommand = cli.Command{
 			Name:  "force, f",
 			Usage: "will skip payment request confirmation",
 		},
+		cli.Int64Flag{
+			Name:  "outgoing_chan_id",
+			Usage: "the 8-byte compact channel id to use for payment",
+			Value: 0,
+		},
 	},
 	Action: actionDecorator(payInvoice),
 }
@@ -2207,9 +2212,10 @@ func payInvoice(ctx *cli.Context) error {
 	}
 
 	req := &lnrpc.SendRequest{
-		PaymentRequest: payReq,
-		Amt:            ctx.Int64("amt"),
-		FeeLimit:       feeLimit,
+		PaymentRequest:    payReq,
+		Amt:               ctx.Int64("amt"),
+		FeeLimit:          feeLimit,
+		OutgoingChannelID: uint64(ctx.Int64("outgoing_chan_id")),
 	}
 	return sendPaymentRequest(client, req)
 }
