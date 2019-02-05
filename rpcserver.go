@@ -39,6 +39,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/macaroons"
+	"github.com/lightningnetwork/lnd/routetypes"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/sweep"
@@ -2605,7 +2606,7 @@ type rpcPaymentIntent struct {
 	dest       *btcec.PublicKey
 	rHash      [32]byte
 	cltvDelta  uint16
-	routeHints [][]routing.HopHint
+	routeHints [][]routetypes.HopHint
 
 	routes []*routing.Route
 }
@@ -3329,7 +3330,7 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 
 			// Finally, create the routing hint for this channel and
 			// add it to our list of route hints.
-			hint := routing.HopHint{
+			hint := routetypes.HopHint{
 				NodeID:      channel.IdentityPub,
 				ChannelID:   chanID,
 				FeeBaseMSat: uint32(remotePolicy.FeeBaseMSat),
@@ -3341,7 +3342,7 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 
 			// Include the route hint in our set of options that
 			// will be used when creating the invoice.
-			routeHint := []routing.HopHint{hint}
+			routeHint := []routetypes.HopHint{hint}
 			options = append(options, zpay32.RouteHint(routeHint))
 
 			numHints++
