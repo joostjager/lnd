@@ -276,6 +276,8 @@ type Switch struct {
 	// active ChainNotifier instance. This will be used to retrieve the
 	// lastest height of the chain.
 	blockEpochStream *chainntnfs.BlockEpochEvent
+
+	exitLink *exitLink
 }
 
 // New creates the new instance of htlc switch.
@@ -309,6 +311,7 @@ func New(cfg Config, currentHeight uint32) (*Switch, error) {
 		chanCloseRequests: make(chan *ChanClose),
 		resolutionMsgs:    make(chan *resolutionMsg),
 		quit:              make(chan struct{}),
+		exitLink:          &exitLink{},
 	}, nil
 }
 
@@ -591,19 +594,6 @@ func (s *Switch) ForwardPackets(linkQuit chan struct{},
 		switch htlc := packet.htlc.(type) {
 		case *lnwire.UpdateAddHTLC:
 			circuit := newPaymentCircuit(&htlc.PaymentHash, packet)
-
-			// If the outgoing channel id is equal to the
-			// switch-settled sentinel value, we'll construct the
-			// keystone to signal that this circuit should be
-			// atomically opened upon being committed within the
-			// circuit map.
-			if packet.outgoingChanID == SwitchSettleHop {
-				circuit.Outgoing = &CircuitKey{
-					ChanID: SwitchSettleHop,
-					HtlcID: packet.outgoingHTLCID,
-				}
-			}
-
 			packet.circuit = circuit
 			circuits = append(circuits, circuit)
 			addBatch = append(addBatch, packet)
@@ -638,14 +628,7 @@ func (s *Switch) ForwardPackets(linkQuit chan struct{},
 	for _, packet := range addBatch {
 		switch {
 		case len(actions.Adds) > 0 && packet.circuit == actions.Adds[0]:
-			// We only need to forward packets through the switch if
-			// they contain an outgoing channel id that isn't
-			// intended to be a switch settled payment. Since these
-			// are atomically opened at the time they are committed,
-			// we can drop them here and await a response.
-			if packet.outgoingChanID != SwitchSettleHop {
-				addedPackets = append(addedPackets, packet)
-			}
+			addedPackets = append(addedPackets, packet)
 			actions.Adds = actions.Adds[1:]
 
 		case len(actions.Drops) > 0 && packet.circuit == actions.Drops[0]:
@@ -1044,22 +1027,27 @@ func (s *Switch) handlePacketForward(packet *htlcPacket,
 			return s.handleLocalDispatch(packet)
 		}
 
-		s.indexMtx.RLock()
-		targetLink, err := s.getLinkByShortID(packet.outgoingChanID)
-		if err != nil {
+		var interfaceLinks []ChannelLink
+		if packet.outgoingChanID == SwitchSettleHop {
+			interfaceLinks = []ChannelLink{s.exitLink}
+		} else {
+			s.indexMtx.RLock()
+			targetLink, err := s.getLinkByShortID(packet.outgoingChanID)
+			if err != nil {
+				s.indexMtx.RUnlock()
+
+				// If packet was forwarded from another channel link
+				// than we should notify this link that some error
+				// occurred.
+				failure := &lnwire.FailUnknownNextPeer{}
+				addErr := fmt.Errorf("unable to find link with "+
+					"destination %v", packet.outgoingChanID)
+
+				return s.failAddPacket(packet, failure, addErr)
+			}
+			interfaceLinks, _ = s.getLinks(targetLink.Peer().PubKey())
 			s.indexMtx.RUnlock()
-
-			// If packet was forwarded from another channel link
-			// than we should notify this link that some error
-			// occurred.
-			failure := &lnwire.FailUnknownNextPeer{}
-			addErr := fmt.Errorf("unable to find link with "+
-				"destination %v", packet.outgoingChanID)
-
-			return s.failAddPacket(packet, failure, addErr)
 		}
-		interfaceLinks, _ := s.getLinks(targetLink.Peer().PubKey())
-		s.indexMtx.RUnlock()
 
 		// We'll keep track of any HTLC failures during the link
 		// selection process. This way we can return the error for
