@@ -14,13 +14,13 @@ import (
 	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/netann"
+	"github.com/lightningnetwork/lnd/routetypes"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/zpay32"
 )
 
@@ -343,7 +343,7 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 
 			// Finally, create the routing hint for this channel and
 			// add it to our list of route hints.
-			hint := routing.HopHint{
+			hint := routetypes.HopHint{
 				NodeID:      channel.IdentityPub,
 				ChannelID:   chanID,
 				FeeBaseMSat: uint32(remotePolicy.FeeBaseMSat),
@@ -355,7 +355,7 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 
 			// Include the route hint in our set of options that
 			// will be used when creating the invoice.
-			routeHint := []routing.HopHint{hint}
+			routeHint := []routetypes.HopHint{hint}
 			options = append(options, zpay32.RouteHint(routeHint))
 
 			numHints++
