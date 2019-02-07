@@ -18,7 +18,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/go-errors/errors"
-	"github.com/lightningnetwork/lightning-onion"
+	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/contractcourt"
@@ -143,7 +143,9 @@ func initDB() (*channeldb.DB, error) {
 	return db, err
 }
 
-func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) {
+func initSwitchWithDB(startingHeight uint32, db *channeldb.DB,
+	registry *mockInvoiceRegistry) (*Switch, error) {
+
 	var err error
 
 	if db == nil {
@@ -165,6 +167,7 @@ func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) 
 		Notifier:       &mockNotifier{},
 		FwdEventTicker: ticker.MockNew(DefaultFwdEventInterval),
 		LogEventTicker: ticker.MockNew(DefaultLogInterval),
+		Invoices:       registry,
 	}
 
 	return New(cfg, startingHeight)
@@ -177,7 +180,9 @@ func newMockServer(t testing.TB, name string, startingHeight uint32,
 	h := sha256.Sum256([]byte(name))
 	copy(id[:], h[:])
 
-	htlcSwitch, err := initSwitchWithDB(startingHeight, db)
+	invoiceRegistry := newMockRegistry(defaultDelta)
+
+	htlcSwitch, err := initSwitchWithDB(startingHeight, db, invoiceRegistry)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +193,7 @@ func newMockServer(t testing.TB, name string, startingHeight uint32,
 		name:             name,
 		messages:         make(chan lnwire.Message, 3000),
 		quit:             make(chan struct{}),
-		registry:         newMockRegistry(defaultDelta),
+		registry:         invoiceRegistry,
 		htlcSwitch:       htlcSwitch,
 		interceptorFuncs: make([]messageInterceptor, 0),
 	}, nil

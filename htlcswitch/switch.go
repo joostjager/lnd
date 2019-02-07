@@ -175,6 +175,8 @@ type Config struct {
 	// LogEventTicker is a signal instructing the htlcswitch to log
 	// aggregate stats about it's forwarding during the last interval.
 	LogEventTicker ticker.Ticker
+
+	Invoices InvoiceDatabase
 }
 
 // Switch is the central messaging bus for all incoming/outgoing HTLCs.
@@ -276,6 +278,8 @@ type Switch struct {
 	// active ChainNotifier instance. This will be used to retrieve the
 	// lastest height of the chain.
 	blockEpochStream *chainntnfs.BlockEpochEvent
+
+	exitLink *exitLink
 }
 
 // New creates the new instance of htlc switch.
@@ -293,7 +297,7 @@ func New(cfg Config, currentHeight uint32) (*Switch, error) {
 		return nil, err
 	}
 
-	return &Switch{
+	s := &Switch{
 		bestHeight:        currentHeight,
 		cfg:               &cfg,
 		circuits:          circuitMap,
@@ -309,7 +313,20 @@ func New(cfg Config, currentHeight uint32) (*Switch, error) {
 		chanCloseRequests: make(chan *ChanClose),
 		resolutionMsgs:    make(chan *resolutionMsg),
 		quit:              make(chan struct{}),
-	}, nil
+	}
+
+	exitLink := newExitLink(&exitLinkConfig{
+		circuits:       circuitMap,
+		forwardPackets: s.ForwardPackets,
+		invoices:       cfg.Invoices,
+	})
+	if err := exitLink.Start(); err != nil {
+		return nil, err
+	}
+
+	s.exitLink = exitLink
+
+	return s, nil
 }
 
 // resolutionMsg is a struct that wraps an existing ResolutionMsg with a done
@@ -1019,6 +1036,10 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 			return s.handleLocalDispatch(packet)
 		}
 
+		if packet.outgoingChanID == exitHop {
+			return s.exitLink.HandleSwitchPacket(packet)
+		}
+
 		s.indexMtx.RLock()
 		targetLink, err := s.getLinkByShortID(packet.outgoingChanID)
 		if err != nil {
@@ -1177,13 +1198,15 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 			}
 		} else if !isFail && circuit.Outgoing != nil {
 			// If this is an HTLC settle, and it wasn't from a
-			// locally initiated HTLC, then we'll log a forwarding
-			// event so we can flush it to disk later.
+			// locally initiated HTLC nor from settling an invoice
+			// by the exit link, then we'll log a forwarding event
+			// so we can flush it to disk later.
 			//
-			// TODO(roasbeef): only do this once link actually
-			// fully settles?
+			// TODO(roasbeef): only do this once link actually fully
+			// settles?
 			localHTLC := packet.incomingChanID == sourceHop
-			if !localHTLC {
+			exitSettle := packet.outgoingChanID == exitHop
+			if !localHTLC && !exitSettle {
 				s.fwdEventMtx.Lock()
 				s.pendingFwdingEvents = append(
 					s.pendingFwdingEvents,

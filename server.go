@@ -353,6 +353,7 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		ExtractErrorEncrypter:  s.sphinx.ExtractErrorEncrypter,
 		FetchLastChannelUpdate: s.fetchLastChanUpdate(),
 		Notifier:               s.cc.chainNotifier,
+		Invoices:               s.invoices,
 		FwdEventTicker: ticker.New(
 			htlcswitch.DefaultFwdEventInterval),
 		LogEventTicker: ticker.New(
