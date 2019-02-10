@@ -16,6 +16,7 @@ import (
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/htlcswitch/hodl"
 	"github.com/lightningnetwork/lnd/input"
+	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnpeer"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -160,7 +161,7 @@ type ChannelLinkConfig struct {
 
 	// Registry is a sub-system which responsible for managing the invoices
 	// in thread-safe manner.
-	Registry InvoiceDatabase
+	Registry invoices.InvoiceDatabase
 
 	// PreimageCache is a global witness beacon that houses any new
 	// preimages discovered by other links. We'll use this to add new

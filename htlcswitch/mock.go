@@ -23,6 +23,7 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/input"
+	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnpeer"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -773,7 +774,7 @@ func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
 	return nil
 }
 
-var _ InvoiceDatabase = (*mockInvoiceRegistry)(nil)
+var _ invoices.InvoiceDatabase = (*mockInvoiceRegistry)(nil)
 
 type mockSigner struct {
 	key *btcec.PrivateKey
