@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -696,82 +697,85 @@ func (f *mockChannelLink) UpdateShortChanID() (lnwire.ShortChannelID, error) {
 
 var _ ChannelLink = (*mockChannelLink)(nil)
 
-type mockInvoiceRegistry struct {
-	sync.Mutex
+func newDB() (*channeldb.DB, func(), error) {
+	// First, create a temporary directory to be used for the duration of
+	// this test.
+	tempDirName, err := ioutil.TempDir("", "channeldb")
+	if err != nil {
+		return nil, nil, err
+	}
 
-	invoices   map[lntypes.Hash]channeldb.Invoice
+	// Next, create channeldb for the first time.
+	cdb, err := channeldb.Open(tempDirName)
+	if err != nil {
+		os.RemoveAll(tempDirName)
+		return nil, nil, err
+	}
+
+	cleanUp := func() {
+		cdb.Close()
+		os.RemoveAll(tempDirName)
+	}
+
+	return cdb, cleanUp, nil
+}
+
+type mockInvoiceRegistry struct {
 	finalDelta uint32
+	settleChan chan lntypes.Hash
+
+	registry *invoices.InvoiceRegistry
+
+	cleanup func()
 }
 
 func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
+	cdb, cleanup, err := newDB()
+	if err != nil {
+		panic(err)
+	}
+
+	decodeExpiry := func(invoice string) (uint32, error) {
+		return 3, nil
+	}
+
+	registry := invoices.NewRegistry(cdb, decodeExpiry)
+	registry.Start()
+
 	return &mockInvoiceRegistry{
+		registry:   registry,
 		finalDelta: minDelta,
-		invoices:   make(map[lntypes.Hash]channeldb.Invoice),
+		cleanup:    cleanup,
 	}
 }
 
 func (i *mockInvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (channeldb.Invoice, uint32, error) {
-	i.Lock()
-	defer i.Unlock()
-
-	invoice, ok := i.invoices[rHash]
-	if !ok {
-		return channeldb.Invoice{}, 0, fmt.Errorf("can't find mock "+
-			"invoice: %x", rHash[:])
-	}
-
-	return invoice, i.finalDelta, nil
+	return i.registry.LookupInvoice(rHash)
 }
 
-func (i *mockInvoiceRegistry) SettleInvoice(rhash lntypes.Hash,
-	amt lnwire.MilliSatoshi) error {
+func (i *mockInvoiceRegistry) NotifyExitHopHtlc(rhash lntypes.Hash,
+	amt lnwire.MilliSatoshi, hodlChan chan<- interface{}) error {
 
-	i.Lock()
-	defer i.Unlock()
-
-	invoice, ok := i.invoices[rhash]
-	if !ok {
-		return fmt.Errorf("can't find mock invoice: %x", rhash[:])
+	err := i.registry.NotifyExitHopHtlc(rhash, amt, hodlChan)
+	if err != nil {
+		return err
 	}
-
-	if invoice.Terms.State == channeldb.ContractSettled {
-		return nil
+	if i.settleChan != nil {
+		i.settleChan <- rhash
 	}
-
-	invoice.Terms.State = channeldb.ContractSettled
-	invoice.AmtPaid = amt
-	i.invoices[rhash] = invoice
 
 	return nil
 }
 
 func (i *mockInvoiceRegistry) CancelInvoice(payHash lntypes.Hash) error {
-	i.Lock()
-	defer i.Unlock()
-
-	invoice, ok := i.invoices[payHash]
-	if !ok {
-		return channeldb.ErrInvoiceNotFound
-	}
-
-	if invoice.Terms.State == channeldb.ContractCanceled {
-		return nil
-	}
-
-	invoice.Terms.State = channeldb.ContractCanceled
-	i.invoices[payHash] = invoice
-
-	return nil
+	return i.registry.CancelInvoice(payHash)
 }
 
-func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
-	i.Lock()
-	defer i.Unlock()
+func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice,
+	paymentHash lntypes.Hash) error {
 
-	rhash := invoice.Terms.PaymentPreimage.Hash()
-	i.invoices[rhash] = invoice
-
-	return nil
+	_, err := i.registry.AddInvoice(&invoice, paymentHash)
+	return err
 }
 
 var _ invoices.InvoiceDatabase = (*mockInvoiceRegistry)(nil)

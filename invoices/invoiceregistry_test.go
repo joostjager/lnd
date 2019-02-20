@@ -37,22 +37,81 @@ func decodeExpiry(payReq string) (uint32, error) {
 	return uint32(invoice.MinFinalCLTVExpiry()), nil
 }
 
-// TestSettleInvoice tests settling of an invoice and related notifications.
-func TestSettleInvoice(t *testing.T) {
+var (
+	testInvoice = &channeldb.Invoice{
+		Terms: channeldb.ContractTerm{
+			PaymentPreimage: preimage,
+			Value:           lnwire.MilliSatoshi(100000),
+		},
+		PaymentRequest: []byte(testPayReq),
+	}
+)
+
+func newTestContext(t *testing.T) (*InvoiceRegistry, func()) {
 	cdb, cleanup, err := newDB()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	// Instantiate and start the invoice registry.
 	registry := NewRegistry(cdb, decodeExpiry)
 
 	err = registry.Start()
 	if err != nil {
+		cleanup()
 		t.Fatal(err)
 	}
-	defer registry.Stop()
+
+	return registry, func() {
+		registry.Stop()
+		cleanup()
+	}
+}
+
+// TestNotifyExitHopHtlcNoChan tests notification of an exit htlc without a hodl
+// chan. This type of call is used in the htlc success resolver to notify the
+// invoice registry of htlcs the may have been missed because the link crashed
+// right after locking in the htlc.
+func TestNotifyExitHopHtlcNoChan(t *testing.T) {
+	registry, cleanup := newTestContext(t)
+	defer cleanup()
+
+	// Add the invoice.
+	_, err := registry.AddInvoice(testInvoice, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	amtPaid := lnwire.MilliSatoshi(100000)
+
+	unknownHash := lntypes.Hash{1, 2, 3}
+	err = registry.NotifyExitHopHtlc(unknownHash, amtPaid, nil)
+	if err != channeldb.ErrInvoiceNotFound {
+		t.Fatalf("expected ErrInvoiceNotFound but got %v", err)
+	}
+
+	err = registry.NotifyExitHopHtlc(hash, amtPaid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that settled amount remains unchanged.
+	inv, _, err := registry.LookupInvoice(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.AmtPaid != amtPaid {
+		t.Fatal("expected amount to be unchanged")
+	}
+	if inv.Terms.State != channeldb.ContractSettled {
+		t.Fatal("expected invoice to be settled")
+	}
+}
+
+// TestSettleInvoice tests settling of an invoice and related notifications.
+func TestSettleInvoice(t *testing.T) {
+	registry, cleanup := newTestContext(t)
+	defer cleanup()
 
 	allSubscriptions := registry.SubscribeNotifications(0, 0)
 	defer allSubscriptions.Cancel()
@@ -66,15 +125,7 @@ func TestSettleInvoice(t *testing.T) {
 	}
 
 	// Add the invoice.
-	invoice := &channeldb.Invoice{
-		Terms: channeldb.ContractTerm{
-			PaymentPreimage: preimage,
-			Value:           lnwire.MilliSatoshi(100000),
-		},
-		PaymentRequest: []byte(testPayReq),
-	}
-
-	addIdx, err := registry.AddInvoice(invoice, hash)
+	addIdx, err := registry.AddInvoice(testInvoice, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +157,11 @@ func TestSettleInvoice(t *testing.T) {
 		t.Fatal("no update received")
 	}
 
+	hodlChan := make(chan interface{}, 1)
+
 	// Settle invoice with a slightly higher amount.
 	amtPaid := lnwire.MilliSatoshi(100500)
-	err = registry.SettleInvoice(hash, amtPaid)
+	err = registry.NotifyExitHopHtlc(hash, amtPaid, hodlChan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,17 +192,25 @@ func TestSettleInvoice(t *testing.T) {
 		t.Fatal("no update received")
 	}
 
-	// Try to settle again.
-	err = registry.SettleInvoice(hash, amtPaid)
-	if err != nil {
-		t.Fatal("expected duplicate settle to succeed")
+	// We expect the preimage to be sent out on the hodl chan
+	event := (<-hodlChan).(HodlEvent)
+	if event.Preimage == nil || *event.Preimage != preimage {
+		t.Fatal("expected settle event on hodl chan")
 	}
 
-	// Try to settle again with a different amount.
-	err = registry.SettleInvoice(hash, amtPaid+600)
+	// Try to settle again.
+	err = registry.NotifyExitHopHtlc(hash, amtPaid, hodlChan)
 	if err != nil {
 		t.Fatal("expected duplicate settle to succeed")
 	}
+	<-hodlChan
+
+	// Try to settle again with a different amount.
+	err = registry.NotifyExitHopHtlc(hash, amtPaid+600, hodlChan)
+	if err != nil {
+		t.Fatal("expected duplicate settle to succeed")
+	}
+	<-hodlChan
 
 	// Check that settled amount remains unchanged.
 	inv, _, err := registry.LookupInvoice(hash)
@@ -165,30 +226,24 @@ func TestSettleInvoice(t *testing.T) {
 	if err != channeldb.ErrInvoiceAlreadySettled {
 		t.Fatal("expected cancelation of a settled invoice to fail")
 	}
+
+	select {
+	case <-hodlChan:
+		t.Fatal("unexpected hodl event")
+	default:
+	}
 }
 
 // TestCancelInvoice tests cancelation of an invoice and related notifications.
 func TestCancelInvoice(t *testing.T) {
-	cdb, cleanup, err := newDB()
-	if err != nil {
-		t.Fatal(err)
-	}
+	registry, cleanup := newTestContext(t)
 	defer cleanup()
-
-	// Instantiate and start the invoice registry.
-	registry := NewRegistry(cdb, decodeExpiry)
-
-	err = registry.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer registry.Stop()
 
 	allSubscriptions := registry.SubscribeNotifications(0, 0)
 	defer allSubscriptions.Cancel()
 
 	// Try to cancel the not yet existing invoice. This should fail.
-	err = registry.CancelInvoice(hash)
+	err := registry.CancelInvoice(hash)
 	if err != channeldb.ErrInvoiceNotFound {
 		t.Fatalf("expected ErrInvoiceNotFound, but got %v", err)
 	}
@@ -203,14 +258,7 @@ func TestCancelInvoice(t *testing.T) {
 
 	// Add the invoice.
 	amt := lnwire.MilliSatoshi(100000)
-	invoice := &channeldb.Invoice{
-		Terms: channeldb.ContractTerm{
-			PaymentPreimage: preimage,
-			Value:           amt,
-		},
-	}
-
-	_, err = registry.AddInvoice(invoice, hash)
+	_, err = registry.AddInvoice(testInvoice, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,10 +318,17 @@ func TestCancelInvoice(t *testing.T) {
 		t.Fatal("expected cancelation of a canceled invoice to succeed")
 	}
 
-	// Try to settle. This should not be possible.
-	err = registry.SettleInvoice(hash, amt)
-	if err != channeldb.ErrInvoiceAlreadyCanceled {
-		t.Fatal("expected settlement of a canceled invoice to fail")
+	// Notify arrival of a new htlc paying to this invoice. This should
+	// succeed.
+	hodlChan := make(chan interface{}, 1)
+	err = registry.NotifyExitHopHtlc(hash, amt, hodlChan)
+	if err != nil {
+		t.Fatal("expected settlement of a canceled invoice to succeed")
+	}
+
+	event := (<-hodlChan).(HodlEvent)
+	if event.Preimage != nil {
+		t.Fatal("expected cancel hodl event")
 	}
 }
 
