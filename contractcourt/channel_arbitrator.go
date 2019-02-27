@@ -456,11 +456,6 @@ func supplementResolver(resolver ContractResolver,
 
 	case *htlcTimeoutResolver:
 		return supplementTimeoutResolver(r, htlcMap)
-
-	case *htlcOutgoingContestResolver:
-		return supplementTimeoutResolver(
-			&r.htlcTimeoutResolver, htlcMap,
-		)
 	}
 
 	return nil
@@ -1332,7 +1327,7 @@ func (c *ChannelArbitrator) prepContractResolutions(htlcActions ChainActionMap,
 		// If we can timeout the HTLC directly, then we'll create the
 		// proper resolver to do so, who will then cancel the packet
 		// backwards.
-		case HtlcTimeoutAction:
+		case HtlcTimeoutAction, HtlcOutgoingWatchAction:
 			for _, htlc := range htlcs {
 				htlcOp := wire.OutPoint{
 					Hash:  commitHash,
@@ -1385,37 +1380,6 @@ func (c *ChannelArbitrator) prepContractResolutions(htlcActions ChainActionMap,
 						htlcResolution:  resolution,
 						broadcastHeight: height,
 						payHash:         htlc.RHash,
-						htlcAmt:         htlc.Amt,
-						ResolverKit:     resKit,
-					},
-				}
-				htlcResolvers = append(htlcResolvers, resolver)
-			}
-
-		// Finally, if this is an outgoing HTLC we've sent, then we'll
-		// launch a resolver to watch for the pre-image (and settle
-		// backwards), or just timeout.
-		case HtlcOutgoingWatchAction:
-			for _, htlc := range htlcs {
-				htlcOp := wire.OutPoint{
-					Hash:  commitHash,
-					Index: uint32(htlc.OutputIndex),
-				}
-
-				resolution, ok := outResolutionMap[htlcOp]
-				if !ok {
-					log.Errorf("ChannelArbitrator(%v) unable to find "+
-						"outgoing resolution: %v",
-						c.cfg.ChanPoint, htlcOp)
-					continue
-				}
-
-				resKit.Quit = make(chan struct{})
-				resolver := &htlcOutgoingContestResolver{
-					htlcTimeoutResolver: htlcTimeoutResolver{
-						htlcResolution:  resolution,
-						broadcastHeight: height,
-						htlcIndex:       htlc.HtlcIndex,
 						htlcAmt:         htlc.Amt,
 						ResolverKit:     resKit,
 					},
