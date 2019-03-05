@@ -1874,7 +1874,6 @@ func TestPathFindSpecExample(t *testing.T) {
 	}
 
 	// We'll now request a route from A -> B -> C.
-	ctx.router.routeCache = make(map[routeTuple][]*Route)
 	routes, err = ctx.router.FindRoutes(carol, amt, noFeeLimit, 100)
 	if err != nil {
 		t.Fatalf("unable to find routes: %v", err)
