@@ -2734,7 +2734,7 @@ func unmarshallSendToRouteRequest(req *lnrpc.SendToRouteRequest,
 type rpcPaymentIntent struct {
 	msat              lnwire.MilliSatoshi
 	feeLimit          lnwire.MilliSatoshi
-	dest              *btcec.PublicKey
+	dest              routing.Vertex
 	rHash             [32]byte
 	cltvDelta         uint16
 	routeHints        [][]routing.HopHint
@@ -2748,7 +2748,6 @@ type rpcPaymentIntent struct {
 // three ways a client can specify their payment details: a payment request,
 // via manual details, or via a complete route.
 func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error) {
-	var err error
 	payIntent := rpcPaymentIntent{}
 
 	// If a route was specified, then we can use that directly.
@@ -2819,7 +2818,8 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 		)
 
 		copy(payIntent.rHash[:], payReq.PaymentHash[:])
-		payIntent.dest = payReq.Destination
+		destKey := payReq.Destination.SerializeCompressed()
+		copy(payIntent.dest[:], destKey)
 		payIntent.cltvDelta = uint16(payReq.MinFinalCLTVExpiry())
 		payIntent.routeHints = payReq.RouteHints
 
@@ -2829,24 +2829,20 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 	// At this point, a destination MUST be specified, so we'll convert it
 	// into the proper representation now. The destination will either be
 	// encoded as raw bytes, or via a hex string.
+	var pubBytes []byte
 	if len(rpcPayReq.Dest) != 0 {
-		payIntent.dest, err = btcec.ParsePubKey(
-			rpcPayReq.Dest, btcec.S256(),
-		)
-		if err != nil {
-			return payIntent, err
-		}
-
+		pubBytes = rpcPayReq.Dest
 	} else {
-		pubBytes, err := hex.DecodeString(rpcPayReq.DestString)
-		if err != nil {
-			return payIntent, err
-		}
-		payIntent.dest, err = btcec.ParsePubKey(pubBytes, btcec.S256())
+		var err error
+		pubBytes, err = hex.DecodeString(rpcPayReq.DestString)
 		if err != nil {
 			return payIntent, err
 		}
 	}
+	if len(pubBytes) != 33 {
+		return payIntent, errors.New("invalid key length")
+	}
+	copy(payIntent.dest[:], pubBytes)
 
 	// Otherwise, If the payment request field was not specified
 	// (and a custom route wasn't specified), construct the payment
@@ -3971,15 +3967,47 @@ func (r *rpcServer) GetNodeInfo(ctx context.Context,
 func (r *rpcServer) QueryRoutes(ctx context.Context,
 	in *lnrpc.QueryRoutesRequest) (*lnrpc.QueryRoutesResponse, error) {
 
-	// First parse the hex-encoded public key into a full public key object
-	// we can properly manipulate.
-	pubKeyBytes, err := hex.DecodeString(in.PubKey)
+	parsePubKey := func(key string) (routing.Vertex, error) {
+		pubKeyBytes, err := hex.DecodeString(key)
+		if err != nil {
+			return routing.Vertex{}, err
+		}
+
+		if len(pubKeyBytes) != 33 {
+			return routing.Vertex{},
+				errors.New("invalid key length")
+		}
+
+		var v routing.Vertex
+		copy(v[:], pubKeyBytes)
+
+		return v, nil
+	}
+
+	// Parse the hex-encoded source and target public keys into full public
+	// key objects we can properly manipulate.
+	targetPubKey, err := parsePubKey(in.PubKey)
 	if err != nil {
 		return nil, err
 	}
-	pubKey, err := btcec.ParsePubKey(pubKeyBytes, btcec.S256())
-	if err != nil {
-		return nil, err
+
+	var sourcePubKey routing.Vertex
+	if in.SourcePubKey != "" {
+		var err error
+		sourcePubKey, err = parsePubKey(in.SourcePubKey)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// If no source is specified, use self.
+		
+		channelGraph := r.server.chanDB.ChannelGraph()
+		selfNode, err := channelGraph.SourceNode()
+		if err != nil {
+			return nil, err
+		}
+
+		sourcePubKey = selfNode.PubKeyBytes
 	}
 
 	// Currently, within the bootstrap phase of the network, we limit the
@@ -4038,11 +4066,11 @@ func (r *rpcServer) QueryRoutes(ctx context.Context,
 
 	if in.FinalCltvDelta == 0 {
 		routes, findErr = r.server.chanRouter.FindRoutes(
-			pubKey, amtMSat, restrictions, numRoutesIn,
+			sourcePubKey, targetPubKey, amtMSat, restrictions, numRoutesIn,
 		)
 	} else {
 		routes, findErr = r.server.chanRouter.FindRoutes(
-			pubKey, amtMSat, restrictions, numRoutesIn,
+			sourcePubKey, targetPubKey, amtMSat, restrictions, numRoutesIn,
 			uint16(in.FinalCltvDelta),
 		)
 	}
