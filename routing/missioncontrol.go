@@ -17,7 +17,7 @@ const (
 	// larger than edgeDecay as an edge failure typical indicates an
 	// unbalanced channel, while a vertex failure indicates a node is not
 	// online and active.
-	vertexDecay = time.Duration(time.Minute * 5)
+	vertexDecay = time.Duration(time.Hour)
 
 	// edgeDecay is the decay period of colored edges added to
 	// missionControl. Once edgeDecay passed after an entry has been added,
@@ -26,7 +26,7 @@ const (
 	// that a channel was unbalanced, a condition which may quickly change.
 	//
 	// TODO(roasbeef): instead use random delay on each?
-	edgeDecay = time.Duration(time.Second * 5)
+	edgeDecay = time.Duration(time.Hour)
 )
 
 // missionControl contains state which summarizes the past attempts of HTLC
@@ -155,8 +155,6 @@ func (m *missionControl) GraphPruneView() graphPruneView {
 func (m *missionControl) NewPaymentSession(routeHints [][]HopHint,
 	target *btcec.PublicKey) (*paymentSession, error) {
 
-	viewSnapshot := m.GraphPruneView()
-
 	edges := make(map[Vertex][]*channeldb.ChannelEdgePolicy)
 
 	// Traverse through all of the available hop hints and include them in
@@ -214,7 +212,6 @@ func (m *missionControl) NewPaymentSession(routeHints [][]HopHint,
 	}
 
 	return &paymentSession{
-		pruneViewSnapshot:    viewSnapshot,
 		additionalEdges:      edges,
 		bandwidthHints:       bandwidthHints,
 		errFailedPolicyChans: make(map[edgeLocator]struct{}),
@@ -228,7 +225,6 @@ func (m *missionControl) NewPaymentSession(routeHints [][]HopHint,
 // used for things like channel rebalancing, and swaps.
 func (m *missionControl) NewPaymentSessionFromRoutes(routes []*Route) *paymentSession {
 	return &paymentSession{
-		pruneViewSnapshot:    m.GraphPruneView(),
 		haveRoutes:           true,
 		preBuiltRoutes:       routes,
 		errFailedPolicyChans: make(map[edgeLocator]struct{}),
