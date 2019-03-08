@@ -2000,6 +2000,9 @@ func (r *ChannelRouter) processSendError(paySession *paymentSession,
 	errSource := fErr.ErrorSource
 	errVertex := NewVertex(errSource)
 
+	log.Infof("Failed payment attempt: route=(%v), errVertex=%v, reason=%T",
+		route, errVertex, fErr.FailureMessage)
+
 	log.Tracef("node=%x reported failure when sending htlc", errVertex)
 
 	// Always determine chan id ourselves, because a channel
