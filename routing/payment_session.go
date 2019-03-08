@@ -17,8 +17,6 @@ import (
 // loop if payment attempts take long enough. An additional set of edges can
 // also be provided to assist in reaching the payment's destination.
 type paymentSession struct {
-	pruneViewSnapshot graphPruneView
-
 	additionalEdges map[Vertex][]*channeldb.ChannelEdgePolicy
 
 	bandwidthHints map[uint64]lnwire.MilliSatoshi
@@ -61,9 +59,6 @@ func (p *paymentSession) markProbed(edges []*edgeLocator) int {
 func (p *paymentSession) ReportVertexFailure(v Vertex) {
 	log.Debugf("Reporting vertex %v failure to Mission Control", v)
 
-	// First, we'll add the failed vertex to our local prune view snapshot.
-	p.pruneViewSnapshot.vertexes[v] = struct{}{}
-
 	// With the vertex added, we'll now report back to the global prune
 	// view, with this new piece of information so it can be utilized for
 	// new payment sessions.
@@ -81,9 +76,6 @@ func (p *paymentSession) ReportVertexFailure(v Vertex) {
 // TODO(roasbeef): also add value attempted to send and capacity of channel
 func (p *paymentSession) ReportEdgeFailure(e *edgeLocator) {
 	log.Debugf("Reporting edge %v failure to Mission Control", e)
-
-	// First, we'll add the failed edge to our local prune view snapshot.
-	p.pruneViewSnapshot.edges[*e] = struct{}{}
 
 	// With the edge added, we'll now report back to the global prune view,
 	// with this new piece of information so it can be utilized for new
@@ -145,11 +137,7 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 		return nil, fmt.Errorf("pre-built routes exhausted")
 	}
 
-	// Otherwise we actually need to perform path finding, so we'll obtain
-	// our current prune view snapshot. This view will only ever grow
-	// during the duration of this payment session, never shrinking.
-	pruneView := p.pruneViewSnapshot
-
+	pruneView := p.mc.GraphPruneView()
 	log.Debugf("Mission Control session using prune view of %v "+
 		"edges, %v vertexes", len(pruneView.edges),
 		len(pruneView.vertexes))
