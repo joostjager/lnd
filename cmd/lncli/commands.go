@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/golang/protobuf/jsonpb"
@@ -2159,38 +2161,60 @@ func sendPayment(ctx *cli.Context) error {
 }
 
 func sendPaymentRequest(client lnrpc.LightningClient, req *lnrpc.SendRequest) error {
+
+	start := time.Now()
+
+	// Below two methods of sending 100 payments are implemented. Comment
+	// one out to test. The resulting err will be a 'payment already sent'.
+
+	// Results on my machine:
+	// Async: 38ms
+	// Sync: 12ms
+
+	// ---- ASYNC VERSION START ----
 	paymentStream, err := client.SendPayment(context.Background())
 	if err != nil {
 		return err
 	}
 
-	if err := paymentStream.Send(req); err != nil {
-		return err
+	fmt.Println("Sending 100")
+	for i := 0; i < 100; i++ {
+		if err := paymentStream.Send(req); err != nil {
+			return err
+		}
 	}
 
-	resp, err := paymentStream.Recv()
+	fmt.Println("Receiving 100")
+	for i := 0; i < 100; i++ {
+		paymentStream.Recv()
+	}
+
 	if err != nil {
 		return err
 	}
 
 	paymentStream.CloseSend()
+	// ---- ASYNC VERSION END ----
 
-	printJSON(struct {
-		E string       `json:"payment_error"`
-		P string       `json:"payment_preimage"`
-		R *lnrpc.Route `json:"payment_route"`
-	}{
-		E: resp.PaymentError,
-		P: hex.EncodeToString(resp.PaymentPreimage),
-		R: resp.PaymentRoute,
-	})
+	// ---- SYNC VERSION START ----
+	fmt.Println("Sending/receiving 100")
 
-	// If we get a payment error back, we pass an error
-	// up to main which eventually calls fatal() and returns
-	// with a non-zero exit code.
-	if resp.PaymentError != "" {
-		return errors.New(resp.PaymentError)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			client.SendPaymentSync(context.Background(), req)
+
+			wg.Done()
+		}()
 	}
+
+	wg.Wait()
+	// ---- SYNC VERSION END ----
+
+	fmt.Println("Done")
+	elapsed := time.Since(start)
+	log.Printf("Execution took %s", elapsed)
 
 	return nil
 }
