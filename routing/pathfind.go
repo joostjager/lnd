@@ -780,6 +780,8 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 			"destination")
 	}
 
+	log.Infof("Found route with probability: %v\n", distance[source].probability)
+
 	// Use the nextHop map to unravel the forward path from source to
 	// target.
 	pathEdges := make([]*channeldb.ChannelEdgePolicy, 0, len(next))
@@ -787,6 +789,9 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 	for currentNode != target { // TODO(roasbeef): assumes no cycles
 		// Determine the next hop forward using the next map.
 		nextNode := next[currentNode]
+
+		log.Infof("Channel %v: probability: %v", nextNode.ChannelID,
+			distance[currentNode].probability)
 
 		// Add the next hop to the list of path edges.
 		pathEdges = append(pathEdges, nextNode)
@@ -804,8 +809,6 @@ func findPath(g *graphParams, r *RestrictParams, source, target Vertex,
 		return nil, newErr(ErrMaxHopsExceeded, "potential path has "+
 			"too many hops")
 	}
-
-	log.Infof("Found route with probability: %v\n", distance[source].probability)
 
 	return pathEdges, nil
 }
