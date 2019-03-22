@@ -10,15 +10,18 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/lntypes"
-
 	"github.com/btcsuite/btcutil"
+	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/routing/route"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
@@ -52,6 +55,10 @@ var (
 		"/routerrpc.Router/SendToRoute": {{
 			Entity: "offchain",
 			Action: "write",
+		}},
+		"/routerrpc.Router/TrackPayment": {{
+			Entity: "offchain",
+			Action: "read",
 		}},
 		"/routerrpc.Router/EstimateRouteFee": {{
 			Entity: "offchain",
@@ -178,22 +185,31 @@ func (s *Server) RegisterWithRootServer(grpcServer *grpc.Server) error {
 // PaymentRequest, then an error will be returned. Otherwise, the payment
 // pre-image, along with the final route will be returned.
 func (s *Server) SendPayment(ctx context.Context,
-	req *PaymentRequest) (*PaymentResponse, error) {
+	req *SendPaymentRequest) (*PaymentResponse, error) {
 
 	payment, err := s.cfg.RouterBackend.extractIntentFromSendRequest(req)
 	if err != nil {
 		return nil, err
 	}
 
-	preImage, _, err := s.cfg.Router.SendPayment(payment)
+	err = s.cfg.Router.SendPaymentAsync(payment)
 	if err != nil {
+		log.Debugf("SendPayment async result for hash %x: %v",
+			payment.PaymentHash, err)
+
+		// Transform user errors to grpc code.
+		if err == channeldb.ErrPaymentInFlight ||
+			err == channeldb.ErrAlreadyPaid {
+
+			return nil, status.Error(
+				codes.AlreadyExists, err.Error(),
+			)
+		}
+
 		return nil, err
 	}
 
-	return &PaymentResponse{
-		PayHash:  payment.PaymentHash[:],
-		PreImage: preImage[:],
-	}, nil
+	return s.waitForPayment(ctx, payment.PaymentHash)
 }
 
 // EstimateRouteFee allows callers to obtain a lower bound w.r.t how much it
@@ -394,5 +410,77 @@ func marshallChannelUpdate(update *lnwire.ChannelUpdate) *ChannelUpdate {
 		HtlcMinimumMsat: uint64(update.HtlcMinimumMsat),
 		BaseFee:         update.BaseFee,
 		FeeRate:         update.FeeRate,
+	}
+}
+
+// TrackPayment picks up a pending payment, waits for the outcome and returns
+// it.
+func (s *Server) TrackPayment(ctx context.Context,
+	request *TrackPaymentRequest) (*PaymentResponse, error) {
+
+	paymentHash, err := lntypes.MakeHash(request.PaymentHash)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debugf("LookupPayment called for payment %v", paymentHash)
+
+	return s.waitForPayment(ctx, paymentHash)
+}
+
+// waitForPayment waits for the result of the payment to be available and
+// returns it as an rpc type.
+func (s *Server) waitForPayment(ctx context.Context, paymentHash lntypes.Hash) (
+	*PaymentResponse, error) {
+
+	// Subscribe to the outcome of this payment.
+	resultChan, err := s.cfg.RouterBackend.Tower.SubscribePayment(
+		paymentHash,
+	)
+	switch {
+	case err == channeldb.ErrPaymentNotInitiated:
+		return nil, status.Error(codes.NotFound, err.Error())
+	case err != nil:
+		return nil, err
+	}
+
+	log.Debugf("Waiting for outcome of payment %v", paymentHash)
+
+	// Wait for the outcome of the payment. For payments that have already
+	// completed, the event should already be waiting on the channel.
+	select {
+	case result := <-resultChan:
+		// Marshall event to rpc type.
+		var response PaymentResponse
+
+		if result.Success {
+			log.Debugf("Payment %v successfully completed",
+				paymentHash)
+
+			response.Outcome = PaymentOutcome_SUCCEEDED
+			response.Preimage = result.Preimage[:]
+			response.Route = s.cfg.RouterBackend.MarshallRoute(
+				result.Route,
+			)
+		} else {
+			log.Debugf("Payment %v failed: %v",
+				paymentHash, result.FailureReason)
+
+			switch result.FailureReason {
+
+			case channeldb.FailureReasonTimeout:
+				response.Outcome = PaymentOutcome_FAILED_TIMEOUT
+
+			case channeldb.FailureReasonNoRoute:
+				response.Outcome = PaymentOutcome_FAILED_NO_ROUTE
+
+			default:
+				return nil, errors.New("unknown failure reason")
+			}
+		}
+
+		return &response, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
