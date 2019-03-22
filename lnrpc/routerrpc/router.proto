@@ -6,7 +6,7 @@ package routerrpc;
 
 option go_package = "github.com/lightningnetwork/lnd/lnrpc/routerrpc";
 
-message PaymentRequest {
+message SendPaymentRequest {
     /// The identity pubkey of the payment recipient
     bytes dest = 1;
 
@@ -60,23 +60,44 @@ message PaymentRequest {
     int32 cltv_limit = 9;
 }
 
-message PaymentResponse {
-    /**
-    The payment hash that we paid to. Provided so callers are able to map
-    responses (which may be streaming) back to their original requests.
-    */
-    bytes pay_hash = 1;
-
-    /**
-    The pre-image of the payment successfully completed.
-    */
-    bytes pre_image = 2;
-
-    /**
-    If not an empty string, then a string representation of the payment error.
-    */
-    string payment_err = 3;
+message TrackPaymentRequest {
+    /// The hash of the payment to look up.
+    bytes payment_hash = 1;
 }
+
+enum PaymentOutcome {
+    /**
+    Payment completed successfully.
+    */
+    SUCCEEDED = 0;
+
+    /**
+    There are more routes to try, but the payment timeout was exceeded.
+    */
+    FAILED_TIMEOUT = 1;
+    
+    /**
+    All possible routes were tried and failed permanently. Or were no
+    routes to the destination at all.
+    */
+    FAILED_NO_ROUTE = 2;
+}
+
+message PaymentResponse {
+    /// Current state the payment is in.
+    PaymentOutcome outcome = 1;
+
+    /**
+    The pre-image of the payment when state is SUCCEEDED.
+    */
+    bytes preimage = 2;
+
+    /**
+    The taken route when state is SUCCEEDED.
+    */
+    lnrpc.Route route = 3;
+}
+
 
 message RouteFeeRequest {
     /**
@@ -265,12 +286,19 @@ message ChannelUpdate {
 service Router {
     /**
     SendPayment attempts to route a payment described by the passed
-    PaymentRequest to the final destination. If we are unable to route the
-    payment, or cannot find a route that satisfies the constraints in the
-    PaymentRequest, then an error will be returned. Otherwise, the payment
-    pre-image, along with the final route will be returned.
+    PaymentRequest to the final destination. When the rpc connection is lost
+    before the payment completes, its status can be picked up through
+    TrackPayment. If the payment is already in flight, an error will be
+    returned.
     */
-    rpc SendPayment(PaymentRequest) returns (PaymentResponse);
+    rpc SendPayment(SendPaymentRequest) returns (PaymentResponse);
+
+    /**
+    TrackPayment blocks until the provided payment completes and returns the
+    outcome. If the payment is not known, it will return an error.
+    */
+    rpc TrackPayment(TrackPaymentRequest) returns (PaymentResponse);
+
 
     /**
     EstimateRouteFee allows callers to obtain a lower bound w.r.t how much it
