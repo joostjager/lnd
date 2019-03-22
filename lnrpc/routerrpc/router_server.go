@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 
 	"github.com/btcsuite/btcutil"
+	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/routing/route"
@@ -38,11 +40,15 @@ var (
 
 	// macPermissions maps RPC calls to the permissions they require.
 	macPermissions = map[string][]bakery.Op{
-		"/routerpc.Router/SendPayment": {{
+		"/routerrpc.Router/SendPayment": {{
 			Entity: "offchain",
 			Action: "write",
 		}},
-		"/routerpc.Router/EstimateRouteFee": {{
+		"/routerrpc.Router/LookupPayment": {{
+			Entity: "offchain",
+			Action: "write",
+		}},
+		"/routerrpc.Router/EstimateRouteFee": {{
 			Entity: "offchain",
 			Action: "read",
 		}},
@@ -53,6 +59,12 @@ var (
 	// configuration file in this package.
 	DefaultRouterMacFilename = "router.macaroon"
 )
+
+type paymentResult struct {
+	err      error
+	preimage lntypes.Preimage
+	route    *route.Route
+}
 
 // Server is a stand alone sub RPC server which exposes functionality that
 // allows clients to route arbitrary payment through the Lightning Network.
@@ -174,15 +186,12 @@ func (s *Server) SendPayment(ctx context.Context,
 		return nil, err
 	}
 
-	preImage, _, err := s.cfg.Router.SendPayment(payment)
+	err = s.cfg.Router.SendPaymentAsync(payment)
 	if err != nil {
 		return nil, err
 	}
 
-	return &PaymentResponse{
-		PayHash:  payment.PaymentHash[:],
-		PreImage: preImage[:],
-	}, nil
+	return &PaymentResponse{}, nil
 }
 
 // EstimateRouteFee allows callers to obtain a lower bound w.r.t how much it
@@ -225,4 +234,61 @@ func (s *Server) EstimateRouteFee(ctx context.Context,
 		RoutingFeeMsat: int64(routes[0].TotalFees),
 		TimeLockDelay:  int64(routes[0].TotalTimeLock),
 	}, nil
+}
+
+func (s *Server) LookupPayment(hash *lnrpc.PaymentHash,
+	stream Router_LookupPaymentServer) error {
+
+	paymentHash, err := lntypes.MakeHash(hash.RHash)
+	if err != nil {
+		return err
+	}
+
+	log.Debugf("LookupPayment %v", paymentHash)
+
+	subscriber, err := s.cfg.RouterBackend.Tower.SubscribePayment(
+		paymentHash,
+	)
+	if err != nil {
+		return err
+	}
+	defer subscriber.Cancel()
+
+	done := false
+	for !done {
+		select {
+		case event := <-subscriber.Events:
+			var status PaymentStatus
+
+			switch event.Status {
+
+			case channeldb.StatusInFlight:
+				status.State = PaymentState_IN_FLIGHT
+
+			case channeldb.StatusFailed:
+				status.State = PaymentState_FAILED_NO_ROUTE
+				done = true
+
+			case channeldb.StatusCompleted:
+				status.State = PaymentState_SUCCEEDED
+				status.Preimage = event.Preimage[:]
+				status.Route = s.cfg.RouterBackend.
+					MarshallRoute(event.Route)
+				done = true
+
+			default:
+				return errors.New("unknown payment status")
+			}
+			err = stream.Send(&status)
+			if err != nil {
+				return err
+			}
+
+		case <-stream.Context().Done():
+			log.Debugf("LookupPayment %v canceled", paymentHash)
+			return stream.Context().Err()
+		}
+	}
+
+	return nil
 }

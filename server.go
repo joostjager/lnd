@@ -189,6 +189,8 @@ type server struct {
 
 	chanRouter *routing.ChannelRouter
 
+	controlTower channeldb.ControlTower
+
 	authGossiper *discovery.AuthenticatedGossiper
 
 	utxoNursery *utxoNursery
@@ -614,11 +616,13 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		return nil, err
 	}
 
+	s.controlTower = channeldb.NewPaymentControl(chanDB)
+
 	s.chanRouter, err = routing.New(routing.Config{
 		Graph:     chanGraph,
 		Chain:     cc.chainIO,
 		ChainView: cc.chainView,
-		Control:   channeldb.NewPaymentControl(chanDB),
+		Control:   s.controlTower,
 		SendToSwitch: func(route *route.Route, paymentHash [32]byte, pid uint64) error {
 
 			// Generate the raw encoded sphinx packet to be included along
