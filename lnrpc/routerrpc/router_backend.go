@@ -9,6 +9,7 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
+	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -52,6 +53,8 @@ type RouterBackend struct {
 	// that we receive payment requests that send to destinations on our
 	// network.
 	ActiveNetParams *chaincfg.Params
+
+	Tower channeldb.ControlTower
 }
 
 // QueryRoutes attempts to query the daemons' Channel Router for a possible
@@ -341,8 +344,8 @@ func (r *RouterBackend) UnmarshallRoute(rpcroute *lnrpc.Route) (
 // extractIntentFromSendRequest attempts to parse the SendRequest details
 // required to dispatch a client from the information presented by an RPC
 // client.
-func (r *RouterBackend) extractIntentFromSendRequest(rpcPayReq *PaymentRequest) (
-	*routing.LightningPayment, error) {
+func (r *RouterBackend) extractIntentFromSendRequest(
+	rpcPayReq *SendPaymentRequest) (*routing.LightningPayment, error) {
 
 	payIntent := &routing.LightningPayment{}
 

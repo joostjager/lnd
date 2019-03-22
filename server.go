@@ -189,6 +189,8 @@ type server struct {
 
 	chanRouter *routing.ChannelRouter
 
+	controlTower channeldb.ControlTower
+
 	authGossiper *discovery.AuthenticatedGossiper
 
 	utxoNursery *utxoNursery
@@ -650,12 +652,14 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		chanGraph, selfNode, queryBandwidth,
 	)
 
+	s.controlTower = channeldb.NewPaymentControl(chanDB)
+
 	s.chanRouter, err = routing.New(routing.Config{
 		Graph:              chanGraph,
 		Chain:              cc.chainIO,
 		ChainView:          cc.chainView,
 		Payer:              s.htlcSwitch,
-		Control:            channeldb.NewPaymentControl(chanDB),
+		Control:            s.controlTower,
 		MissionControl:     missionControl,
 		ChannelPruneExpiry: routing.DefaultChannelPruneExpiry,
 		GraphPruneInterval: time.Duration(time.Hour),
