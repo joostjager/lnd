@@ -280,6 +280,9 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 		for _, key := range edgeInfoDeletes {
 			log.Infof("Deleting from edge info %x (%v)", key, byteOrder.Uint64(key))
 			// edgeIndex.Delete(key)
+		}
+
+		for _, key := range chanIndexDeletes {
 			log.Infof("Deleting from chan index %x", key)
 			// chanIndex.Delete(key)
 		}
