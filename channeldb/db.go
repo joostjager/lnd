@@ -147,6 +147,14 @@ func Open(dbPath string, modifiers ...OptionModifier) (*DB, error) {
 		return nil, err
 	}
 
+	ok, err := chanDB.graph.CheckIsConsistent()
+	if err != nil {
+		return nil, fmt.Errorf("database inconsistent: %v", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("database inconsistent")
+	}
+
 	return chanDB, nil
 }
 

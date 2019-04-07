@@ -178,6 +178,94 @@ func (c *ChannelGraph) Database() *DB {
 	return c.db
 }
 
+// CheckIsConsistent checks the db for consistency.
+func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
+	edgeInfoMap := make(map[uint64]*ChannelEdgeInfo)
+
+	err := c.db.View(func(tx *bbolt.Tx) error {
+		// Next, grab the edge bucket which stores the edges, and also
+		// the index itself so we can group the directed edges together
+		// logically.
+		edges := tx.Bucket(edgeBucket)
+		if edges == nil {
+			return ErrGraphNoEdgesFound
+		}
+		edgeIndex := edges.Bucket(edgeIndexBucket)
+		if edgeIndex == nil {
+			return ErrGraphNoEdgesFound
+		}
+
+		// For each edge pair within the edge index, we fetch each edge
+		// itself and also the node information in order to fully
+		// populated the object.
+		err := edgeIndex.ForEach(func(chanID, edgeInfoBytes []byte) error {
+			id := byteOrder.Uint64(chanID)
+
+			infoReader := bytes.NewReader(edgeInfoBytes)
+			edgeInfo, err := deserializeChanEdgeInfo(infoReader)
+			if err != nil {
+				log.Errorf("Cannot deserialize edge info for chan %v",
+					id)
+
+				return nil
+			}
+
+			edgeInfoMap[id] = &edgeInfo
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		chanIndex := edges.Bucket(channelPointBucket)
+		if chanIndex == nil {
+			return ErrGraphNoEdgesFound
+		}
+
+		chanIdMap := make(map[uint64]struct{})
+
+		// Once we have the proper bucket, we'll range over each key
+		// (which is the channel point for the channel) and decode it,
+		// accumulating each entry.
+		err = chanIndex.ForEach(func(chanPointBytes, chanID []byte) error {
+			chanPointReader := bytes.NewReader(chanPointBytes)
+
+			var chanPoint wire.OutPoint
+			err := readOutpoint(chanPointReader, &chanPoint)
+			if err != nil {
+				return err
+			}
+
+			chanIdMap[byteOrder.Uint64(chanID)] = struct{}{}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		for id := range chanIdMap {
+			if _, ok := edgeInfoMap[id]; !ok {
+				log.Errorf("Chan %v present in chan id bucket, but not in edge info bucket", id)
+			}
+		}
+		for id := range edgeInfoMap {
+			if _, ok := chanIdMap[id]; !ok {
+				log.Errorf("Chan %v present in edge info bucket, but not in chan id bucket", id)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	log.Infof("Database is consistent")
+
+	return true, nil
+}
+
 // ForEachChannel iterates through all the channel edges stored within the
 // graph and invokes the passed callback for each edge. The callback takes two
 // edges as since this is a directed graph, both the in/out edges are visited.
