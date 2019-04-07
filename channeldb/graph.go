@@ -3018,8 +3018,6 @@ func (c *ChannelGraph) ChannelView() ([]EdgePoint, error) {
 		return chanIndex.ForEach(func(chanPointBytes, chanID []byte) error {
 			chanPointReader := bytes.NewReader(chanPointBytes)
 
-			log.Debugf("ChannelView fetching edge %v", byteOrder.Uint64(chanID))
-
 			var chanPoint wire.OutPoint
 			err := readOutpoint(chanPointReader, &chanPoint)
 			if err != nil {
@@ -3029,6 +3027,12 @@ func (c *ChannelGraph) ChannelView() ([]EdgePoint, error) {
 			edgeInfo, err := fetchChanEdgeInfo(
 				edgeIndex, chanID,
 			)
+			// Strategic continue.
+			if err == ErrEdgeNotFoundInner {
+				log.Debugf("ChannelView fetching edge %v: %v", byteOrder.Uint64(chanID), err)
+
+				return nil
+			}
 			if err != nil {
 				return err
 			}
