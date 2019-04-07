@@ -952,6 +952,12 @@ func (c *ChannelGraph) pruneGraphNodes(nodes *bbolt.Bucket,
 	// edge info. We'll use this scan to populate our reference count map
 	// above.
 	err = edgeIndex.ForEach(func(chanID, edgeInfoBytes []byte) error {
+		if len(edgeInfoBytes) < 66 {
+			log.Errorf("Incorrect edgeInfoBytes: chanid=%v",
+				byteOrder.Uint64(chanID))
+
+			return nil
+		}
 		// The first 66 bytes of the edge info contain the pubkeys of
 		// the nodes that this edge attaches. We'll extract them, and
 		// add them to the ref count map.
