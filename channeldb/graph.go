@@ -180,9 +180,11 @@ func (c *ChannelGraph) Database() *DB {
 
 // CheckIsConsistent checks the db for consistency.
 func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
-	edgeInfoMap := make(map[uint64]*ChannelEdgeInfo)
 
-	err := c.db.View(func(tx *bbolt.Tx) error {
+	err := c.db.Update(func(tx *bbolt.Tx) error {
+		chanIndexDeletes := [][]byte{}
+		edgeInfoDeletes := [][]byte{}
+
 		// Next, grab the edge bucket which stores the edges, and also
 		// the index itself so we can group the directed edges together
 		// logically.
@@ -195,10 +197,20 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 			return ErrGraphNoEdgesFound
 		}
 
+		edgeInfoMap := make(map[uint64]*ChannelEdgeInfo)
+		edgeInfoKeyMap := make(map[uint64][]byte)
+
 		// For each edge pair within the edge index, we fetch each edge
 		// itself and also the node information in order to fully
 		// populated the object.
 		err := edgeIndex.ForEach(func(chanID, edgeInfoBytes []byte) error {
+			if len(chanID) != 8 {
+				log.Errorf("Invalid chan id found ")
+
+				edgeInfoDeletes = append(edgeInfoDeletes, chanID)
+
+				return nil
+			}
 			id := byteOrder.Uint64(chanID)
 
 			infoReader := bytes.NewReader(edgeInfoBytes)
@@ -207,10 +219,14 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 				log.Errorf("Cannot deserialize edge info for chan %v",
 					id)
 
+				edgeInfoDeletes = append(edgeInfoDeletes, chanID)
+
 				return nil
 			}
 
 			edgeInfoMap[id] = &edgeInfo
+			edgeInfoKeyMap[id] = chanID
+
 			return nil
 		})
 		if err != nil {
@@ -223,6 +239,7 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 		}
 
 		chanIdMap := make(map[uint64]struct{})
+		chanIdKeyMap := make(map[uint64][]byte)
 
 		// Once we have the proper bucket, we'll range over each key
 		// (which is the channel point for the channel) and decode it,
@@ -236,8 +253,9 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 				return err
 			}
 
-			chanIdMap[byteOrder.Uint64(chanID)] = struct{}{}
-
+			id := byteOrder.Uint64(chanID)
+			chanIdMap[id] = struct{}{}
+			chanIdKeyMap[id] = chanPointBytes
 			return nil
 		})
 		if err != nil {
@@ -247,12 +265,23 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 		for id := range chanIdMap {
 			if _, ok := edgeInfoMap[id]; !ok {
 				log.Errorf("Chan %v present in chan id bucket, but not in edge info bucket", id)
+
+				chanIndexDeletes = append(chanIndexDeletes, chanIdKeyMap[id])
 			}
 		}
 		for id := range edgeInfoMap {
 			if _, ok := chanIdMap[id]; !ok {
 				log.Errorf("Chan %v present in edge info bucket, but not in chan id bucket", id)
+
+				edgeInfoDeletes = append(edgeInfoDeletes, edgeInfoKeyMap[id])
 			}
+		}
+
+		for _, key := range edgeInfoDeletes {
+			log.Infof("Deleting from edge info %x (%v)", key, byteOrder.Uint64(key))
+			// edgeIndex.Delete(key)
+			log.Infof("Deleting from chan index %x", key)
+			// chanIndex.Delete(key)
 		}
 
 		return nil
