@@ -173,7 +173,7 @@ func (m *ChanStatusManager) Start() error {
 		// have been pruned from the channel graph but not yet from our
 		// set of channels. We'll skip it as we can't determine its
 		// initial state.
-		case err == channeldb.ErrEdgeNotFound:
+		case err == channeldb.ErrEdgeNotFoundInner:
 			log.Warnf("Unable to find channel policies for %v, "+
 				"skipping. This is typical if the channel is "+
 				"in the process of closing.", c.FundingOutpoint)
@@ -471,7 +471,7 @@ func (m *ChanStatusManager) disableInactiveChannels() {
 			// that the channel has been closed. Thus we remove the
 			// outpoint from the set of tracked outpoints to prevent
 			// further attempts.
-			if err == channeldb.ErrEdgeNotFound {
+			if err == channeldb.ErrEdgeNotFoundInner {
 				log.Debugf("Removing channel(%v) from "+
 					"consideration for passive disabling",
 					outpoint)

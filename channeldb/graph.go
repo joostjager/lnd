@@ -735,16 +735,16 @@ func (c *ChannelGraph) UpdateChannelEdge(edge *ChannelEdgeInfo) error {
 	return c.db.Update(func(tx *bbolt.Tx) error {
 		edges := tx.Bucket(edgeBucket)
 		if edge == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		edgeIndex := edges.Bucket(edgeIndexBucket)
 		if edgeIndex == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		if edgeInfo := edgeIndex.Get(chanKey[:]); edgeInfo == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		return putChanEdgeInfo(edgeIndex, edge, chanKey)
@@ -828,7 +828,7 @@ func (c *ChannelGraph) PruneGraph(spentOutputs []*wire.OutPoint,
 				return err
 			}
 
-			// Attempt to delete the channel, an ErrEdgeNotFound
+			// Attempt to delete the channel, an ErrEdgeNotFound()
 			// will be returned if that outpoint isn't known to be
 			// a channel. If no error is returned, then a channel
 			// was successfully pruned.
@@ -836,7 +836,7 @@ func (c *ChannelGraph) PruneGraph(spentOutputs []*wire.OutPoint,
 				edges, edgeIndex, chanIndex, zombieIndex, nodes,
 				chanPoint, false,
 			)
-			if err != nil && err != ErrEdgeNotFound {
+			if err != nil && err != ErrEdgeNotFound() {
 				return err
 			}
 
@@ -1074,7 +1074,7 @@ func (c *ChannelGraph) DisconnectBlockAtHeight(height uint32) ([]*ChannelEdgeInf
 				edges, edgeIndex, chanIndex, zombieIndex, nodes,
 				&edgeInfo.ChannelPoint, false,
 			)
-			if err != nil && err != ErrEdgeNotFound {
+			if err != nil && err != ErrEdgeNotFound() {
 				return err
 			}
 
@@ -1166,7 +1166,7 @@ func (c *ChannelGraph) PruneTip() (*chainhash.Hash, uint32, error) {
 // DeleteChannelEdge removes an edge from the database as identified by its
 // funding outpoint and also marks it as a zombie. This ensures that we're
 // unable to re-add this to our database once again. If the edge does not exist
-// within the database, then ErrEdgeNotFound will be returned.
+// within the database, then ErrEdgeNotFound() will be returned.
 func (c *ChannelGraph) DeleteChannelEdge(chanPoint *wire.OutPoint) error {
 	// TODO(roasbeef): possibly delete from node bucket if node has no more
 	// channels
@@ -1187,18 +1187,18 @@ func (c *ChannelGraph) DeleteChannelEdge(chanPoint *wire.OutPoint) error {
 		// we'd like to delete
 		edges := tx.Bucket(edgeBucket)
 		if edges == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		// Next grab the two edge indexes which will also need to be
 		// updated.
 		edgeIndex := edges.Bucket(edgeIndexBucket)
 		if edgeIndex == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 		chanIndex := edges.Bucket(channelPointBucket)
 		if chanIndex == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 		nodes := tx.Bucket(nodeBucket)
 		if nodes == nil {
@@ -1226,7 +1226,7 @@ func (c *ChannelGraph) DeleteChannelEdge(chanPoint *wire.OutPoint) error {
 
 // ChannelID attempt to lookup the 8-byte compact channel ID which maps to the
 // passed channel point (outpoint). If the passed channel doesn't exist within
-// the database, then ErrEdgeNotFound is returned.
+// the database, then ErrEdgeNotFound() is returned.
 func (c *ChannelGraph) ChannelID(chanPoint *wire.OutPoint) (uint64, error) {
 	var chanID uint64
 	if err := c.db.View(func(tx *bbolt.Tx) error {
@@ -1258,7 +1258,7 @@ func getChanID(tx *bbolt.Tx, chanPoint *wire.OutPoint) (uint64, error) {
 
 	chanIDBytes := chanIndex.Get(b.Bytes())
 	if chanIDBytes == nil {
-		return 0, ErrEdgeNotFound
+		return 0, ErrEdgeNotFound()
 	}
 
 	chanID := byteOrder.Uint64(chanIDBytes)
@@ -1747,7 +1747,7 @@ func delChannelByEdge(edges, edgeIndex, chanIndex, zombieIndex,
 	// then the edge does not exist.
 	chanID := chanIndex.Get(b.Bytes())
 	if chanID == nil {
-		return ErrEdgeNotFound
+		return ErrEdgeNotFound()
 	}
 
 	// Otherwise we obtain the two public keys from the mapping: chanID ->
@@ -1877,12 +1877,12 @@ func (c *ChannelGraph) UpdateEdgePolicy(edge *ChannelEdgePolicy) error {
 func updateEdgePolicy(tx *bbolt.Tx, edge *ChannelEdgePolicy) (bool, error) {
 	edges := tx.Bucket(edgeBucket)
 	if edges == nil {
-		return false, ErrEdgeNotFound
+		return false, ErrEdgeNotFound()
 
 	}
 	edgeIndex := edges.Bucket(edgeIndexBucket)
 	if edgeIndex == nil {
-		return false, ErrEdgeNotFound
+		return false, ErrEdgeNotFound()
 	}
 	nodes, err := tx.CreateBucketIfNotExists(nodeBucket)
 	if err != nil {
@@ -1898,7 +1898,7 @@ func updateEdgePolicy(tx *bbolt.Tx, edge *ChannelEdgePolicy) (bool, error) {
 	// nodes which connect this channel edge.
 	nodeInfo := edgeIndex.Get(chanID[:])
 	if nodeInfo == nil {
-		return false, ErrEdgeNotFound
+		return false, ErrEdgeNotFound()
 	}
 
 	// Depending on the flags value passed above, either the first
@@ -2723,7 +2723,7 @@ func (c *ChannelEdgePolicy) Signature() (*btcec.Signature, error) {
 
 // FetchChannelEdgesByOutpoint attempts to lookup the two directed edges for
 // the channel identified by the funding outpoint. If the channel can't be
-// found, then ErrEdgeNotFound is returned. A struct which houses the general
+// found, then ErrEdgeNotFound() is returned. A struct which houses the general
 // information for the channel itself is returned as well as two structs that
 // contain the routing policies for the channel in either direction.
 func (c *ChannelGraph) FetchChannelEdgesByOutpoint(op *wire.OutPoint,
@@ -2767,7 +2767,7 @@ func (c *ChannelGraph) FetchChannelEdgesByOutpoint(op *wire.OutPoint,
 		}
 		chanID := chanIndex.Get(b.Bytes())
 		if chanID == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		// If the channel is found to exists, then we'll first retrieve
@@ -2802,7 +2802,7 @@ func (c *ChannelGraph) FetchChannelEdgesByOutpoint(op *wire.OutPoint,
 
 // FetchChannelEdgesByID attempts to lookup the two directed edges for the
 // channel identified by the channel ID. If the channel can't be found, then
-// ErrEdgeNotFound is returned. A struct which houses the general information
+// ErrEdgeNotFound() is returned. A struct which houses the general information
 // for the channel itself is returned as well as two structs that contain the
 // routing policies for the channel in either direction.
 //
@@ -2846,20 +2846,20 @@ func (c *ChannelGraph) FetchChannelEdgesByID(chanID uint64,
 
 		// If it doesn't exist, we'll quickly check our zombie index to
 		// see if we've previously marked it as so.
-		if err == ErrEdgeNotFound {
+		if err == ErrEdgeNotFound() {
 			// If the zombie index doesn't exist, or the edge is not
 			// marked as a zombie within it, then we'll return the
-			// original ErrEdgeNotFound error.
+			// original ErrEdgeNotFound() error.
 			zombieIndex := edges.Bucket(zombieBucket)
 			if zombieIndex == nil {
-				return ErrEdgeNotFound
+				return ErrEdgeNotFound()
 			}
 
 			isZombie, pubKey1, pubKey2 := isZombieEdge(
 				zombieIndex, chanID,
 			)
 			if !isZombie {
-				return ErrEdgeNotFound
+				return ErrEdgeNotFound()
 			}
 
 			// Otherwise, the edge is marked as a zombie, so we'll
@@ -3489,7 +3489,7 @@ func fetchChanEdgeInfo(edgeIndex *bbolt.Bucket,
 
 	edgeInfoBytes := edgeIndex.Get(chanID)
 	if edgeInfoBytes == nil {
-		return ChannelEdgeInfo{}, ErrEdgeNotFound
+		return ChannelEdgeInfo{}, ErrEdgeNotFound()
 	}
 
 	edgeInfoReader := bytes.NewReader(edgeInfoBytes)
@@ -3664,7 +3664,7 @@ func fetchChanEdgePolicy(edges *bbolt.Bucket, chanID []byte,
 
 	edgeBytes := edges.Get(edgeKey[:])
 	if edgeBytes == nil {
-		return nil, ErrEdgeNotFound
+		return nil, ErrEdgeNotFound()
 	}
 
 	// No need to deserialize unknown policy.
@@ -3694,7 +3694,7 @@ func fetchChanEdgePolicies(edgeIndex *bbolt.Bucket, edges *bbolt.Bucket,
 
 	edgeInfo := edgeIndex.Get(chanID)
 	if edgeInfo == nil {
-		return nil, nil, ErrEdgeNotFound
+		return nil, nil, ErrEdgeNotFound()
 	}
 
 	// The first node is contained within the first half of the edge

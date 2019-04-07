@@ -477,7 +477,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 		// the database.
 		graph := p.server.chanDB.ChannelGraph()
 		info, p1, p2, err := graph.FetchChannelEdgesByOutpoint(chanPoint)
-		if err != nil && err != channeldb.ErrEdgeNotFound {
+		if err != nil && err != channeldb.ErrEdgeNotFoundInner {
 			return err
 		}
 
