@@ -181,7 +181,24 @@ func (c *ChannelGraph) Database() *DB {
 // CheckIsConsistent checks the db for consistency.
 func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 
-	err := c.db.Update(func(tx *bbolt.Tx) error {
+	var err error
+	// err = c.db.Update(func(tx *bbolt.Tx) error {
+	// 	edges := tx.Bucket(edgeBucket)
+	// 	if edges == nil {
+	// 		return ErrGraphNoEdgesFound
+	// 	}
+	// 	edgeIndex := edges.Bucket(edgeIndexBucket)
+	// 	if edgeIndex == nil {
+	// 		return ErrGraphNoEdgesFound
+	// 	}
+	// 	edgeIndex.Put([]byte{1, 2, 34, 5, 6, 7, 8, 4, 3, 34, 5, 4}, []byte{1, 2, 3})
+	// 	return nil
+	// })
+	// if err != nil {
+	// 	return false, err
+	// }
+
+	err = c.db.Update(func(tx *bbolt.Tx) error {
 		chanIndexDeletes := [][]byte{}
 		edgeInfoDeletes := [][]byte{}
 
@@ -278,7 +295,10 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 		}
 
 		for _, key := range edgeInfoDeletes {
+
 			log.Infof("Deleting from edge info %x (%v)", key, byteOrder.Uint64(key))
+			cur := edgeIndex.Get(key)
+			log.Infof("Current value: %x", cur)
 			err := edgeIndex.Delete(key)
 			if err != nil {
 				log.Errorf("delete: %v", err)
