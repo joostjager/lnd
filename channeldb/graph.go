@@ -223,8 +223,9 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 		err := edgeIndex.ForEach(func(chanID, edgeInfoBytes []byte) error {
 			if len(chanID) != 8 {
 				log.Errorf("Invalid chan id found %x", chanID)
-
-				edgeInfoDeletes = append(edgeInfoDeletes, chanID)
+				c := make([]byte, len(chanID))
+				copy(c, chanID)
+				edgeInfoDeletes = append(edgeInfoDeletes, c)
 
 				return nil
 			}
@@ -299,8 +300,11 @@ func (c *ChannelGraph) CheckIsConsistent() (bool, error) {
 			log.Infof("Deleting from edge info %x (%v)", key, byteOrder.Uint64(key))
 			cur := edgeIndex.Get(key)
 			log.Infof("Current value: %x", cur)
-			edgeIndex.Delete(key)
-			edgeIndex.DeleteBucket(key)
+			err := edgeIndex.Delete(key)
+			log.Errorf("Delete error: %v", err)
+
+			err = edgeIndex.DeleteBucket(key)
+			log.Errorf("Delete bucket error: %v", err)
 		}
 
 		for _, key := range chanIndexDeletes {
