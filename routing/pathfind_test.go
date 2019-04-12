@@ -617,8 +617,8 @@ func TestFindLowestFeePath(t *testing.T) {
 		t.Fatalf("unable to find path: %v", err)
 	}
 	route, err := newRoute(
-		paymentAmt, sourceVertex, path, startingHeight,
-		finalHopCLTV)
+		paymentAmt, sourceVertex, path, startingHeight+finalHopCLTV,
+	)
 	if err != nil {
 		t.Fatalf("unable to create path: %v", err)
 	}
@@ -764,8 +764,7 @@ func testBasicGraphPathFindingCase(t *testing.T, graphInstance *testGraphInstanc
 	}
 
 	route, err := newRoute(
-		paymentAmt, sourceVertex, path, startingHeight,
-		finalHopCLTV,
+		paymentAmt, sourceVertex, path, startingHeight+finalHopCLTV,
 	)
 	if err != nil {
 		t.Fatalf("unable to create path: %v", err)
@@ -1179,8 +1178,9 @@ func TestNewRoute(t *testing.T) {
 
 		t.Run(testCase.name, func(t *testing.T) {
 			route, err := newRoute(testCase.paymentAmount,
-				sourceVertex, testCase.hops, startingHeight,
-				finalHopCLTV)
+				sourceVertex, testCase.hops,
+				startingHeight+finalHopCLTV,
+			)
 
 			if testCase.expectError {
 				expectedCode := testCase.expectedErrorCode
@@ -2007,8 +2007,7 @@ func TestRestrictOutgoingChannel(t *testing.T) {
 		t.Fatalf("unable to find path: %v", err)
 	}
 	route, err := newRoute(
-		paymentAmt, sourceVertex, path, startingHeight,
-		finalHopCLTV,
+		paymentAmt, sourceVertex, path, startingHeight+finalHopCLTV,
 	)
 	if err != nil {
 		t.Fatalf("unable to create path: %v", err)
@@ -2116,7 +2115,7 @@ func testCltvLimit(t *testing.T, limit uint32, expectedChannel uint64) {
 		finalHopCLTV   = 1
 	)
 	route, err := newRoute(
-		paymentAmt, sourceVertex, path, startingHeight, finalHopCLTV,
+		paymentAmt, sourceVertex, path, startingHeight+finalHopCLTV,
 	)
 	if err != nil {
 		t.Fatalf("unable to create path: %v", err)

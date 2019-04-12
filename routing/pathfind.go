@@ -193,8 +193,8 @@ func (r *Route) ToHopPayloads() []sphinx.HopData {
 // NOTE: The passed slice of ChannelHops MUST be sorted in forward order: from
 // the source to the target node of the path finding attempt.
 func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex Vertex,
-	pathEdges []*channeldb.ChannelEdgePolicy, currentHeight uint32,
-	finalCLTVDelta uint16) (*Route, error) {
+	pathEdges []*channeldb.ChannelEdgePolicy, finalCLTV int32) (
+	*Route, error) {
 
 	var (
 		hops []*Hop
@@ -202,7 +202,7 @@ func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex Vertex,
 		// totalTimeLock will accumulate the cumulative time lock
 		// across the entire route. This value represents how long the
 		// sender will need to wait in the *worst* case.
-		totalTimeLock = currentHeight
+		totalTimeLock int32
 
 		// nextIncomingAmount is the amount that will need to flow into
 		// the *next* hop. Since we're going to be walking the route
@@ -244,20 +244,19 @@ func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex Vertex,
 		// If this is the last hop, then for verification purposes, the
 		// value of the outgoing time-lock should be _exactly_ the
 		// absolute time out they'd expect in the HTLC.
-		var outgoingTimeLock uint32
+		var outgoingTimeLock int32
 		if i == len(pathEdges)-1 {
 			// As this is the last hop, we'll use the specified
 			// final CLTV delta value instead of the value from the
 			// last link in the route.
-			totalTimeLock += uint32(finalCLTVDelta)
-
-			outgoingTimeLock = currentHeight + uint32(finalCLTVDelta)
+			totalTimeLock = finalCLTV
+			outgoingTimeLock = totalTimeLock
 		} else {
 			// Next, increment the total timelock of the entire
 			// route such that each hops time lock increases as we
 			// walk backwards in the route, using the delta of the
 			// previous hop.
-			delta := uint32(pathEdges[i+1].TimeLockDelta)
+			delta := int32(pathEdges[i+1].TimeLockDelta)
 			totalTimeLock += delta
 
 			// Otherwise, the value of the outgoing time-lock will
@@ -274,7 +273,7 @@ func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex Vertex,
 			PubKeyBytes:      Vertex(edge.Node.PubKeyBytes),
 			ChannelID:        edge.ChannelID,
 			AmtToForward:     amtToForward,
-			OutgoingTimeLock: outgoingTimeLock,
+			OutgoingTimeLock: uint32(outgoingTimeLock),
 		}
 		hops = append([]*Hop{currentHop}, hops...)
 
@@ -286,7 +285,7 @@ func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex Vertex,
 
 	// With the base routing data expressed as hops, build the full route
 	newRoute, err := NewRouteFromHops(
-		nextIncomingAmount, totalTimeLock, sourceVertex, hops,
+		nextIncomingAmount, uint32(totalTimeLock), sourceVertex, hops,
 	)
 	if err != nil {
 		return nil, err

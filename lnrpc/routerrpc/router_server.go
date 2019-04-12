@@ -196,7 +196,7 @@ func (s *Server) SendPayment(ctx context.Context,
 	// Now that all the information we need has been parsed, we'll map this
 	// proto request into a proper request that our backing router can
 	// understand.
-	finalDelta := uint16(payReq.MinFinalCLTVExpiry())
+	finalDelta := int32(payReq.MinFinalCLTVExpiry())
 	payment := routing.LightningPayment{
 		Target:            destination,
 		Amount:            *payReq.MilliSat,

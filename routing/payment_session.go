@@ -111,7 +111,7 @@ func (p *paymentSession) ReportEdgePolicyFailure(
 //
 // NOTE: This function is safe for concurrent access.
 func (p *paymentSession) RequestRoute(payment *LightningPayment,
-	height uint32, finalCltvDelta uint16) (*Route, error) {
+	height int32, finalCltvDelta int32) (*Route, error) {
 
 	switch {
 	// If we have a set of pre-built routes, then we'll just pop off the
@@ -177,7 +177,7 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	// a route by applying the time-lock and fee requirements.
 	sourceVertex := Vertex(p.mc.selfNode.PubKeyBytes)
 	route, err := newRoute(
-		payment.Amount, sourceVertex, path, height, finalCltvDelta,
+		payment.Amount, sourceVertex, path, height+finalCltvDelta,
 	)
 	if err != nil {
 		// TODO(roasbeef): return which edge/vertex didn't work

@@ -2889,7 +2889,7 @@ type rpcPaymentIntent struct {
 	cltvLimit         *uint32
 	dest              routing.Vertex
 	rHash             [32]byte
-	cltvDelta         uint16
+	cltvDelta         int32
 	routeHints        [][]zpay32.HopHint
 	outgoingChannelID *uint64
 
@@ -2978,7 +2978,7 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 		copy(payIntent.rHash[:], payReq.PaymentHash[:])
 		destKey := payReq.Destination.SerializeCompressed()
 		copy(payIntent.dest[:], destKey)
-		payIntent.cltvDelta = uint16(payReq.MinFinalCLTVExpiry())
+		payIntent.cltvDelta = int32(payReq.MinFinalCLTVExpiry())
 		payIntent.routeHints = payReq.RouteHints
 
 		return payIntent, nil
@@ -3014,7 +3014,7 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 		rpcPayReq.FeeLimit, payIntent.msat,
 	)
 
-	payIntent.cltvDelta = uint16(rpcPayReq.FinalCltvDelta)
+	payIntent.cltvDelta = rpcPayReq.FinalCltvDelta
 
 	// If the user is manually specifying payment details, then the payment
 	// hash may be encoded as a string.

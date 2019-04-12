@@ -1290,8 +1290,8 @@ type routingMsg struct {
 // initial set of paths as it's possible we drop a route if it can't handle the
 // total payment flow after fees are calculated.
 func pathsToFeeSortedRoutes(source Vertex, paths [][]*channeldb.ChannelEdgePolicy,
-	finalCLTVDelta uint16, amt lnwire.MilliSatoshi,
-	currentHeight uint32) ([]*Route, error) {
+	finalCLTVDelta int32, amt lnwire.MilliSatoshi,
+	currentHeight int32) ([]*Route, error) {
 
 	validRoutes := make([]*Route, 0, len(paths))
 	for _, path := range paths {
@@ -1299,7 +1299,7 @@ func pathsToFeeSortedRoutes(source Vertex, paths [][]*channeldb.ChannelEdgePolic
 		// hop in the path as it contains a "self-hop" that is inserted
 		// by our KSP algorithm.
 		route, err := newRoute(
-			amt, source, path[1:], currentHeight, finalCLTVDelta,
+			amt, source, path[1:], currentHeight+finalCLTVDelta,
 		)
 		if err != nil {
 			// TODO(roasbeef): report straw breaking edge?
@@ -1351,11 +1351,11 @@ func (r *ChannelRouter) FindRoutes(source, target Vertex,
 	amt lnwire.MilliSatoshi, restrictions *RestrictParams, numPaths uint32,
 	finalExpiry ...uint16) ([]*Route, error) {
 
-	var finalCLTVDelta uint16
+	var finalCLTVDelta int32
 	if len(finalExpiry) == 0 {
 		finalCLTVDelta = zpay32.DefaultFinalCLTVDelta
 	} else {
-		finalCLTVDelta = finalExpiry[0]
+		finalCLTVDelta = int32(finalExpiry[0])
 	}
 
 	log.Debugf("Searching for path to %x, sending %v", target, amt)
@@ -1437,8 +1437,7 @@ func (r *ChannelRouter) FindRoutes(source, target Vertex,
 	// factored in.
 	sourceVertex := Vertex(r.selfNode.PubKeyBytes)
 	validRoutes, err := pathsToFeeSortedRoutes(
-		sourceVertex, shortestPaths, finalCLTVDelta, amt,
-		uint32(currentHeight),
+		sourceVertex, shortestPaths, finalCLTVDelta, amt, currentHeight,
 	)
 	if err != nil {
 		return nil, err
@@ -1561,7 +1560,7 @@ type LightningPayment struct {
 	// of at least: currentHeight + FinalCLTVDelta. If this value is
 	// unspecified, then a default value of DefaultFinalCLTVDelta will be
 	// used.
-	FinalCLTVDelta *uint16
+	FinalCLTVDelta *int32
 
 	// PayAttemptTimeout is a timeout value that we'll use to determine
 	// when we should should abandon the payment attempt after consecutive
@@ -1652,7 +1651,7 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 		return [32]byte{}, nil, err
 	}
 
-	var finalCLTVDelta uint16
+	var finalCLTVDelta int32
 	if payment.FinalCLTVDelta == nil {
 		finalCLTVDelta = zpay32.DefaultFinalCLTVDelta
 	} else {
@@ -1694,7 +1693,7 @@ func (r *ChannelRouter) sendPayment(payment *LightningPayment,
 		}
 
 		route, err := paySession.RequestRoute(
-			payment, uint32(currentHeight), finalCLTVDelta,
+			payment, currentHeight, finalCLTVDelta,
 		)
 		if err != nil {
 			// If we're unable to successfully make a payment using

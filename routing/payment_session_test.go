@@ -40,7 +40,7 @@ func TestRequestRoute(t *testing.T) {
 	}
 
 	cltvLimit := uint32(30)
-	finalCltvDelta := uint16(8)
+	finalCltvDelta := int32(8)
 
 	payment := &LightningPayment{
 		CltvLimit:      &cltvLimit,
