@@ -294,7 +294,7 @@ type ChannelRouter struct {
 	//
 	// TODO(roasbeef): make LRU
 	routeCacheMtx sync.RWMutex
-	routeCache    map[routeTuple][]*Route
+	routeCache    map[routeTuple][][]*channeldb.ChannelEdgePolicy
 
 	// newBlocks is a channel in which new blocks connected to the end of
 	// the main chain are sent over, and blocks updated after a call to
@@ -367,7 +367,7 @@ func New(cfg Config) (*ChannelRouter, error) {
 		ntfnClientUpdates: make(chan *topologyClientUpdate),
 		channelEdgeMtx:    multimutex.NewMutex(),
 		selfNode:          selfNode,
-		routeCache:        make(map[routeTuple][]*Route),
+		routeCache:        make(map[routeTuple][][]*channeldb.ChannelEdgePolicy),
 		rejectCache:       make(map[uint64]struct{}),
 		quit:              make(chan struct{}),
 	}
@@ -813,7 +813,7 @@ func (r *ChannelRouter) networkHandler() {
 			// Invalidate the route cache, as some channels might
 			// not be confirmed anymore.
 			r.routeCacheMtx.Lock()
-			r.routeCache = make(map[routeTuple][]*Route)
+			r.routeCache = make(map[routeTuple][][]*channeldb.ChannelEdgePolicy)
 			r.routeCacheMtx.Unlock()
 
 			// TODO(halseth): notify client about the reorg?
@@ -882,7 +882,7 @@ func (r *ChannelRouter) networkHandler() {
 			//  * can have map of chanID to routes involved, avoids
 			//    full invalidation
 			r.routeCacheMtx.Lock()
-			r.routeCache = make(map[routeTuple][]*Route)
+			r.routeCache = make(map[routeTuple][][]*channeldb.ChannelEdgePolicy)
 			r.routeCacheMtx.Unlock()
 
 			if len(chansClosed) == 0 {
@@ -1227,7 +1227,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 	// choice of the KSP's for a particular routeTuple.
 	if invalidateCache {
 		r.routeCacheMtx.Lock()
-		r.routeCache = make(map[routeTuple][]*Route)
+		r.routeCache = make(map[routeTuple][][]*channeldb.ChannelEdgePolicy)
 		r.routeCacheMtx.Unlock()
 	}
 
@@ -1290,8 +1290,7 @@ type routingMsg struct {
 // initial set of paths as it's possible we drop a route if it can't handle the
 // total payment flow after fees are calculated.
 func pathsToFeeSortedRoutes(source Vertex, paths [][]*channeldb.ChannelEdgePolicy,
-	finalCLTVDelta int32, amt lnwire.MilliSatoshi,
-	currentHeight int32) ([]*Route, error) {
+	finalCLTV int32, amt lnwire.MilliSatoshi) ([]*Route, error) {
 
 	validRoutes := make([]*Route, 0, len(paths))
 	for _, path := range paths {
@@ -1299,7 +1298,7 @@ func pathsToFeeSortedRoutes(source Vertex, paths [][]*channeldb.ChannelEdgePolic
 		// hop in the path as it contains a "self-hop" that is inserted
 		// by our KSP algorithm.
 		route, err := newRoute(
-			amt, source, path[1:], currentHeight+finalCLTVDelta,
+			amt, source, path[1:], finalCLTV,
 		)
 		if err != nil {
 			// TODO(roasbeef): report straw breaking edge?
@@ -1362,27 +1361,89 @@ func (r *ChannelRouter) FindRoutes(source, target Vertex,
 
 	// Before attempting to perform a series of graph traversals to find the
 	// k-shortest paths to the destination, we'll first consult our path
-	// cache
+	// cache.
 	//
 	// TODO: Route cache should store all request parameters instead of just
-	// amt and target. Currently false positives are returned if just the
-	// restrictions (fee limit, ignore lists) or finalExpiry are different.
-	rt := newRouteTuple(amt, target[:])
-	r.routeCacheMtx.RLock()
-	routes, ok := r.routeCache[rt]
-	r.routeCacheMtx.RUnlock()
+	// amt and target. The current workaround is to only cache requests with
+	// default restrictions.
+	cachableRequest := source == r.selfNode.PubKeyBytes &&
+		restrictions.CltvLimit == nil &&
+		restrictions.OutgoingChannelID == nil &&
+		len(restrictions.IgnoredEdges) == 0 &&
+		len(restrictions.IgnoredNodes) == 0 &&
+		restrictions.FeeLimit == amt
 
-	// If we already have a cached route, and it contains at least the
-	// number of paths requested, then we'll return it directly as there's
-	// no need to repeat the computation.
-	if ok && uint32(len(routes)) >= numPaths {
-		return routes, nil
+	rt := newRouteTuple(amt, target[:])
+
+	var shortestPaths [][]*channeldb.ChannelEdgePolicy
+
+	if cachableRequest {
+		r.routeCacheMtx.RLock()
+		routes, ok := r.routeCache[rt]
+		r.routeCacheMtx.RUnlock()
+
+		// If we already have a cached route, and it contains at least
+		// the number of paths requested, then we'll return it directly
+		// as there's no need to repeat the computation.
+		if ok && uint32(len(routes)) >= numPaths {
+			shortestPaths = routes
+		}
 	}
 
-	// If we don't have a set of routes cached, we'll query the graph for a
-	// set of potential routes to the destination node that can support our
-	// payment amount. If no such routes can be found then an error will be
-	// returned.
+	if shortestPaths == nil {
+		// If we don't have a set of routes cached, we'll query the
+		// graph for a set of potential routes to the destination node
+		// that can support our payment amount. If no such routes can be
+		// found then an error will be returned.
+		var err error
+		shortestPaths, err = r.findRoutes(
+			source, target, amt, restrictions, numPaths,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Populate the cache with this set of fresh routes so we can
+		// reuse them in the future. Do not store Route structs in the
+		// cache, because the timelocks have already been picked.
+		if cachableRequest {
+			r.routeCacheMtx.Lock()
+			r.routeCache[rt] = shortestPaths
+			r.routeCacheMtx.Unlock()
+		}
+	}
+
+	// We'll also fetch the current block height so we can properly
+	// calculate the required HTLC time locks within the route.
+	_, currentHeight, err := r.cfg.Chain.GetBestBlock()
+	if err != nil {
+		return nil, err
+	}
+
+	// Now that we have a set of paths, we'll need to turn them into
+	// *routes* by computing the required time-lock and fee information for
+	// each path. During this process, some paths may be discarded if they
+	// aren't able to support the total satoshis flow once fees have been
+	// factored in.
+	validRoutes, err := pathsToFeeSortedRoutes(
+		source, shortestPaths, finalCLTVDelta+currentHeight, amt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	go log.Tracef("Obtained %v paths sending %v to %x: %v", len(validRoutes),
+		amt, target, newLogClosure(func() string {
+			return spew.Sdump(validRoutes)
+		}),
+	)
+
+	return validRoutes, nil
+}
+
+func (r *ChannelRouter) findRoutes(source, target Vertex,
+	amt lnwire.MilliSatoshi, restrictions *RestrictParams,
+	numPaths uint32) ([][]*channeldb.ChannelEdgePolicy, error) {
 
 	// We can short circuit the routing by opportunistically checking to
 	// see if the target vertex event exists in the current graph.
@@ -1393,16 +1454,11 @@ func (r *ChannelRouter) FindRoutes(source, target Vertex,
 		return nil, newErrf(ErrTargetNotInNetwork, "target not found")
 	}
 
-	// We'll also fetch the current block height so we can properly
-	// calculate the required HTLC time locks within the route.
-	_, currentHeight, err := r.cfg.Chain.GetBestBlock()
-	if err != nil {
-		return nil, err
-	}
-
 	// Before we open the db transaction below, we'll attempt to obtain a
 	// set of bandwidth hints that can help us eliminate certain routes
 	// early on in the path finding process.
+	//
+	// TODO: This is disturbing the cache.
 	bandwidthHints, err := generateBandwidthHints(
 		r.selfNode, r.cfg.QueryBandwidth,
 	)
@@ -1430,32 +1486,7 @@ func (r *ChannelRouter) FindRoutes(source, target Vertex,
 
 	tx.Rollback()
 
-	// Now that we have a set of paths, we'll need to turn them into
-	// *routes* by computing the required time-lock and fee information for
-	// each path. During this process, some paths may be discarded if they
-	// aren't able to support the total satoshis flow once fees have been
-	// factored in.
-	sourceVertex := Vertex(r.selfNode.PubKeyBytes)
-	validRoutes, err := pathsToFeeSortedRoutes(
-		sourceVertex, shortestPaths, finalCLTVDelta, amt, currentHeight,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	go log.Tracef("Obtained %v paths sending %v to %x: %v", len(validRoutes),
-		amt, target, newLogClosure(func() string {
-			return spew.Sdump(validRoutes)
-		}),
-	)
-
-	// Populate the cache with this set of fresh routes so we can reuse
-	// them in the future.
-	r.routeCacheMtx.Lock()
-	r.routeCache[rt] = validRoutes
-	r.routeCacheMtx.Unlock()
-
-	return validRoutes, nil
+	return shortestPaths, nil
 }
 
 // generateSphinxPacket generates then encodes a sphinx packet which encodes
