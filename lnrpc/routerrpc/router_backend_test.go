@@ -60,7 +60,7 @@ func TestQueryRoutes(t *testing.T) {
 
 	findRoutes := func(source, target route.Vertex,
 		amt lnwire.MilliSatoshi, restrictions *routing.RestrictParams,
-		numPaths uint32, finalExpiry ...uint16) (
+		numPaths uint32, finalExpiry ...int32) (
 		[]*route.Route, error) {
 
 		if int64(amt) != request.Amt*1000 {

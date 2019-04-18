@@ -2868,10 +2868,10 @@ func unmarshallSendToRouteRequest(req *lnrpc.SendToRouteRequest,
 type rpcPaymentIntent struct {
 	msat              lnwire.MilliSatoshi
 	feeLimit          lnwire.MilliSatoshi
-	cltvLimit         *uint32
+	cltvLimit         *int32
 	dest              route.Vertex
 	rHash             [32]byte
-	cltvDelta         uint16
+	cltvDelta         int32
 	routeHints        [][]zpay32.HopHint
 	outgoingChannelID *uint64
 
@@ -2914,7 +2914,8 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 
 	// Take cltv limit from request if set.
 	if rpcPayReq.CltvLimit != 0 {
-		payIntent.cltvLimit = &rpcPayReq.CltvLimit
+		cltvLimit := int32(rpcPayReq.CltvLimit)
+		payIntent.cltvLimit = &cltvLimit
 	}
 
 	// If the payment request field isn't blank, then the details of the
@@ -2960,7 +2961,7 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 		copy(payIntent.rHash[:], payReq.PaymentHash[:])
 		destKey := payReq.Destination.SerializeCompressed()
 		copy(payIntent.dest[:], destKey)
-		payIntent.cltvDelta = uint16(payReq.MinFinalCLTVExpiry())
+		payIntent.cltvDelta = int32(payReq.MinFinalCLTVExpiry())
 		payIntent.routeHints = payReq.RouteHints
 
 		return payIntent, nil
@@ -2996,7 +2997,7 @@ func extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPaymentIntent, error
 		rpcPayReq.FeeLimit, payIntent.msat,
 	)
 
-	payIntent.cltvDelta = uint16(rpcPayReq.FinalCltvDelta)
+	payIntent.cltvDelta = rpcPayReq.FinalCltvDelta
 
 	// If the user is manually specifying payment details, then the payment
 	// hash may be encoded as a string.
@@ -3862,7 +3863,7 @@ func unmarshallHopByChannelLookup(graph *channeldb.ChannelGraph, hop *lnrpc.Hop,
 	}
 
 	return &route.Hop{
-		OutgoingTimeLock: hop.Expiry,
+		OutgoingTimeLock: int32(hop.Expiry),
 		AmtToForward:     lnwire.MilliSatoshi(hop.AmtToForwardMsat),
 		PubKeyBytes:      pubKeyBytes,
 		ChannelID:        edgeInfo.ChannelID,
@@ -3882,7 +3883,7 @@ func unmarshallKnownPubkeyHop(hop *lnrpc.Hop) (*route.Hop, error) {
 	copy(pubKeyBytes[:], pubKey)
 
 	return &route.Hop{
-		OutgoingTimeLock: hop.Expiry,
+		OutgoingTimeLock: int32(hop.Expiry),
 		AmtToForward:     lnwire.MilliSatoshi(hop.AmtToForwardMsat),
 		PubKeyBytes:      pubKeyBytes,
 		ChannelID:        hop.ChanId,
@@ -3932,7 +3933,7 @@ func unmarshallRoute(rpcroute *lnrpc.Route,
 
 	route, err := route.NewRouteFromHops(
 		lnwire.MilliSatoshi(rpcroute.TotalAmtMsat),
-		rpcroute.TotalTimeLock,
+		int32(rpcroute.TotalTimeLock),
 		sourceNode.PubKeyBytes,
 		hops,
 	)

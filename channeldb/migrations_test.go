@@ -656,7 +656,7 @@ func TestOutgoingPaymentsMigration(t *testing.T) {
 				t.Fatalf("Fee mismatch")
 			}
 
-			if p.Route.TotalTimeLock != old.TimeLockLength {
+			if p.Route.TotalTimeLock != int32(old.TimeLockLength) {
 				t.Fatalf("timelock mismatch")
 			}
 

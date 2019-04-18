@@ -23,7 +23,7 @@ type nodeWithDist struct {
 
 	// incomingCltv is the expected cltv value for the incoming htlc of this
 	// node. This value does not include the final cltv.
-	incomingCltv uint32
+	incomingCltv int32
 
 	// fee is the fee that this node is charging for forwarding.
 	fee lnwire.MilliSatoshi

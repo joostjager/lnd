@@ -112,7 +112,7 @@ func (p *paymentSession) ReportEdgePolicyFailure(
 //
 // NOTE: This function is safe for concurrent access.
 func (p *paymentSession) RequestRoute(payment *LightningPayment,
-	height uint32, finalCltvDelta uint16) (*route.Route, error) {
+	height, finalCltvDelta int32) (*route.Route, error) {
 
 	switch {
 	// If we have a set of pre-built routes, then we'll just pop off the
@@ -143,9 +143,9 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	// delta before passing it into path finding. The optimal path is
 	// independent of the final cltv delta and the path finding algorithm is
 	// unaware of this value.
-	var cltvLimit *uint32
+	var cltvLimit *int32
 	if payment.CltvLimit != nil {
-		limit := *payment.CltvLimit - uint32(finalCltvDelta)
+		limit := *payment.CltvLimit - finalCltvDelta
 		cltvLimit = &limit
 	}
 

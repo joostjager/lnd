@@ -664,7 +664,7 @@ type expectedHop struct {
 	alias     string
 	fee       lnwire.MilliSatoshi
 	fwdAmount lnwire.MilliSatoshi
-	timeLock  uint32
+	timeLock  int32
 }
 
 type basicGraphPathFindingTestCase struct {
@@ -672,7 +672,7 @@ type basicGraphPathFindingTestCase struct {
 	paymentAmt            btcutil.Amount
 	feeLimit              lnwire.MilliSatoshi
 	expectedTotalAmt      lnwire.MilliSatoshi
-	expectedTotalTimeLock uint32
+	expectedTotalTimeLock int32
 	expectedHops          []expectedHop
 	expectFailureNoPath   bool
 }
@@ -1047,7 +1047,7 @@ func TestNewRoute(t *testing.T) {
 		// hop is expected to specify in its outgoing HTLC. The time
 		// lock values in this list are relative to the current block
 		// height.
-		expectedTimeLocks []uint32
+		expectedTimeLocks []int32
 
 		// expectedTotalAmount is the total amount that is expected to
 		// be returned from newRoute. This amount should include all
@@ -1058,7 +1058,7 @@ func TestNewRoute(t *testing.T) {
 		// be returned from newRoute. This is the time lock that should
 		// be specified in the HTLC that is sent by the source node.
 		// expectedTotalTimeLock is relative to the current block height.
-		expectedTotalTimeLock uint32
+		expectedTotalTimeLock int32
 
 		// expectError indicates whether the newRoute call is expected
 		// to fail or succeed.
@@ -1076,7 +1076,7 @@ func TestNewRoute(t *testing.T) {
 				createHop(100, 1000, 1000000, 10),
 			},
 			expectedFees:          []lnwire.MilliSatoshi{0},
-			expectedTimeLocks:     []uint32{1},
+			expectedTimeLocks:     []int32{1},
 			expectedTotalAmount:   100000,
 			expectedTotalTimeLock: 1,
 		}, {
@@ -1090,7 +1090,7 @@ func TestNewRoute(t *testing.T) {
 				createHop(30, 1000, 1000000, 5),
 			},
 			expectedFees:          []lnwire.MilliSatoshi{130, 0},
-			expectedTimeLocks:     []uint32{1, 1},
+			expectedTimeLocks:     []int32{1, 1},
 			expectedTotalAmount:   100130,
 			expectedTotalTimeLock: 6,
 		}, {
@@ -1108,7 +1108,7 @@ func TestNewRoute(t *testing.T) {
 			},
 			expectedFees:          []lnwire.MilliSatoshi{1, 1, 0},
 			expectedTotalAmount:   100002,
-			expectedTimeLocks:     []uint32{4, 1, 1},
+			expectedTimeLocks:     []int32{4, 1, 1},
 			expectedTotalTimeLock: 9,
 		}, {
 			// A three hop payment where the fee of the first hop
@@ -1123,7 +1123,7 @@ func TestNewRoute(t *testing.T) {
 			},
 			expectedFees:          []lnwire.MilliSatoshi{1010, 1000, 0},
 			expectedTotalAmount:   102010,
-			expectedTimeLocks:     []uint32{4, 1, 1},
+			expectedTimeLocks:     []int32{4, 1, 1},
 			expectedTotalTimeLock: 9,
 		}, {
 			// A three hop payment where the fee policies of the first and
@@ -1144,7 +1144,7 @@ func TestNewRoute(t *testing.T) {
 			},
 			expectedFees:          []lnwire.MilliSatoshi{101, 1000, 0},
 			expectedTotalAmount:   101101,
-			expectedTimeLocks:     []uint32{4, 1, 1},
+			expectedTimeLocks:     []int32{4, 1, 1},
 			expectedTotalTimeLock: 9,
 		}}
 
@@ -1893,7 +1893,7 @@ func TestPathFindSpecExample(t *testing.T) {
 			secondRoute.TotalAmount, expectedAmt)
 	}
 	expectedTimeLock := startingHeight + daveFinalCLTV + zpay32.DefaultFinalCLTVDelta
-	if secondRoute.TotalTimeLock != uint32(expectedTimeLock) {
+	if secondRoute.TotalTimeLock != int32(expectedTimeLock) {
 		t.Fatalf("wrong total time lock: got %v, expecting %v",
 			secondRoute.TotalTimeLock, expectedTimeLock)
 	}
@@ -1903,7 +1903,7 @@ func TestPathFindSpecExample(t *testing.T) {
 			onionPayload.AmtToForward, amt)
 	}
 	expectedTimeLock = startingHeight + zpay32.DefaultFinalCLTVDelta
-	if onionPayload.OutgoingTimeLock != uint32(expectedTimeLock) {
+	if onionPayload.OutgoingTimeLock != int32(expectedTimeLock) {
 		t.Fatalf("wrong outgoing time lock: got %v, expecting %v",
 			onionPayload.OutgoingTimeLock,
 			expectedTimeLock)
@@ -2046,7 +2046,7 @@ func TestCltvLimit(t *testing.T) {
 	t.Run("force high cost", func(t *testing.T) { testCltvLimit(t, 80, 3) })
 }
 
-func testCltvLimit(t *testing.T, limit uint32, expectedChannel uint64) {
+func testCltvLimit(t *testing.T, limit int32, expectedChannel uint64) {
 	t.Parallel()
 
 	// Set up a test graph with three possible paths to the target. The path
@@ -2099,7 +2099,7 @@ func testCltvLimit(t *testing.T, limit uint32, expectedChannel uint64) {
 	target := testGraphInstance.aliasMap["target"]
 
 	// Find the best path given the cltv limit.
-	var cltvLimit *uint32
+	var cltvLimit *int32
 	if limit != 0 {
 		cltvLimit = &limit
 	}
