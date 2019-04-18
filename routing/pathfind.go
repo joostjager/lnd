@@ -81,8 +81,8 @@ func isSamePath(path1, path2 []*channeldb.ChannelEdgePolicy) bool {
 // NOTE: The passed slice of ChannelHops MUST be sorted in forward order: from
 // the source to the target node of the path finding attempt.
 func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex route.Vertex,
-	pathEdges []*channeldb.ChannelEdgePolicy, currentHeight uint32,
-	finalCLTVDelta uint16) (*route.Route, error) {
+	pathEdges []*channeldb.ChannelEdgePolicy,
+	currentHeight, finalCLTVDelta int32) (*route.Route, error) {
 
 	var (
 		hops []*route.Hop
@@ -132,20 +132,20 @@ func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex route.Vertex,
 		// If this is the last hop, then for verification purposes, the
 		// value of the outgoing time-lock should be _exactly_ the
 		// absolute time out they'd expect in the HTLC.
-		var outgoingTimeLock uint32
+		var outgoingTimeLock int32
 		if i == len(pathEdges)-1 {
 			// As this is the last hop, we'll use the specified
 			// final CLTV delta value instead of the value from the
 			// last link in the route.
-			totalTimeLock += uint32(finalCLTVDelta)
+			totalTimeLock += finalCLTVDelta
 
-			outgoingTimeLock = currentHeight + uint32(finalCLTVDelta)
+			outgoingTimeLock = currentHeight + finalCLTVDelta
 		} else {
 			// Next, increment the total timelock of the entire
 			// route such that each hops time lock increases as we
 			// walk backwards in the route, using the delta of the
 			// previous hop.
-			delta := uint32(pathEdges[i+1].TimeLockDelta)
+			delta := int32(pathEdges[i+1].TimeLockDelta)
 			totalTimeLock += delta
 
 			// Otherwise, the value of the outgoing time-lock will
@@ -190,7 +190,7 @@ func newRoute(amtToSend lnwire.MilliSatoshi, sourceVertex route.Vertex,
 // RiskFactor controls the influence of time lock on route selection. This is
 // currently a fixed value, but might be configurable in the future.
 func edgeWeight(lockedAmt lnwire.MilliSatoshi, fee lnwire.MilliSatoshi,
-	timeLockDelta uint16) int64 {
+	timeLockDelta int32) int64 {
 	// timeLockPenalty is the penalty for the time lock delta of this channel.
 	// It is controlled by RiskFactorBillionths and scales proportional
 	// to the amount that will pass through channel. Rationale is that it if
@@ -247,7 +247,7 @@ type RestrictParams struct {
 	// CltvLimit is the maximum time lock of the route excluding the final
 	// ctlv. After path finding is complete, the caller needs to increase
 	// all cltv expiry heights with the required final cltv delta.
-	CltvLimit *uint32
+	CltvLimit *int32
 }
 
 // findPath attempts to find a path from the source node within the
@@ -425,14 +425,13 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 		// route if fromNode is selected. If fromNode is the source
 		// node, no additional timelock is required.
 		var fee lnwire.MilliSatoshi
-		var timeLockDelta uint16
+		var timeLockDelta int32
 		if fromVertex != source {
 			fee = computeFee(amountToSend, edge)
-			timeLockDelta = edge.TimeLockDelta
+			timeLockDelta = int32(edge.TimeLockDelta)
 		}
 
-		incomingCltv := toNodeDist.incomingCltv +
-			uint32(timeLockDelta)
+		incomingCltv := toNodeDist.incomingCltv + timeLockDelta
 
 		// Check that we have cltv limit and that we are within it.
 		if r.CltvLimit != nil && incomingCltv > *r.CltvLimit {

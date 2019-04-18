@@ -755,7 +755,7 @@ func migrateOutgoingPayments(tx *bbolt.Tx) error {
 
 		// Do the same for the AttemptInfo.
 		rt := route.Route{
-			TotalTimeLock: payment.TimeLockLength,
+			TotalTimeLock: int32(payment.TimeLockLength),
 			TotalFees:     payment.Fee,
 			TotalAmount:   payment.Terms.Value,
 			SourcePubKey:  [33]byte{}, // empty.

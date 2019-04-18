@@ -30,7 +30,7 @@ type RouterBackend struct {
 	// routes.
 	FindRoutes func(source, target route.Vertex,
 		amt lnwire.MilliSatoshi, restrictions *routing.RestrictParams,
-		numPaths uint32, finalExpiry ...uint16) (
+		numPaths uint32, finalExpiry ...int32) (
 		[]*route.Route, error)
 }
 
@@ -144,7 +144,7 @@ func (r *RouterBackend) QueryRoutes(ctx context.Context,
 	} else {
 		routes, findErr = r.FindRoutes(
 			sourcePubKey, targetPubKey, amtMSat, restrictions,
-			numRoutesIn, uint16(in.FinalCltvDelta),
+			numRoutesIn, in.FinalCltvDelta,
 		)
 	}
 	if findErr != nil {
@@ -198,7 +198,7 @@ func calculateFeeLimit(feeLimit *lnrpc.FeeLimit,
 // MarshallRoute marshalls an internal route to an rpc route struct.
 func (r *RouterBackend) MarshallRoute(route *route.Route) *lnrpc.Route {
 	resp := &lnrpc.Route{
-		TotalTimeLock: route.TotalTimeLock,
+		TotalTimeLock: uint32(route.TotalTimeLock),
 		TotalFees:     int64(route.TotalFees.ToSatoshis()),
 		TotalFeesMsat: int64(route.TotalFees),
 		TotalAmt:      int64(route.TotalAmount.ToSatoshis()),

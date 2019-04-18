@@ -636,7 +636,7 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 			// payment through the network, starting with the first-hop.
 			htlcAdd := &lnwire.UpdateAddHTLC{
 				Amount:      route.TotalAmount,
-				Expiry:      route.TotalTimeLock,
+				Expiry:      uint32(route.TotalTimeLock),
 				PaymentHash: paymentHash,
 			}
 			copy(htlcAdd.OnionBlob[:], onionBlob)

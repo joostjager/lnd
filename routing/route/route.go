@@ -47,7 +47,7 @@ type Hop struct {
 
 	// OutgoingTimeLock is the timelock value that should be used when
 	// crafting the _outgoing_ HTLC from this hop.
-	OutgoingTimeLock uint32
+	OutgoingTimeLock int32
 
 	// AmtToForward is the amount that this hop will forward to the next
 	// hop. This value is less than the value that the incoming HTLC
@@ -67,7 +67,7 @@ type Route struct {
 	// hop in the route. All other hops will decrement the time-lock as
 	// advertised, leaving enough time for all hops to wait for or present
 	// the payment preimage to complete the payment.
-	TotalTimeLock uint32
+	TotalTimeLock int32
 
 	// TotalFees is the sum of the fees paid at each hop within the final
 	// route. In the case of a one-hop payment, this value will be zero as
@@ -118,7 +118,7 @@ func (r *Route) ToHopPayloads() []sphinx.HopData {
 			// an enum actually?
 			Realm:         0,
 			ForwardAmount: uint64(hop.AmtToForward),
-			OutgoingCltv:  hop.OutgoingTimeLock,
+			OutgoingCltv:  uint32(hop.OutgoingTimeLock),
 		}
 
 		// As a base case, the next hop is set to all zeroes in order
@@ -141,7 +141,7 @@ func (r *Route) ToHopPayloads() []sphinx.HopData {
 // NewRouteFromHops creates a new Route structure from the minimally required
 // information to perform the payment. It infers fee amounts and populates the
 // node, chan and prev/next hop maps.
-func NewRouteFromHops(amtToSend lnwire.MilliSatoshi, timeLock uint32,
+func NewRouteFromHops(amtToSend lnwire.MilliSatoshi, timeLock int32,
 	sourceVertex Vertex, hops []*Hop) (*Route, error) {
 
 	if len(hops) == 0 {
