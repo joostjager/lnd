@@ -62,6 +62,8 @@ type missionControl struct {
 
 	queryBandwidth func(*channeldb.ChannelEdgeInfo) lnwire.MilliSatoshi
 
+	control channeldb.ControlTower
+
 	sync.Mutex
 
 	// TODO(roasbeef): further counters, if vertex continually unavailable,
@@ -73,7 +75,8 @@ type missionControl struct {
 // newMissionControl returns a new instance of missionControl.
 //
 // TODO(roasbeef): persist memory
-func newMissionControl(g *channeldb.ChannelGraph, selfNode *channeldb.LightningNode,
+func newMissionControl(g *channeldb.ChannelGraph, control channeldb.ControlTower,
+	selfNode *channeldb.LightningNode,
 	qb func(*channeldb.ChannelEdgeInfo) lnwire.MilliSatoshi) *missionControl {
 
 	return &missionControl{
@@ -82,6 +85,7 @@ func newMissionControl(g *channeldb.ChannelGraph, selfNode *channeldb.LightningN
 		selfNode:       selfNode,
 		queryBandwidth: qb,
 		graph:          g,
+		control:        control,
 	}
 }
 
@@ -155,7 +159,7 @@ func (m *missionControl) GraphPruneView() graphPruneView {
 // in order to populate additional edges to explore when finding a path to the
 // payment's destination.
 func (m *missionControl) NewPaymentSession(routeHints [][]zpay32.HopHint,
-	target route.Vertex) (*paymentSession, error) {
+	target route.Vertex, payment *LightningPayment, cfg *Config) (*paymentSession, error) {
 
 	viewSnapshot := m.GraphPruneView()
 
@@ -228,6 +232,8 @@ func (m *missionControl) NewPaymentSession(routeHints [][]zpay32.HopHint,
 		errFailedPolicyChans: make(map[EdgeLocator]struct{}),
 		mc:                   m,
 		pathFinder:           findPath,
+		payment:              payment,
+		cfg:                  cfg,
 	}, nil
 }
 
@@ -235,7 +241,11 @@ func (m *missionControl) NewPaymentSession(routeHints [][]zpay32.HopHint,
 // skip all path finding, and will instead utilize a set of pre-built routes.
 // This constructor allows callers to specify their own routes which can be
 // used for things like channel rebalancing, and swaps.
-func (m *missionControl) NewPaymentSessionFromRoutes(routes []*route.Route) *paymentSession {
+func (m *missionControl) NewPaymentSessionFromRoutes(routes []*route.Route,
+	payment *LightningPayment,
+	currentAttempt *channeldb.AttemptInfo,
+	cfg *Config) *paymentSession {
+
 	return &paymentSession{
 		pruneViewSnapshot:    m.GraphPruneView(),
 		haveRoutes:           true,
@@ -243,6 +253,9 @@ func (m *missionControl) NewPaymentSessionFromRoutes(routes []*route.Route) *pay
 		errFailedPolicyChans: make(map[EdgeLocator]struct{}),
 		mc:                   m,
 		pathFinder:           findPath,
+		payment:              payment,
+		currentAttempt:       currentAttempt,
+		cfg:                  cfg,
 	}
 }
 

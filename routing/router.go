@@ -378,7 +378,7 @@ func New(cfg Config) (*ChannelRouter, error) {
 	}
 
 	r.missionControl = newMissionControl(
-		cfg.Graph, selfNode, cfg.QueryBandwidth,
+		cfg.Graph, cfg.Control, selfNode, cfg.QueryBandwidth,
 	)
 
 	return r, nil
@@ -487,29 +487,22 @@ func (r *ChannelRouter) Start() error {
 	for _, payment := range payments {
 		log.Infof("Resuming payment with hash %v", payment.Info.PaymentHash)
 
-		p := &ActivePayment{
-			control:  r.cfg.Control,
-			inFlight: true,
-			Info:     *payment.Info,
-			Attempt:  payment.Attempt,
-		}
-
 		r.wg.Add(1)
-		go func(payment *ActivePayment) {
+		go func() {
 			defer r.wg.Done()
-
-			// We create a dummy, empty payment session such that
-			// we won't attempt another payment attempt when the
-			// result for this payment is received.
-			paySession := r.missionControl.NewPaymentSessionFromRoutes(
-				nil,
-			)
 
 			lPayment := &LightningPayment{
 				PaymentHash: payment.Info.PaymentHash,
 			}
 
-			_, _, err = r.sendPayment(payment, lPayment, paySession)
+			// We create a dummy, empty payment session such that
+			// we won't attempt another payment attempt when the
+			// result for this payment is received.
+			paySession := r.missionControl.NewPaymentSessionFromRoutes(
+				nil, lPayment, payment.Attempt, r.cfg,
+			)
+
+			_, _, err = paySession.sendPayment()
 			if err != nil {
 				log.Errorf("Resuming payment with hash %v "+
 					"failed: %v.", payment.Info.PaymentHash, err)
@@ -518,7 +511,7 @@ func (r *ChannelRouter) Start() error {
 
 			log.Infof("Resumed payment with hash %v completed.",
 				payment.Info.PaymentHash)
-		}(p)
+		}()
 	}
 
 	r.wg.Add(1)
@@ -1647,19 +1640,13 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *route
 	// payment session which will report our errors back to mission
 	// control.
 	paySession, err := r.missionControl.NewPaymentSession(
-		payment.RouteHints, payment.Target,
+		payment.RouteHints, payment.Target, payment, r.cfg,
 	)
 	if err != nil {
 		return [32]byte{}, nil, err
 	}
 
-	// Record this payment hash with the ControlTower, ensuring it is not
-	// already in-flight.
-	a := NewActivePayment(
-		r.cfg.Control, payment.PaymentHash, payment.Amount, nil,
-	)
-
-	return r.sendPayment(a, payment, paySession)
+	return paySession.sendPayment()
 }
 
 // SendToRoute attempts to send a payment as described within the passed
@@ -1673,264 +1660,10 @@ func (r *ChannelRouter) SendToRoute(routes []*route.Route,
 	payment *LightningPayment) ([32]byte, *route.Route, error) {
 
 	paySession := r.missionControl.NewPaymentSessionFromRoutes(
-		routes,
+		routes, payment, nil, r.cfg,
 	)
 
-	// Record this payment hash with the ControlTower, ensuring it is not
-	// already in-flight.
-	a := NewActivePayment(
-		r.cfg.Control, payment.PaymentHash, payment.Amount, nil,
-	)
-
-	return r.sendPayment(a, payment, paySession)
-}
-
-// sendPayment attempts to send a payment as described within the passed
-// LightningPayment. This function is blocking and will return either: when the
-// payment is successful, or all candidates routes have been attempted and
-// resulted in a failed payment. If the payment succeeds, then a non-nil Route
-// will be returned which describes the path the successful payment traversed
-// within the network to reach the destination. Additionally, the payment
-// preimage will also be returned.
-//
-// This method relies on the ControlTower's internal payment state machine to
-// carry out its execution. After restarts it is safe, and assumed, that the
-// router will call this method for every payment still in-flight according to
-// the ControlTower.
-func (r *ChannelRouter) sendPayment(a *ActivePayment,
-	payment *LightningPayment, paySession *paymentSession) (
-	[32]byte, *route.Route, error) {
-
-	log.Tracef("Dispatching route for lightning payment: %v",
-		newLogClosure(func() string {
-			for _, routeHint := range payment.RouteHints {
-				for _, hopHint := range routeHint {
-					hopHint.NodeID.Curve = nil
-				}
-			}
-			return spew.Sdump(payment)
-		}),
-	)
-
-	// We'll also fetch the current block height so we can properly
-	// calculate the required HTLC time locks within the route.
-	_, currentHeight, err := r.cfg.Chain.GetBestBlock()
-	if err != nil {
-		return [32]byte{}, nil, err
-	}
-
-	var payAttemptTimeout time.Duration
-	if payment.PayAttemptTimeout == time.Duration(0) {
-		payAttemptTimeout = defaultPayAttemptTimeout
-	} else {
-		payAttemptTimeout = payment.PayAttemptTimeout
-	}
-
-	timeoutChan := time.After(payAttemptTimeout)
-
-	paymentHash := payment.PaymentHash
-
-	// We'll continue until either our payment succeeds, or we encounter a
-	// critical error during path finding.
-	var (
-		lastError error
-	)
-
-	// sendNewAttempt is a helper method that creates and sends a new
-	// payment to the switch. We use this when no payment has been sent to
-	// the switch already, or the previous attempt failed.
-	sendNewAttempt := func() error {
-		// Before we attempt this next payment, we'll check to see if
-		// either we've gone past the payment attempt timeout, or the
-		// router is exiting. In either case, we'll stop this payment
-		// attempt short.
-		select {
-		case <-timeoutChan:
-			// Mark the payment as failed.
-			err := a.Fail()
-			if err != nil {
-				return err
-			}
-
-			errStr := fmt.Sprintf("payment attempt not completed "+
-				"before timeout of %v", payAttemptTimeout)
-
-			// Terminal state, return.
-			return newErr(ErrPaymentAttemptTimeout, errStr)
-
-		case <-r.quit:
-			// The payment will be resumed from the current state
-			// after restart.
-			return ErrRouterShuttingDown
-
-		default:
-			// Fall through if we haven't hit our time limit, or
-			// are expiring.
-		}
-
-		// Create a new payment attempt from the given payment session.
-		route, err := paySession.RequestRoute(
-			payment, currentHeight, payment.FinalCLTVDelta,
-		)
-		if err != nil {
-			// If we're unable to successfully make a payment using
-			// any of the routes we've found, then mark the payment
-			// as permanently failed.
-			saveErr := a.Fail()
-			if saveErr != nil {
-				return saveErr
-			}
-
-			// If there was an error already recorded for this
-			// payment, we'll return that.
-			if lastError != nil {
-				return fmt.Errorf("unable to route payment "+
-					"to destination: %v", lastError)
-			}
-
-			// Terminal state, return.
-			return err
-		}
-
-		// We generate a new, unique payment ID that we will use for
-		// this HTLC.
-		paymentID, err := r.cfg.NextPaymentID()
-		if err != nil {
-			return err
-		}
-
-		attempt := &channeldb.AttemptInfo{
-			PaymentID: paymentID,
-			Route:     *route,
-		}
-
-		// Before sending this HTLC to the switch, we checkpoint the
-		// fresh paymentID and route to the DB. This lets us know on
-		// startup the ID of the payment that we attempted to send,
-		// such that we can query the Switch for its whereabouts. The
-		// route is needed to handle the result when it eventually
-		// comes back.
-		err = a.NewAttempt(attempt)
-		if err != nil {
-			return err
-		}
-
-		log.Tracef("Attempting to send payment %x (pid=%v), "+
-			"using route: %v", paymentHash, paymentID,
-			newLogClosure(func() string {
-				return spew.Sdump(route)
-			}),
-		)
-
-		// Send it to the Switch. When this method returns we assume
-		// the Switch successfully has persisted the payment attempt,
-		// such that we can resume waiting for the result after a
-		// restart.
-		err = r.cfg.SendToSwitch(route, paymentHash, paymentID)
-		if err != nil {
-			log.Errorf("Failed sending payment to switch: %v",
-				err)
-			return err
-		}
-
-		log.Debugf("Payment %x (pid=%v) successfully sent to switch",
-			paymentHash, paymentID)
-
-		return nil
-	}
-
-	switch {
-
-	// If this payment had no existing payment ID, we make a new attempt.
-	case a.Attempt == nil:
-		if err := sendNewAttempt(); err != nil {
-			return [32]byte{}, nil, err
-		}
-
-	// Otherwise we'll check if there's a result available for the already
-	// existing payment ID.
-	default:
-		log.Infof("Got existing attempt for pid=%v", a.Attempt.PaymentID)
-	}
-
-	for {
-		// We'll ask the switch whether this is a known paymentID.
-		result, err := r.cfg.GetPaymentResult(a.Attempt.PaymentID)
-		switch {
-
-		// If this payment ID is unknown to the Switch, it means it was
-		// never checkpointed and forwarded by the switch before a
-		// restart. In this case we can safely send a new payment
-		// attempt, and wait for its result to be available.
-		case err == htlcswitch.ErrPaymentIDNotFound:
-			log.Debugf("Payment ID %v for hash %x not found in "+
-				"the Switch, retrying.", a.Attempt.PaymentID,
-				paymentHash)
-
-			if err := sendNewAttempt(); err != nil {
-				return [32]byte{}, nil, err
-			}
-
-			continue
-
-		// A critical, unexpected error was encountered.
-		case err != nil:
-			return [32]byte{}, nil, err
-		}
-
-		// In case of a payment failure, we use the error to decidee
-		// whether we should retry.
-		if result.Error != nil {
-			log.Errorf("Attempt (pid=%v) to send "+
-				"payment %x failed: %v", a.Attempt.PaymentID,
-				paymentHash, result.Error)
-
-			finalOutcome := r.processSendError(
-				paySession, &a.Attempt.Route, result.Error,
-			)
-			if finalOutcome {
-				log.Errorf("Payment %x failed with "+
-					"final outcome: %v",
-					paymentHash, result.Error)
-
-				// Mark the payment failed.
-				err := a.Fail()
-				if err != nil {
-					return [32]byte{}, nil, err
-				}
-
-				// Terminal state, return the error we
-				// encountered.
-				return [32]byte{}, nil, result.Error
-			}
-
-			lastError = result.Error
-
-			// We make another payment attempt.
-			if err := sendNewAttempt(); err != nil {
-				return [32]byte{}, nil, err
-			}
-
-			continue
-		}
-
-		// We successfully got a payment result back from the switch.
-		log.Debugf("Payment %x succeeded with pid=%v",
-			paymentHash, a.Attempt.PaymentID)
-
-		// In case of success we atomically store the db payment and
-		// move the payment to the success state.
-		err = a.Success(result.Preimage)
-		if err != nil {
-			log.Errorf("Unable to succeed payment "+
-				"attempt: %v", err)
-			return [32]byte{}, nil, err
-		}
-
-		// Terminal state, return the preimage and the route
-		// taken.
-		return result.Preimage, &a.Attempt.Route, nil
-	}
+	return paySession.sendPayment()
 }
 
 // processSendError analyzes the error for the payment attempt received from the
