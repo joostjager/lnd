@@ -2338,6 +2338,8 @@ func lookupPayment(ctx *cli.Context) error {
 		fmt.Printf("State: %v\n", status.State)
 		if status.State == routerrpc.PaymentState_SUCCEEDED {
 			fmt.Printf("Preimage: %x\n", status.Preimage)
+			fmt.Printf("Route:\n")
+			printJSON(status.Route)
 		}
 
 		if status.State != routerrpc.PaymentState_UNKNOWN &&

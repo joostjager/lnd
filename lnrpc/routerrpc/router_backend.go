@@ -9,6 +9,7 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
+	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -51,6 +52,8 @@ type RouterBackend struct {
 	// that we receive payment requests that send to destinations on our
 	// network.
 	ActiveNetParams *chaincfg.Params
+
+	Tower channeldb.ControlTower
 }
 
 // QueryRoutes attempts to query the daemons' Channel Router for a possible
