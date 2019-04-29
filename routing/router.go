@@ -20,6 +20,7 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/input"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/multimutex"
@@ -344,6 +345,9 @@ type ChannelRouter struct {
 	rejectMtx   sync.RWMutex
 	rejectCache map[uint64]struct{}
 
+	inFlightSet map[lntypes.Hash]struct{}
+	inFlightMtx sync.Mutex
+
 	sync.RWMutex
 
 	quit chan struct{}
@@ -374,6 +378,7 @@ func New(cfg Config) (*ChannelRouter, error) {
 		channelEdgeMtx:    multimutex.NewMutex(),
 		selfNode:          selfNode,
 		rejectCache:       make(map[uint64]struct{}),
+		inFlightSet:       make(map[lntypes.Hash]struct{}),
 		quit:              make(chan struct{}),
 	}
 
@@ -485,7 +490,12 @@ func (r *ChannelRouter) Start() error {
 	}
 
 	for _, payment := range payments {
-		log.Infof("Resuming payment with hash %v", payment.Info.PaymentHash)
+		log.Infof("Resuming payment with hash %v",
+			payment.Info.PaymentHash)
+
+		if err := r.markInFlight(payment.Info.PaymentHash); err != nil {
+			return err
+		}
 
 		p := &ActivePayment{
 			control:  r.cfg.Control,
@@ -1659,6 +1669,10 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *route
 		r.cfg.Control, payment.PaymentHash, payment.Amount, nil,
 	)
 
+	if err := r.markInFlight(payment.PaymentHash); err != nil {
+		return [32]byte{}, nil, err
+	}
+
 	return r.sendPayment(a, payment, paySession)
 }
 
@@ -1682,7 +1696,33 @@ func (r *ChannelRouter) SendToRoute(routes []*route.Route,
 		r.cfg.Control, payment.PaymentHash, payment.Amount, nil,
 	)
 
+	if err := r.markInFlight(payment.PaymentHash); err != nil {
+		return [32]byte{}, nil, err
+	}
+
 	return r.sendPayment(a, payment, paySession)
+}
+
+func (r *ChannelRouter) markInFlight(hash lntypes.Hash) error {
+	r.inFlightMtx.Lock()
+	defer r.inFlightMtx.Unlock()
+	if _, ok := r.inFlightSet[hash]; ok {
+		return channeldb.ErrPaymentInFlight
+	}
+	r.inFlightSet[hash] = struct{}{}
+
+	return nil
+}
+
+func (r *ChannelRouter) markCompleted(hash lntypes.Hash) error {
+	r.inFlightMtx.Lock()
+	defer r.inFlightMtx.Unlock()
+	if _, ok := r.inFlightSet[hash]; !ok {
+		return channeldb.ErrPaymentNotInitiated
+	}
+	delete(r.inFlightSet, hash)
+
+	return nil
 }
 
 // sendPayment attempts to send a payment as described within the passed
@@ -1752,6 +1792,10 @@ func (r *ChannelRouter) sendPayment(a *ActivePayment,
 				return err
 			}
 
+			if err := r.markCompleted(paymentHash); err != nil {
+				return err
+			}
+
 			errStr := fmt.Sprintf("payment attempt not completed "+
 				"before timeout of %v", payAttemptTimeout)
 
@@ -1779,6 +1823,10 @@ func (r *ChannelRouter) sendPayment(a *ActivePayment,
 			saveErr := a.Fail()
 			if saveErr != nil {
 				return saveErr
+			}
+
+			if err := r.markCompleted(paymentHash); err != nil {
+				return err
 			}
 
 			// If there was an error already recorded for this
@@ -1899,6 +1947,10 @@ func (r *ChannelRouter) sendPayment(a *ActivePayment,
 					return [32]byte{}, nil, err
 				}
 
+				if err := r.markCompleted(paymentHash); err != nil {
+					return [32]byte{}, nil, err
+				}
+
 				// Terminal state, return the error we
 				// encountered.
 				return [32]byte{}, nil, result.Error
@@ -1924,6 +1976,10 @@ func (r *ChannelRouter) sendPayment(a *ActivePayment,
 		if err != nil {
 			log.Errorf("Unable to succeed payment "+
 				"attempt: %v", err)
+			return [32]byte{}, nil, err
+		}
+
+		if err := r.markCompleted(paymentHash); err != nil {
 			return [32]byte{}, nil, err
 		}
 
