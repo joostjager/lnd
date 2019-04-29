@@ -1631,6 +1631,39 @@ type LightningPayment struct {
 	// TODO(roasbeef): add e2e message?
 }
 
+// SendPaymentAsync sends a payment asynchronously.
+func (r *ChannelRouter) SendPaymentAsync(payment *LightningPayment) error {
+	// Before starting the HTLC routing attempt, we'll create a fresh
+	// payment session which will report our errors back to mission
+	// control.
+	paySession, err := r.missionControl.NewPaymentSession(
+		payment.RouteHints, payment.Target,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Record this payment hash with the ControlTower, ensuring it is not
+	// already in-flight.
+	info := &channeldb.CreationInfo{
+		PaymentHash:    payment.PaymentHash,
+		Value:          payment.Amount,
+		CreationDate:   time.Now(),
+		PaymentRequest: nil,
+	}
+
+	err = r.cfg.Control.InitPayment(payment.PaymentHash, info)
+	if err != nil {
+		return err
+	}
+
+	// Since this is the first time this payment is being made, we pass nil
+	// for the existing attempt.
+	go r.sendPayment(nil, payment, paySession)
+
+	return nil
+}
+
 // SendPayment attempts to send a payment as described within the passed
 // LightningPayment. This function is blocking and will return either: when the
 // payment is successful, or all candidates routes have been attempted and
