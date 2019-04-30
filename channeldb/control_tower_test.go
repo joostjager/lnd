@@ -544,3 +544,183 @@ func assertPaymentInfo(t *testing.T, db *DB, hash lntypes.Hash,
 	}
 
 }
+
+// TestPaymentControlSubscribeUnknown tests that subscribing to an unknown
+// payment fails.
+func TestPaymentControlSubscribeUnknown(t *testing.T) {
+	t.Parallel()
+
+	db, err := initDB()
+	if err != nil {
+		t.Fatalf("unable to init db: %v", err)
+	}
+
+	pControl := NewPaymentControl(db)
+
+	// Subscription should fail when the payment is not known.
+	_, _, err = pControl.SubscribePayment(lntypes.Hash{1})
+	if err != ErrPaymentNotInitiated {
+		t.Fatal("expected subscribe to fail for unknown payment")
+	}
+}
+
+// TestPaymentControlSubscribeSuccess tests that payment updates for a
+// successful payment are properly sent to subscribers.
+func TestPaymentControlSubscribeSuccess(t *testing.T) {
+	t.Parallel()
+
+	db, err := initDB()
+	if err != nil {
+		t.Fatalf("unable to init db: %v", err)
+	}
+
+	pControl := NewPaymentControl(db)
+
+	// Initiate a payment.
+	info, attempt, preimg, err := genInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = pControl.InitPayment(info.PaymentHash, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Subscription should succeed and immediately report the InFlight
+	// status.
+	inFlight, subscriber1, err := pControl.SubscribePayment(info.PaymentHash)
+	if err != nil {
+		t.Fatalf("expected subscribe to succeed, but got: %v", err)
+	}
+	if !inFlight {
+		t.Fatalf("unexpected payment to be in flight")
+	}
+
+	// Register an attempt.
+	err = pControl.RegisterAttempt(info.PaymentHash, attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Register a second subscriber after the first attempt has started.
+	inFlight, subscriber2, err := pControl.SubscribePayment(info.PaymentHash)
+	if err != nil {
+		t.Fatalf("expected subscribe to succeed, but got: %v", err)
+	}
+	if !inFlight {
+		t.Fatalf("unexpected payment to be in flight")
+	}
+
+	// Mark the payment as successful.
+	if err := pControl.Success(info.PaymentHash, preimg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register a third subscriber after the payment succeeded.
+	inFlight, subscriber3, err := pControl.SubscribePayment(info.PaymentHash)
+	if err != nil {
+		t.Fatalf("expected subscribe to succeed, but got: %v", err)
+	}
+	if inFlight {
+		t.Fatalf("expected payment to be finished")
+	}
+
+	// We expect all subscribers to now report the final outcome followed by
+	// no other events.
+	for _, s := range []chan PaymentEvent{
+		subscriber1, subscriber2, subscriber3,
+	} {
+		event := <-s
+		if event.Status != StatusSucceeded {
+			t.Fatal("unexpected payment state")
+		}
+		if event.Preimage != preimg {
+			t.Fatal("unexpected preimage")
+		}
+		if !reflect.DeepEqual(event.Route, &attempt.Route) {
+			t.Fatal("unexpected route")
+		}
+
+		// After the final event, we expect the channel to be closed.
+		select {
+		case _, ok := <-s:
+			if ok {
+				t.Fatal("expected channel to be closed")
+			}
+		default:
+			t.Fatal("expected channel to be closed")
+		}
+	}
+}
+
+// TestPaymentControlSubscribeFail tests that payment updates for a
+// failed payment are properly sent to subscribers.
+func TestPaymentControlSubscribeFail(t *testing.T) {
+	t.Parallel()
+
+	db, err := initDB()
+	if err != nil {
+		t.Fatalf("unable to init db: %v", err)
+	}
+
+	pControl := NewPaymentControl(db)
+
+	// Initiate a payment.
+	info, _, _, err := genInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = pControl.InitPayment(info.PaymentHash, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Subscription should succeed.
+	_, subscriber1, err := pControl.SubscribePayment(info.PaymentHash)
+	if err != nil {
+		t.Fatalf("expected subscribe to succeed, but got: %v", err)
+	}
+
+	// Mark the payment as failed.
+	if err := pControl.Fail(info.PaymentHash, FailureReasonTimeout); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register a second subscriber after the payment failed.
+	inFlight, subscriber2, err := pControl.SubscribePayment(info.PaymentHash)
+	if err != nil {
+		t.Fatalf("expected subscribe to succeed, but got: %v", err)
+	}
+	if inFlight {
+		t.Fatalf("expected payment to be finished")
+	}
+
+	// We expect all subscribers to now report the final outcome followed by
+	// no other events.
+	for _, s := range []chan PaymentEvent{
+		subscriber1, subscriber2,
+	} {
+		event := <-s
+		if event.Status != StatusFailed {
+			t.Fatal("unexpected payment state")
+		}
+		if event.Route != nil {
+			t.Fatal("expected no route")
+		}
+		if event.FailureReason != FailureReasonTimeout {
+			t.Fatal("unexpected failure reason")
+		}
+
+		// After the final event, we expect the channel to be closed.
+		select {
+		case _, ok := <-s:
+			if ok {
+				t.Fatal("expected channel to be closed")
+			}
+		default:
+			t.Fatal("expected channel to be closed")
+		}
+	}
+}

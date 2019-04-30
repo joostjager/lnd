@@ -5,9 +5,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/coreos/bbolt"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/multimutex"
+	"github.com/lightningnetwork/lnd/routing/route"
 )
 
 var (
@@ -33,6 +36,10 @@ var (
 	// ErrUnknownPaymentStatus is returned when we do not recognize the
 	// existing state of a payment.
 	ErrUnknownPaymentStatus = errors.New("unknown payment status")
+
+	// errNoAttemptInfo is returned when no attempt info is stored yet.
+	errNoAttemptInfo = errors.New("unable to find attempt info for " +
+		"inflight payment")
 )
 
 // ControlTower tracks all outgoing payments made, whose primary purpose is to
@@ -64,18 +71,39 @@ type ControlTower interface {
 
 	// FetchInFlightPayments returns all payments with status InFlight.
 	FetchInFlightPayments() ([]*InFlightPayment, error)
+
+	// SubscribePayment subscribes to updates for the payment with the given
+	// hash. It returns a boolean indicating whether the payment is still in
+	// flight and a channel that provides the final outcome of the payment.
+	SubscribePayment(paymentHash lntypes.Hash) (bool, chan PaymentEvent,
+		error)
 }
 
 // paymentControl is persistent implementation of ControlTower to restrict
 // double payment sending.
 type paymentControl struct {
 	db *DB
+
+	subscribers    map[lntypes.Hash][]chan PaymentEvent
+	subscribersMtx sync.Mutex
+	hashMutex      *multimutex.HashMutex
+}
+
+// PaymentEvent is the struct describing the events received by payment
+// subscribers.
+type PaymentEvent struct {
+	Status        PaymentStatus
+	Preimage      lntypes.Preimage
+	Route         *route.Route
+	FailureReason FailureReason
 }
 
 // NewPaymentControl creates a new instance of the paymentControl.
 func NewPaymentControl(db *DB) ControlTower {
 	return &paymentControl{
-		db: db,
+		db:          db,
+		subscribers: make(map[lntypes.Hash][]chan PaymentEvent),
+		hashMutex:   multimutex.NewHashMutex(),
 	}
 }
 
@@ -221,7 +249,17 @@ func (p *paymentControl) RegisterAttempt(paymentHash lntypes.Hash,
 func (p *paymentControl) Success(paymentHash lntypes.Hash,
 	preimage lntypes.Preimage) error {
 
-	var updateErr error
+	// Lock hash to prevent the following race: payment status is updated to
+	// succeeded, new subscriber is registered and will immediately receive
+	// the succeeded status, this function sends out the succeeded
+	// notification again to the same subscriber.
+	p.hashMutex.Lock(paymentHash)
+	defer p.hashMutex.Unlock(paymentHash)
+
+	var (
+		updateErr error
+		attempt   *PaymentAttemptInfo
+	)
 	err := p.db.Batch(func(tx *bbolt.Tx) error {
 		// Reset the update error, to avoid carrying over an error
 		// from a previous execution of the batched db transaction.
@@ -243,10 +281,32 @@ func (p *paymentControl) Success(paymentHash lntypes.Hash,
 
 		// Record the successful payment info atomically to the
 		// payments record.
-		return bucket.Put(paymentSettleInfoKey, preimage[:])
+		err = bucket.Put(paymentSettleInfoKey, preimage[:])
+		if err != nil {
+			return err
+		}
+
+		// Retrieve attempt info for the notification.
+		attempt, err = fetchPaymentAttempt(bucket)
+		if err != nil {
+			return err
+		}
+
+		return nil
 	})
 	if err != nil {
 		return err
+	}
+
+	if updateErr == nil {
+		// Notify subscribers of success event.
+		p.notifyFinalEvent(
+			paymentHash, PaymentEvent{
+				Status:   StatusSucceeded,
+				Preimage: preimage,
+				Route:    &attempt.Route,
+			},
+		)
 	}
 
 	return updateErr
@@ -259,6 +319,11 @@ func (p *paymentControl) Success(paymentHash lntypes.Hash,
 // subsequent payment.
 func (p *paymentControl) Fail(paymentHash lntypes.Hash,
 	reason FailureReason) error {
+
+	// Lock hash to prevent the race condition described in the Success
+	// method.
+	p.hashMutex.Lock(paymentHash)
+	defer p.hashMutex.Unlock(paymentHash)
 
 	var updateErr error
 	err := p.db.Batch(func(tx *bbolt.Tx) error {
@@ -286,6 +351,16 @@ func (p *paymentControl) Fail(paymentHash lntypes.Hash,
 	})
 	if err != nil {
 		return err
+	}
+
+	if updateErr == nil {
+		// Notify subscribers of fail event.
+		p.notifyFinalEvent(
+			paymentHash, PaymentEvent{
+				Status:        StatusFailed,
+				FailureReason: reason,
+			},
+		)
 	}
 
 	return updateErr
@@ -389,6 +464,17 @@ func ensureInFlight(bucket *bbolt.Bucket) error {
 	}
 }
 
+// fetchPaymentAttempt fetches the payment attempt from the bucket.
+func fetchPaymentAttempt(bucket *bbolt.Bucket) (*PaymentAttemptInfo, error) {
+	attemptData := bucket.Get(paymentAttemptInfoKey)
+	if attemptData == nil {
+		return nil, errNoAttemptInfo
+	}
+
+	r := bytes.NewReader(attemptData)
+	return deserializePaymentAttemptInfo(r)
+}
+
 // InFlightPayment is a wrapper around a payment that has status InFlight.
 type InFlightPayment struct {
 	// Info is the PaymentCreationInfo of the in-flight payment.
@@ -399,6 +485,129 @@ type InFlightPayment struct {
 	//
 	// NOTE: Might be nil.
 	Attempt *PaymentAttemptInfo
+}
+
+// SubscribePayment subscribes to updates for the payment with the given hash.
+// It returns a boolean indicating whether the payment is still in flight and a
+// channel that provides the final outcome of the payment.
+func (p *paymentControl) SubscribePayment(paymentHash lntypes.Hash) (
+	bool, chan PaymentEvent, error) {
+
+	// Create a channel with buffer size 1. For every payment there will be
+	// exactly one event sent.
+	c := make(chan PaymentEvent, 1)
+
+	// Lock the hash to prevent a race condition with subscribing and an
+	// update from router.
+	p.hashMutex.Lock(paymentHash)
+	defer p.hashMutex.Unlock(paymentHash)
+
+	var inFlight bool
+
+	err := p.db.View(func(tx *bbolt.Tx) error {
+		bucket, err := fetchPaymentBucket(tx, paymentHash)
+		if err != nil {
+			return err
+		}
+
+		var event PaymentEvent
+
+		status := fetchPaymentStatus(bucket)
+		switch status {
+
+		// Payment is currently in flight. Register this subscriber and
+		// return without writing a result to the channel yet.
+		case StatusInFlight:
+			p.subscribersMtx.Lock()
+
+			subscribers := p.subscribers[paymentHash]
+			subscribers = append(subscribers, c)
+			p.subscribers[paymentHash] = subscribers
+			p.subscribersMtx.Unlock()
+
+			inFlight = true
+			return nil
+
+		// Payment already succeeded. It is not necessary to register as
+		// a subscriber, because we can send the result on the channel
+		// immediately.
+		case StatusSucceeded:
+			event.Status = StatusSucceeded
+
+			preimageSlice := bucket.Get(paymentSettleInfoKey)
+			if preimageSlice == nil {
+				return errors.New("missing preimage")
+			}
+			var err error
+			event.Preimage, err = lntypes.MakePreimage(preimageSlice)
+			if err != nil {
+				return err
+			}
+
+			a, err := fetchPaymentAttempt(bucket)
+			if err != nil {
+				return err
+			}
+			event.Route = &a.Route
+
+		// Payment already failed. It is not necessary to register as a
+		// subscriber, because we can send the result on the channel
+		// immediately.
+		case StatusFailed:
+			failureReasonSlice := bucket.Get(paymentFailInfoKey)
+			if failureReasonSlice == nil {
+				return errors.New("missing failure reason")
+			}
+
+			if len(failureReasonSlice) != 1 {
+				return errors.New("invalid failure reason data")
+			}
+
+			event.Status = StatusFailed
+			event.FailureReason = FailureReason(
+				failureReasonSlice[0],
+			)
+
+		default:
+			return errors.New("unknown payment status")
+		}
+
+		// Write immediate result to the channel.
+		c <- event
+		close(c)
+
+		return nil
+	})
+	if err != nil {
+		return false, nil, err
+	}
+
+	return inFlight, c, nil
+}
+
+// notifyFinalEvent sends a final payment event to all subscribers of this
+// payment. The channel will be closed after this.
+func (p *paymentControl) notifyFinalEvent(paymentHash lntypes.Hash,
+	event PaymentEvent) {
+
+	// Get all subscribers for this hash. As there is only a single outcome,
+	// the subscriber list can be cleared.
+	p.subscribersMtx.Lock()
+	list, ok := p.subscribers[paymentHash]
+	if !ok {
+		p.subscribersMtx.Unlock()
+		return
+	}
+	delete(p.subscribers, paymentHash)
+	p.subscribersMtx.Unlock()
+
+	// Notify all subscribers of the event. The subscriber channel is
+	// buffered, so it cannot block here.
+	for _, subscriber := range list {
+		subscriber <- event
+		close(subscriber)
+	}
+
 }
 
 // FetchInFlightPayments returns all payments with status InFlight.
@@ -440,15 +649,11 @@ func (p *paymentControl) FetchInFlightPayments() ([]*InFlightPayment, error) {
 				return err
 			}
 
-			// Now get the attempt info, which may or may not be
-			// available.
-			attempt := bucket.Get(paymentAttemptInfoKey)
-			if attempt != nil {
-				r = bytes.NewReader(attempt)
-				inFlight.Attempt, err = deserializePaymentAttemptInfo(r)
-				if err != nil {
-					return err
-				}
+			// Now get the attempt info. It could be that there is
+			// no attempt info yet.
+			inFlight.Attempt, err = fetchPaymentAttempt(bucket)
+			if err != nil && err != errNoAttemptInfo {
+				return err
 			}
 
 			inFlights = append(inFlights, inFlight)
