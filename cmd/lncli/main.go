@@ -298,6 +298,7 @@ func main() {
 		exportChanBackupCommand,
 		verifyChanBackupCommand,
 		restoreChanBackupCommand,
+		trackPaymentCommand,
 	}
 
 	// Add any extra autopilot commands determined by build flags.
