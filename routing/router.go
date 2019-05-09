@@ -345,7 +345,7 @@ type ChannelRouter struct {
 	// Each run will then take into account this set of pruned
 	// vertexes/edges to reduce route failure and pass on graph information
 	// gained to the next execution.
-	missionControl *missionControl
+	missionControl *MissionControl
 
 	// channelEdgeMtx is a mutex we use to make sure we process only one
 	// ChannelEdgePolicy at a time for a given channelID, to ensure
@@ -388,7 +388,7 @@ func New(cfg Config) (*ChannelRouter, error) {
 		quit:              make(chan struct{}),
 	}
 
-	r.missionControl = newMissionControl(
+	r.missionControl = NewMissionControl(
 		cfg.Graph, selfNode, cfg.QueryBandwidth,
 	)
 
@@ -1543,7 +1543,7 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *route
 	// Before starting the HTLC routing attempt, we'll create a fresh
 	// payment session which will report our errors back to mission
 	// control.
-	paySession, err := r.missionControl.NewPaymentSession(
+	paySession, err := r.missionControl.newPaymentSession(
 		payment.RouteHints, payment.Target,
 	)
 	if err != nil {
@@ -1560,7 +1560,7 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, route *route.Route) (
 	lntypes.Preimage, error) {
 
 	// Create a payment session for just this route.
-	paySession := r.missionControl.NewPaymentSessionForRoute(route)
+	paySession := r.missionControl.newPaymentSessionForRoute(route)
 
 	// Create a (mostly) dummy payment, as the created payment session is
 	// not going to do path finding.
