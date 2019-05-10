@@ -83,6 +83,16 @@ func createTestCtxFromGraphInstance(startingHeight uint32, graphInstance *testGr
 	// be populated.
 	chain := newMockChain(startingHeight)
 	chainView := newMockChainView(chain)
+
+	selfNode, err := graphInstance.graph.SourceNode()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	queryBandwidth := func(e *channeldb.ChannelEdgeInfo) lnwire.MilliSatoshi {
+		return lnwire.NewMSatFromSatoshis(e.Capacity)
+	}
+
 	router, err := New(Config{
 		Graph:              graphInstance.graph,
 		Chain:              chain,
@@ -97,6 +107,9 @@ func createTestCtxFromGraphInstance(startingHeight uint32, graphInstance *testGr
 			next := atomic.AddUint64(&uniquePaymentID, 1)
 			return next, nil
 		},
+		MissionControl: NewMissionControl(
+			graphInstance.graph, selfNode, queryBandwidth,
+		),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to create router %v", err)
@@ -805,7 +818,7 @@ func TestSendPaymentErrorPathPruning(t *testing.T) {
 			return preImage, nil
 		})
 
-	ctx.router.missionControl.ResetHistory()
+	ctx.router.cfg.MissionControl.ResetHistory()
 
 	// When we try to dispatch that payment, we should receive an error as
 	// both attempts should fail and cause both routes to be pruned.
@@ -820,7 +833,7 @@ func TestSendPaymentErrorPathPruning(t *testing.T) {
 		t.Fatalf("expected UnknownNextPeer instead got: %v", err)
 	}
 
-	ctx.router.missionControl.ResetHistory()
+	ctx.router.cfg.MissionControl.ResetHistory()
 
 	// Next, we'll modify the SendToSwitch method to indicate that luo ji
 	// wasn't originally online. This should also halt the send all
@@ -863,7 +876,7 @@ func TestSendPaymentErrorPathPruning(t *testing.T) {
 				ctx.aliases))
 	}
 
-	ctx.router.missionControl.ResetHistory()
+	ctx.router.cfg.MissionControl.ResetHistory()
 
 	// Finally, we'll modify the SendToSwitch function to indicate that the
 	// roasbeef -> luoji channel has insufficient capacity. This should

@@ -209,6 +209,9 @@ message ChannelUpdate {
 	// satoshi.
 	uint32 fee_rate = 9;
 }
+message ResetMissionControlRequest{}
+
+message ResetMissionControlResponse{}
 
 service Router {
     /**
@@ -232,4 +235,10 @@ service Router {
     manually. This can be used for things like rebalancing, and atomic swaps.
     */
     rpc SendToRoute(SendToRouteRequest) returns (SendToRouteResponse);
+
+    /**
+    ResetMissionControl clears all mission control state and starts with a clean
+    slate.
+    */
+    rpc ResetMissionControl(ResetMissionControlRequest) returns (ResetMissionControlResponse);
 }

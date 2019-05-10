@@ -199,6 +199,15 @@ type Config struct {
 	// their results.
 	Payer PaymentAttemptDispatcher
 
+	// MissionControl is a shared memory of sorts that executions of
+	// payment path finding use in order to remember which vertexes/edges
+	// were pruned from prior attempts. During SendPayment execution,
+	// errors sent by nodes are mapped into a vertex or edge to be pruned.
+	// Each run will then take into account this set of pruned
+	// vertexes/edges to reduce route failure and pass on graph information
+	// gained to the next execution.
+	MissionControl *MissionControl
+
 	// ChannelPruneExpiry is the duration used to determine if a channel
 	// should be pruned or not. If the delta between now and when the
 	// channel was last updated is greater than ChannelPruneExpiry, then
@@ -338,15 +347,6 @@ type ChannelRouter struct {
 	// existing client.
 	ntfnClientUpdates chan *topologyClientUpdate
 
-	// missionControl is a shared memory of sorts that executions of
-	// payment path finding use in order to remember which vertexes/edges
-	// were pruned from prior attempts. During SendPayment execution,
-	// errors sent by nodes are mapped into a vertex or edge to be pruned.
-	// Each run will then take into account this set of pruned
-	// vertexes/edges to reduce route failure and pass on graph information
-	// gained to the next execution.
-	missionControl *MissionControl
-
 	// channelEdgeMtx is a mutex we use to make sure we process only one
 	// ChannelEdgePolicy at a time for a given channelID, to ensure
 	// consistency between the various database accesses.
@@ -387,10 +387,6 @@ func New(cfg Config) (*ChannelRouter, error) {
 		rejectCache:       make(map[uint64]struct{}),
 		quit:              make(chan struct{}),
 	}
-
-	r.missionControl = NewMissionControl(
-		cfg.Graph, selfNode, cfg.QueryBandwidth,
-	)
 
 	return r, nil
 }
@@ -1539,11 +1535,13 @@ type LightningPayment struct {
 // will be returned which describes the path the successful payment traversed
 // within the network to reach the destination. Additionally, the payment
 // preimage will also be returned.
-func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *route.Route, error) {
+func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte,
+	*route.Route, error) {
+
 	// Before starting the HTLC routing attempt, we'll create a fresh
 	// payment session which will report our errors back to mission
 	// control.
-	paySession, err := r.missionControl.newPaymentSession(
+	paySession, err := r.cfg.MissionControl.newPaymentSession(
 		payment.RouteHints, payment.Target,
 	)
 	if err != nil {
@@ -1560,7 +1558,7 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, route *route.Route) (
 	lntypes.Preimage, error) {
 
 	// Create a payment session for just this route.
-	paySession := r.missionControl.newPaymentSessionForRoute(route)
+	paySession := r.cfg.MissionControl.newPaymentSessionForRoute(route)
 
 	// Create a (mostly) dummy payment, as the created payment session is
 	// not going to do path finding.
