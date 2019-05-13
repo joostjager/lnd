@@ -4696,13 +4696,19 @@ func (lc *LightningChannel) SettleHTLC(preimage [32]byte,
 // index into the local log. If the specified index doesn't exist within the
 // log, and error is returned. Similarly if the preimage is invalid w.r.t to
 // the referenced of then a distinct error is returned.
-func (lc *LightningChannel) ReceiveHTLCSettle(preimage [32]byte, htlcIndex uint64) error {
+func (lc *LightningChannel) ReceiveHTLCSettle(preimage [32]byte,
+	htlcIndex uint64, currentHeight uint32) error {
+
 	lc.Lock()
 	defer lc.Unlock()
 
 	htlc := lc.localUpdateLog.lookupHtlc(htlcIndex)
 	if htlc == nil {
 		return ErrUnknownHtlcIndex{lc.ShortChanID(), htlcIndex}
+	}
+
+	if htlc.Timeout <= uint32(currentHeight) {
+		return ErrHtlcExpired
 	}
 
 	// Now that we know the HTLC exists, before checking to see if the

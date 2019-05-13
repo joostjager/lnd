@@ -187,3 +187,7 @@ func (e ErrUnknownHtlcIndex) Error() string {
 	return fmt.Sprintf("No HTLC with ID %d in channel %v",
 		e.index, e.chanID)
 }
+
+// ErrHtlcExpired is returned when the remote party tries to settle an HTLC
+// off-chain that has already expired.
+var ErrHtlcExpired = errors.New("HTLC is already expired")

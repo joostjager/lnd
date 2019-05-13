@@ -1569,7 +1569,10 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 	case *lnwire.UpdateFulfillHTLC:
 		pre := msg.PaymentPreimage
 		idx := msg.ID
-		if err := l.channel.ReceiveHTLCSettle(pre, idx); err != nil {
+
+		currentHeight := l.cfg.Switch.BestHeight()
+		err := l.channel.ReceiveHTLCSettle(pre, idx, currentHeight)
+		if err != nil {
 			l.fail(
 				LinkFailureError{
 					code:       ErrInvalidUpdate,
