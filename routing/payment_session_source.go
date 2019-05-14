@@ -15,12 +15,23 @@ var _ PaymentSessionSource = (*SessionSource)(nil)
 // SessionSource defines a source for the router to retrieve new payment
 // sessions.
 type SessionSource struct {
+	// Graph is the channel graph that the ChannelRouter will use to gather
+	// metrics from and also to carry out path finding queries.
 	Graph *channeldb.ChannelGraph
 
+	// QueryBandwidth is a method that allows the router to query the lower
+	// link layer to determine the up to date available bandwidth at a
+	// prospective link to be traversed. If the  link isn't available, then
+	// a value of zero should be returned. Otherwise, the current up to
+	// date knowledge of the available bandwidth of the link should be
+	// returned.
 	QueryBandwidth func(*channeldb.ChannelEdgeInfo) lnwire.MilliSatoshi
 
+	// SelfNode is our own node.
 	SelfNode *channeldb.LightningNode
 
+	// MissionControl collected payment attempt outcomes and provides
+	// probability estimates for path finding.
 	MissionControl missionControlInterface
 
 	// PaymentAttemptPenalty is the virtual cost in path finding weight
@@ -104,11 +115,10 @@ func (m *SessionSource) NewPaymentSession(routeHints [][]zpay32.HopHint,
 	}
 
 	return &paymentSession{
-		additionalEdges:      edges,
-		bandwidthHints:       bandwidthHints,
-		errFailedPolicyChans: make(map[nodeChannel]struct{}),
-		sessionSource:        m,
-		pathFinder:           findPath,
+		additionalEdges: edges,
+		bandwidthHints:  bandwidthHints,
+		sessionSource:   m,
+		pathFinder:      findPath,
 	}, nil
 }
 
@@ -116,9 +126,8 @@ func (m *SessionSource) NewPaymentSession(routeHints [][]zpay32.HopHint,
 // used for failure reporting to missioncontrol.
 func (m *SessionSource) NewPaymentSessionForRoute(preBuiltRoute *route.Route) PaymentSession {
 	return &paymentSession{
-		errFailedPolicyChans: make(map[nodeChannel]struct{}),
-		sessionSource:        m,
-		preBuiltRoute:        preBuiltRoute,
+		sessionSource: m,
+		preBuiltRoute: preBuiltRoute,
 	}
 }
 
@@ -127,9 +136,8 @@ func (m *SessionSource) NewPaymentSessionForRoute(preBuiltRoute *route.Route) Pa
 // missioncontrol for resumed payment we don't want to make more attempts for.
 func (m *SessionSource) NewPaymentSessionEmpty() PaymentSession {
 	return &paymentSession{
-		errFailedPolicyChans: make(map[nodeChannel]struct{}),
-		sessionSource:        m,
-		preBuiltRoute:        &route.Route{},
-		preBuiltRouteTried:   true,
+		sessionSource:      m,
+		preBuiltRoute:      &route.Route{},
+		preBuiltRouteTried: true,
 	}
 }

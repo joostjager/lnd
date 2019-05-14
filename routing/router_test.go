@@ -90,7 +90,8 @@ func createTestCtxFromGraphInstance(startingHeight uint32, graphInstance *testGr
 		return nil, nil, err
 	}
 
-	mc := NewMissionControl(
+	mc, err := NewMissionControl(
+		graphInstance.graph.Database().DB,
 		&MissionControlConfig{
 			PenaltyHalfLife:       time.Hour,
 			AprioriHopProbability: 0.9,
