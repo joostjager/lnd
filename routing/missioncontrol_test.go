@@ -12,9 +12,12 @@ import (
 func TestMissionControl(t *testing.T) {
 	now := testTime
 
-	mc := NewMissionControl(nil, nil, nil)
+	mc := NewMissionControl(
+		nil, nil, nil, &MissionControlConfig{
+			PenaltyHalfLife: 30 * time.Minute,
+		},
+	)
 	mc.now = func() time.Time { return now }
-	mc.penaltyHalfLife = 30 * time.Minute
 
 	testTime := time.Date(2018, time.January, 9, 14, 00, 00, 0, time.UTC)
 

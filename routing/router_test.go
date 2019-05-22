@@ -109,6 +109,11 @@ func createTestCtxFromGraphInstance(startingHeight uint32, graphInstance *testGr
 		},
 		MissionControl: NewMissionControl(
 			graphInstance.graph, selfNode, queryBandwidth,
+			&MissionControlConfig{
+				MinProbability:        0.01,
+				PaymentAttemptPenalty: 100,
+				PenaltyHalfLife:       time.Hour,
+			},
 		),
 	})
 	if err != nil {

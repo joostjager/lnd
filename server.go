@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
+
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/connmgr"
@@ -632,8 +634,13 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		return link.Bandwidth()
 	}
 
+	// Instantiate mission control with config from the sub server.
+	//
+	// TODO(joostjager): When we are further in the process of moving to sub
+	// servers, the mission control instance itself can be moved there too.
 	s.missionControl = routing.NewMissionControl(
 		chanGraph, selfNode, queryBandwidth,
+		routerrpc.GetMissionControlConfig(cfg.SubRPCServers.RouterRPC),
 	)
 
 	// The router will get access to the payment ID sequencer, such that it
