@@ -356,7 +356,7 @@ func (o *mockObfuscator) Reextract(extracter ErrorEncrypterExtracter) error {
 	return nil
 }
 
-func (o *mockObfuscator) EncryptFirstHop(failure lnwire.FailureMessage) (
+func (o *mockObfuscator) EncryptFirstHop(failure lnwire.FailureMessage, fwdTimestamp time.Time) (
 	lnwire.OpaqueReason, error) {
 
 	var b bytes.Buffer
@@ -366,15 +366,15 @@ func (o *mockObfuscator) EncryptFirstHop(failure lnwire.FailureMessage) (
 	return b.Bytes(), nil
 }
 
-func (o *mockObfuscator) EncryptError(initial bool, data []byte) []byte {
+func (o *mockObfuscator) EncryptError(initial bool, data []byte, fwdTimestamp time.Time) []byte {
 	return nil
 }
 
-func (o *mockObfuscator) IntermediateEncrypt(reason lnwire.OpaqueReason) lnwire.OpaqueReason {
+func (o *mockObfuscator) IntermediateEncrypt(reason lnwire.OpaqueReason, fwdTimestamp time.Time) lnwire.OpaqueReason {
 	return reason
 }
 
-func (o *mockObfuscator) EncryptMalformedError(reason lnwire.OpaqueReason) lnwire.OpaqueReason {
+func (o *mockObfuscator) EncryptMalformedError(reason lnwire.OpaqueReason, fwdTimestamp time.Time) lnwire.OpaqueReason {
 	return reason
 }
 

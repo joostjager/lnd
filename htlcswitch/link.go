@@ -1205,7 +1205,7 @@ func (l *channelLink) processHodlEvent(hodlEvent invoices.HodlEvent,
 			}
 
 			l.sendHTLCError(
-				htlc.pd.HtlcIndex, failure, htlc.obfuscator,
+				htlc.pd.HtlcIndex, lntypes.Hash(htlc.pd.RHash), failure, htlc.obfuscator,
 				htlc.pd.SourceRef,
 			)
 			return nil
@@ -1310,7 +1310,7 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket, isReProcess bool) {
 					localFailure = true
 				} else {
 					var err error
-					reason, err = pkt.obfuscator.EncryptFirstHop(failure)
+					reason, err = pkt.obfuscator.EncryptFirstHop(failure, fwdTimestamps[htlc.PaymentHash])
 					if err != nil {
 						l.errorf("unable to obfuscate error: %v", err)
 						l.mailBox.AckPacket(pkt.inKey())
@@ -1558,6 +1558,8 @@ func (l *channelLink) cleanupSpuriousResponse(pkt *htlcPacket) {
 	}
 }
 
+var fwdTimestamps = make(map[lntypes.Hash]time.Time)
+
 // handleUpstreamMsg processes wire messages related to commitment state
 // updates from the upstream peer. The upstream peer is the peer whom we have a
 // direct channel with, updating our respective commitment chains.
@@ -1574,6 +1576,8 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 				"unable to handle upstream add HTLC: %v", err)
 			return
 		}
+
+		fwdTimestamps[msg.PaymentHash] = time.Now().UTC()
 
 		l.tracef("Receive upstream htlc with payment hash(%x), "+
 			"assigning index: %v", msg.PaymentHash[:], index)
@@ -2675,7 +2679,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 				}
 
 				l.sendHTLCError(
-					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
+					pd.HtlcIndex, lntypes.Hash(pd.RHash), failure, obfuscator, pd.SourceRef,
 				)
 				needUpdate = true
 				continue
@@ -2762,7 +2766,7 @@ func (l *channelLink) processExitHop(pd *lnwallet.PaymentDescriptor,
 			pd.Amount, fwdInfo.AmountToForward)
 
 		failure := lnwire.NewFailUnknownPaymentHash(pd.Amount)
-		l.sendHTLCError(pd.HtlcIndex, failure, obfuscator, pd.SourceRef)
+		l.sendHTLCError(pd.HtlcIndex, lntypes.Hash(pd.RHash), failure, obfuscator, pd.SourceRef)
 
 		return true, nil
 	}
@@ -2777,7 +2781,7 @@ func (l *channelLink) processExitHop(pd *lnwallet.PaymentDescriptor,
 		failure := lnwire.NewFinalIncorrectCltvExpiry(
 			fwdInfo.OutgoingCTLV,
 		)
-		l.sendHTLCError(pd.HtlcIndex, failure, obfuscator, pd.SourceRef)
+		l.sendHTLCError(pd.HtlcIndex, lntypes.Hash(pd.RHash), failure, obfuscator, pd.SourceRef)
 
 		return true, nil
 	}
@@ -2797,7 +2801,7 @@ func (l *channelLink) processExitHop(pd *lnwallet.PaymentDescriptor,
 	// Cancel htlc if we don't have an invoice for it.
 	case channeldb.ErrInvoiceNotFound:
 		failure := lnwire.NewFailUnknownPaymentHash(pd.Amount)
-		l.sendHTLCError(pd.HtlcIndex, failure, obfuscator, pd.SourceRef)
+		l.sendHTLCError(pd.HtlcIndex, lntypes.Hash(pd.RHash), failure, obfuscator, pd.SourceRef)
 
 		return true, nil
 
@@ -2840,7 +2844,7 @@ func (l *channelLink) settleHTLC(preimage lntypes.Preimage, htlcIndex uint64,
 
 	l.infof("settling htlc %v as exit hop", hash)
 
-	reason := e.EncryptError(true, []byte{})
+	reason := e.EncryptError(true, []byte{}, fwdTimestamps[preimage.Hash()])
 
 	err := l.channel.SettleHTLC(
 		preimage, reason, htlcIndex, sourceRef, nil, nil,
@@ -2911,10 +2915,10 @@ func (l *channelLink) handleBatchFwdErrs(errChan chan error) {
 
 // sendHTLCError functions cancels HTLC and send cancel message back to the
 // peer from which HTLC was received.
-func (l *channelLink) sendHTLCError(htlcIndex uint64, failure lnwire.FailureMessage,
+func (l *channelLink) sendHTLCError(htlcIndex uint64, hash lntypes.Hash, failure lnwire.FailureMessage,
 	e ErrorEncrypter, sourceRef *channeldb.AddRef) {
 
-	reason, err := e.EncryptFirstHop(failure)
+	reason, err := e.EncryptFirstHop(failure, fwdTimestamps[hash])
 	if err != nil {
 		log.Errorf("unable to obfuscate error: %v", err)
 		return

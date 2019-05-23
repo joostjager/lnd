@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec"
 	sphinx "github.com/lightningnetwork/lightning-onion"
@@ -87,19 +88,19 @@ type ErrorEncrypter interface {
 	// encrypted opaque failure reason. This method will be used at the
 	// source that the error occurs. It differs from IntermediateEncrypt
 	// slightly, in that it computes a proper MAC over the error.
-	EncryptFirstHop(lnwire.FailureMessage) (lnwire.OpaqueReason, error)
+	EncryptFirstHop(lnwire.FailureMessage, time.Time) (lnwire.OpaqueReason, error)
 
 	// EncryptMalformedError is similar to EncryptFirstHop (it adds the
 	// MAC), but it accepts an opaque failure reason rather than a failure
 	// message. This method is used when we receive an
 	// UpdateFailMalformedHTLC from the remote peer and then need to
 	// convert that into a proper error from only the raw bytes.
-	EncryptMalformedError(lnwire.OpaqueReason) lnwire.OpaqueReason
+	EncryptMalformedError(lnwire.OpaqueReason, time.Time) lnwire.OpaqueReason
 
 	// IntermediateEncrypt wraps an already encrypted opaque reason error
 	// in an additional layer of onion encryption. This process repeats
 	// until the error arrives at the source of the payment.
-	IntermediateEncrypt(lnwire.OpaqueReason) lnwire.OpaqueReason
+	IntermediateEncrypt(lnwire.OpaqueReason, time.Time) lnwire.OpaqueReason
 
 	// Type returns an enum indicating the underlying concrete instance
 	// backing this interface.
@@ -120,7 +121,7 @@ type ErrorEncrypter interface {
 	// reinitialize the error encrypter.
 	Reextract(ErrorEncrypterExtracter) error
 
-	EncryptError(initial bool, data []byte) []byte
+	EncryptError(initial bool, data []byte, fwdTimestamp time.Time) []byte
 }
 
 // SphinxErrorEncrypter is a concrete implementation of both the ErrorEncrypter
@@ -153,7 +154,7 @@ func NewSphinxErrorEncrypter() *SphinxErrorEncrypter {
 // proper MAC over the error.
 //
 // NOTE: Part of the ErrorEncrypter interface.
-func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage) (lnwire.OpaqueReason, error) {
+func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage, fwdTimestamp time.Time) (lnwire.OpaqueReason, error) {
 	var b bytes.Buffer
 	if err := lnwire.EncodeFailure(&b, failure, 0); err != nil {
 		return nil, err
@@ -163,7 +164,7 @@ func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage) (l
 	// be added.
 	//
 	// TODO: Produce fixed size padding with deterministic padding.
-	return s.EncryptError(true, b.Bytes()), nil
+	return s.EncryptError(true, b.Bytes(), fwdTimestamp), nil
 }
 
 // EncryptMalformedError is similar to EncryptFirstHop (it adds the MAC), but
@@ -173,8 +174,8 @@ func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage) (l
 // bytes.
 //
 // NOTE: Part of the ErrorEncrypter interface.
-func (s *SphinxErrorEncrypter) EncryptMalformedError(reason lnwire.OpaqueReason) lnwire.OpaqueReason {
-	return s.EncryptError(true, reason)
+func (s *SphinxErrorEncrypter) EncryptMalformedError(reason lnwire.OpaqueReason, fwdTimestamp time.Time) lnwire.OpaqueReason {
+	return s.EncryptError(true, reason, fwdTimestamp)
 }
 
 // IntermediateEncrypt wraps an already encrypted opaque reason error in an
@@ -184,10 +185,10 @@ func (s *SphinxErrorEncrypter) EncryptMalformedError(reason lnwire.OpaqueReason)
 // error seen.
 //
 // NOTE: Part of the ErrorEncrypter interface.
-func (s *SphinxErrorEncrypter) IntermediateEncrypt(reason lnwire.OpaqueReason) lnwire.OpaqueReason {
+func (s *SphinxErrorEncrypter) IntermediateEncrypt(reason lnwire.OpaqueReason, fwdTimestamp time.Time) lnwire.OpaqueReason {
 	// TODO: Keep packet fixed size
 
-	return s.EncryptError(true, reason)
+	return s.EncryptError(true, reason, fwdTimestamp)
 }
 
 // Type returns the identifier for a sphinx error encrypter.

@@ -1213,7 +1213,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				// TODO(roasbeef): don't need to pass actually?
 				failure := &lnwire.FailPermanentChannelFailure{}
 				fail.Reason, err = circuit.ErrorEncrypter.EncryptFirstHop(
-					failure,
+					failure, fwdTimestamps[packet.circuit.PaymentHash],
 				)
 				if err != nil {
 					err = fmt.Errorf("unable to obfuscate "+
@@ -1233,7 +1233,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 					packet.outgoingChanID, packet.outgoingHTLCID)
 
 				fail.Reason = circuit.ErrorEncrypter.EncryptMalformedError(
-					fail.Reason,
+					fail.Reason, fwdTimestamps[packet.circuit.PaymentHash],
 				)
 				if err != nil {
 					err = fmt.Errorf("unable to obfuscate "+
@@ -1244,7 +1244,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				// Otherwise, it's a forwarded error, so we'll perform a
 				// wrapper encryption as normal.
 				fail.Reason = circuit.ErrorEncrypter.IntermediateEncrypt(
-					fail.Reason,
+					fail.Reason, fwdTimestamps[packet.circuit.PaymentHash],
 				)
 			}
 		} else if !isFail && circuit.Outgoing != nil {
@@ -1280,13 +1280,14 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 			// If this is a resolution message, then we'll need to
 			// encrypt it as it's actually internally sourced.
 			case packet.isResolution:
-				settle.Reason = circuit.ErrorEncrypter.EncryptError(true, []byte{})
+				settle.Reason = circuit.ErrorEncrypter.EncryptError(true, []byte{},
+					fwdTimestamps[packet.circuit.PaymentHash])
 
 			default:
 				// Otherwise, it's a forwarded error, so we'll perform a
 				// wrapper encryption as normal.
 				settle.Reason = circuit.ErrorEncrypter.IntermediateEncrypt(
-					settle.Reason,
+					settle.Reason, fwdTimestamps[packet.circuit.PaymentHash],
 				)
 			}
 		}
@@ -1315,7 +1316,7 @@ func (s *Switch) failAddPacket(packet *htlcPacket,
 	// Encrypt the failure so that the sender will be able to read the error
 	// message. Since we failed this packet, we use EncryptFirstHop to
 	// obfuscate the failure for their eyes only.
-	reason, err := packet.obfuscator.EncryptFirstHop(failure)
+	reason, err := packet.obfuscator.EncryptFirstHop(failure, fwdTimestamps[packet.circuit.PaymentHash])
 	if err != nil {
 		err := fmt.Errorf("unable to obfuscate "+
 			"error: %v", err)
