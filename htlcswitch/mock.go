@@ -366,6 +366,10 @@ func (o *mockObfuscator) EncryptFirstHop(failure lnwire.FailureMessage) (
 	return b.Bytes(), nil
 }
 
+func (o *mockObfuscator) EncryptError(initial bool, data []byte) []byte {
+	return nil
+}
+
 func (o *mockObfuscator) IntermediateEncrypt(reason lnwire.OpaqueReason) lnwire.OpaqueReason {
 	return reason
 }
@@ -393,6 +397,10 @@ func (o *mockDeobfuscator) DecryptError(reason lnwire.OpaqueReason) (*Forwarding
 	return &ForwardingError{
 		FailureMessage: failure,
 	}, nil
+}
+
+func (o *mockDeobfuscator) DecryptSettleMessage(reason lnwire.OpaqueReason) {
+
 }
 
 var _ ErrorDecrypter = (*mockDeobfuscator)(nil)

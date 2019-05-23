@@ -1175,6 +1175,7 @@ func (l *channelLink) processHodlEvent(hodlEvent invoices.HodlEvent,
 		hodlAction = func(htlc hodlHtlc) error {
 			return l.settleHTLC(
 				*hodlEvent.Preimage, htlc.pd.HtlcIndex,
+				htlc.obfuscator,
 				htlc.pd.SourceRef,
 			)
 		}
@@ -1379,6 +1380,7 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket, isReProcess bool) {
 		inKey := pkt.inKey()
 		err := l.channel.SettleHTLC(
 			htlc.PaymentPreimage,
+			htlc.Reason,
 			pkt.incomingHTLCID,
 			pkt.sourceRef,
 			pkt.destRef,
@@ -1579,7 +1581,7 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 	case *lnwire.UpdateFulfillHTLC:
 		pre := msg.PaymentPreimage
 		idx := msg.ID
-		if err := l.channel.ReceiveHTLCSettle(pre, idx); err != nil {
+		if err := l.channel.ReceiveHTLCSettle(pre, msg.Reason, idx); err != nil {
 			l.fail(
 				LinkFailureError{
 					code:       ErrInvalidUpdate,
@@ -2385,6 +2387,7 @@ func (l *channelLink) processRemoteSettleFails(fwdPkg *channeldb.FwdPkg,
 				destRef:        pd.DestRef,
 				htlc: &lnwire.UpdateFulfillHTLC{
 					PaymentPreimage: pd.RPreimage,
+					Reason:          pd.FailReason,
 				},
 			}
 
@@ -2830,14 +2833,17 @@ func (l *channelLink) processExitHop(pd *lnwallet.PaymentDescriptor,
 
 // settleHTLC settles the HTLC on the channel.
 func (l *channelLink) settleHTLC(preimage lntypes.Preimage, htlcIndex uint64,
+	e ErrorEncrypter,
 	sourceRef *channeldb.AddRef) error {
 
 	hash := preimage.Hash()
 
 	l.infof("settling htlc %v as exit hop", hash)
 
+	reason := e.EncryptError(true, []byte{})
+
 	err := l.channel.SettleHTLC(
-		preimage, htlcIndex, sourceRef, nil, nil,
+		preimage, reason, htlcIndex, sourceRef, nil, nil,
 	)
 	if err != nil {
 		return fmt.Errorf("unable to settle htlc: %v", err)
@@ -2857,6 +2863,7 @@ func (l *channelLink) settleHTLC(preimage lntypes.Preimage, htlcIndex uint64,
 		ChanID:          l.ChanID(),
 		ID:              htlcIndex,
 		PaymentPreimage: preimage,
+		Reason:          reason,
 	})
 
 	return nil

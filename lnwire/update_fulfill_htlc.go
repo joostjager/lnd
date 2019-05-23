@@ -19,6 +19,11 @@ type UpdateFulfillHTLC struct {
 	// PaymentPreimage is the R-value preimage required to fully settle an
 	// HTLC.
 	PaymentPreimage [32]byte
+
+	// Reason is an onion-encrypted blob that details why the HTLC was
+	// failed. This blob is only fully decryptable by the initiator of the
+	// HTLC message.
+	Reason OpaqueReason
 }
 
 // NewUpdateFulfillHTLC returns a new empty UpdateFulfillHTLC.
@@ -45,6 +50,7 @@ func (c *UpdateFulfillHTLC) Decode(r io.Reader, pver uint32) error {
 		&c.ChanID,
 		&c.ID,
 		c.PaymentPreimage[:],
+		&c.Reason,
 	)
 }
 
@@ -57,6 +63,7 @@ func (c *UpdateFulfillHTLC) Encode(w io.Writer, pver uint32) error {
 		c.ChanID,
 		c.ID,
 		c.PaymentPreimage[:],
+		c.Reason,
 	)
 }
 
@@ -74,5 +81,5 @@ func (c *UpdateFulfillHTLC) MsgType() MessageType {
 // This is part of the lnwire.Message interface.
 func (c *UpdateFulfillHTLC) MaxPayloadLength(uint32) uint32 {
 	// 32 + 8 + 32
-	return 72
+	return 72 + 40*20
 }

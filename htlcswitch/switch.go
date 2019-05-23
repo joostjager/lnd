@@ -948,6 +948,8 @@ func (s *Switch) extractResult(deobfuscator ErrorDecrypter, n *networkResult,
 				"payment %x: %v", paymentHash, err)
 		}
 
+		deobfuscator.DecryptSettleMessage(htlc.Reason)
+
 		return &PaymentResult{
 			Preimage: htlc.PaymentPreimage,
 		}, nil
@@ -1266,6 +1268,26 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 					},
 				)
 				s.fwdEventMtx.Unlock()
+			}
+		}
+
+		settle, isSettle := htlc.(*lnwire.UpdateFulfillHTLC)
+		if isSettle && !packet.hasSource {
+			switch {
+			// No message to encrypt, locally sourced payment.
+			case circuit.ErrorEncrypter == nil:
+
+			// If this is a resolution message, then we'll need to
+			// encrypt it as it's actually internally sourced.
+			case packet.isResolution:
+				settle.Reason = circuit.ErrorEncrypter.EncryptError(true, []byte{})
+
+			default:
+				// Otherwise, it's a forwarded error, so we'll perform a
+				// wrapper encryption as normal.
+				settle.Reason = circuit.ErrorEncrypter.IntermediateEncrypt(
+					settle.Reason,
+				)
 			}
 		}
 

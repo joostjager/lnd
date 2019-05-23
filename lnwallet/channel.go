@@ -4640,7 +4640,7 @@ func (lc *LightningChannel) ReceiveHTLC(htlc *lnwire.UpdateAddHTLC) (uint64, err
 //
 // NOTE: It is okay for sourceRef, destRef, and closeKey to be nil when unit
 // testing the wallet.
-func (lc *LightningChannel) SettleHTLC(preimage [32]byte,
+func (lc *LightningChannel) SettleHTLC(preimage [32]byte, reason []byte,
 	htlcIndex uint64, sourceRef *channeldb.AddRef,
 	destRef *channeldb.SettleFailRef, closeKey *channeldb.CircuitKey) error {
 
@@ -4672,6 +4672,7 @@ func (lc *LightningChannel) SettleHTLC(preimage [32]byte,
 		SourceRef:        sourceRef,
 		DestRef:          destRef,
 		ClosedCircuitKey: closeKey,
+		FailReason:       reason,
 	}
 
 	lc.localUpdateLog.appendUpdate(pd)
@@ -4688,7 +4689,7 @@ func (lc *LightningChannel) SettleHTLC(preimage [32]byte,
 // index into the local log. If the specified index doesn't exist within the
 // log, and error is returned. Similarly if the preimage is invalid w.r.t to
 // the referenced of then a distinct error is returned.
-func (lc *LightningChannel) ReceiveHTLCSettle(preimage [32]byte, htlcIndex uint64) error {
+func (lc *LightningChannel) ReceiveHTLCSettle(preimage [32]byte, reason []byte, htlcIndex uint64) error {
 	lc.Lock()
 	defer lc.Unlock()
 
@@ -4715,6 +4716,7 @@ func (lc *LightningChannel) ReceiveHTLCSettle(preimage [32]byte, htlcIndex uint6
 		RHash:       htlc.RHash,
 		LogIndex:    lc.remoteUpdateLog.logIndex,
 		EntryType:   Settle,
+		FailReason:  reason,
 	}
 
 	lc.remoteUpdateLog.appendUpdate(pd)

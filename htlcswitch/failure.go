@@ -44,6 +44,8 @@ type ErrorDecrypter interface {
 	// lnwire.FailureMessage is returned along with the source of the
 	// error.
 	DecryptError(lnwire.OpaqueReason) (*ForwardingError, error)
+
+	DecryptSettleMessage(reason lnwire.OpaqueReason)
 }
 
 // EncrypterType establishes an enum used in serialization to indicate how to
@@ -117,6 +119,8 @@ type ErrorEncrypter interface {
 	// NOTE: This should be called shortly after Decode to properly
 	// reinitialize the error encrypter.
 	Reextract(ErrorEncrypterExtracter) error
+
+	EncryptError(initial bool, data []byte) []byte
 }
 
 // SphinxErrorEncrypter is a concrete implementation of both the ErrorEncrypter
@@ -281,6 +285,13 @@ func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*Forwar
 		ErrorSource:    source,
 		FailureMessage: failureMsg,
 	}, nil
+}
+
+func (s *SphinxErrorDecrypter) DecryptSettleMessage(reason lnwire.OpaqueReason) {
+	_, _, err := s.OnionErrorDecrypter.DecryptError(reason)
+	if err != nil {
+		log.Errorf("decrypt settle: %v", err)
+	}
 }
 
 // A compile time check to ensure ErrorDecrypter implements the Deobfuscator
