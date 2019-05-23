@@ -50,3 +50,5 @@ require (
 replace github.com/lightningnetwork/lnd/ticker => ./ticker
 
 replace github.com/lightningnetwork/lnd/queue => ./queue
+
+replace github.com/lightningnetwork/lightning-onion => ../lightning-onion

@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/btcsuite/btcd/btcec"
-	"github.com/lightningnetwork/lightning-onion"
+	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
 
@@ -157,6 +157,8 @@ func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage) (l
 
 	// We pass a true as the first parameter to indicate that a MAC should
 	// be added.
+	//
+	// TODO: Produce fixed size padding with deterministic padding.
 	return s.EncryptError(true, b.Bytes()), nil
 }
 
@@ -179,7 +181,9 @@ func (s *SphinxErrorEncrypter) EncryptMalformedError(reason lnwire.OpaqueReason)
 //
 // NOTE: Part of the ErrorEncrypter interface.
 func (s *SphinxErrorEncrypter) IntermediateEncrypt(reason lnwire.OpaqueReason) lnwire.OpaqueReason {
-	return s.EncryptError(false, reason)
+	// TODO: Keep packet fixed size
+
+	return s.EncryptError(true, reason)
 }
 
 // Type returns the identifier for a sphinx error encrypter.
@@ -258,7 +262,13 @@ func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*Forwar
 
 	source, failureData, err := s.OnionErrorDecrypter.DecryptError(reason)
 	if err != nil {
-		return nil, err
+		// Reuse invalid onion error for the failure reason. This should
+		// be a local error instead of a wire error.
+		return &ForwardingError{
+			ErrorSource:    source,
+			ExtraMsg:       err.Error(),
+			FailureMessage: lnwire.NewInvalidOnionHmac(nil),
+		}, nil
 	}
 
 	r := bytes.NewReader(failureData)

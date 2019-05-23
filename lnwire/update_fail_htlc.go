@@ -81,5 +81,8 @@ func (c *UpdateFailHTLC) MaxPayloadLength(uint32) uint32 {
 	// Length of the Reason
 	length += 292
 
+	// Sig chain
+	length += 20 * 32
+
 	return length
 }

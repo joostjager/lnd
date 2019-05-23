@@ -1796,7 +1796,7 @@ func (r *ChannelRouter) processSendError(paySession *paymentSession,
 	errSource := fErr.ErrorSource
 	errVertex := route.NewVertex(errSource)
 
-	log.Tracef("node=%x reported failure when sending htlc", errVertex)
+	log.Debugf("node=%x reported failure when sending htlc", errVertex)
 
 	// Always determine chan id ourselves, because a channel
 	// update with id may not be available.
