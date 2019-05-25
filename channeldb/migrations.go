@@ -334,7 +334,7 @@ func migrateEdgePolicies(tx *bbolt.Tx) error {
 		_, err := fetchChanEdgePolicy(edges,
 			channelID[:], keyBytes, nodes)
 
-		if err == ErrEdgeNotFound {
+		if err == ErrEdgeNotFoundCode {
 			log.Tracef("Adding unknown edge policy present for node %x, channel %v",
 				keyBytes, channelId)
 

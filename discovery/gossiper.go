@@ -1892,7 +1892,7 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 			fallthrough
 		case channeldb.ErrGraphNoEdgesFound:
 			fallthrough
-		case channeldb.ErrEdgeNotFound:
+		case channeldb.ErrEdgeNotFoundCode:
 			// If the edge corresponding to this ChannelUpdate was
 			// not found in the graph, this might be a channel in
 			// the process of being opened, and we haven't processed
@@ -2375,7 +2375,7 @@ func (d *AuthenticatedGossiper) isMsgStale(msg lnwire.Message) bool {
 		// If the channel cannot be found, it is most likely a leftover
 		// message for a channel that was closed, so we can consider it
 		// stale.
-		if err == channeldb.ErrEdgeNotFound {
+		if err == channeldb.ErrEdgeNotFoundCode {
 			return true
 		}
 		if err != nil {
@@ -2395,7 +2395,7 @@ func (d *AuthenticatedGossiper) isMsgStale(msg lnwire.Message) bool {
 		// If the channel cannot be found, it is most likely a leftover
 		// message for a channel that was closed, so we can consider it
 		// stale.
-		if err == channeldb.ErrEdgeNotFound {
+		if err == channeldb.ErrEdgeNotFoundCode {
 			return true
 		}
 		if err != nil {

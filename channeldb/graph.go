@@ -735,16 +735,16 @@ func (c *ChannelGraph) UpdateChannelEdge(edge *ChannelEdgeInfo) error {
 	return c.db.Update(func(tx *bbolt.Tx) error {
 		edges := tx.Bucket(edgeBucket)
 		if edges == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		edgeIndex := edges.Bucket(edgeIndexBucket)
 		if edgeIndex == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		if edgeInfo := edgeIndex.Get(chanKey[:]); edgeInfo == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		return putChanEdgeInfo(edgeIndex, edge, chanKey)
@@ -836,7 +836,7 @@ func (c *ChannelGraph) PruneGraph(spentOutputs []*wire.OutPoint,
 				edges, edgeIndex, chanIndex, zombieIndex, nodes,
 				chanID, false,
 			)
-			if err != nil && err != ErrEdgeNotFound {
+			if err != nil && err != ErrEdgeNotFoundCode {
 				return err
 			}
 
@@ -1074,7 +1074,7 @@ func (c *ChannelGraph) DisconnectBlockAtHeight(height uint32) ([]*ChannelEdgeInf
 				edges, edgeIndex, chanIndex, zombieIndex, nodes,
 				k, false,
 			)
-			if err != nil && err != ErrEdgeNotFound {
+			if err != nil && err != ErrEdgeNotFoundCode {
 				return err
 			}
 
@@ -1178,15 +1178,15 @@ func (c *ChannelGraph) DeleteChannelEdges(chanIDs ...uint64) error {
 	err := c.db.Update(func(tx *bbolt.Tx) error {
 		edges := tx.Bucket(edgeBucket)
 		if edges == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 		edgeIndex := edges.Bucket(edgeIndexBucket)
 		if edgeIndex == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 		chanIndex := edges.Bucket(channelPointBucket)
 		if chanIndex == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 		nodes := tx.Bucket(nodeBucket)
 		if nodes == nil {
@@ -1257,7 +1257,7 @@ func getChanID(tx *bbolt.Tx, chanPoint *wire.OutPoint) (uint64, error) {
 
 	chanIDBytes := chanIndex.Get(b.Bytes())
 	if chanIDBytes == nil {
-		return 0, ErrEdgeNotFound
+		return 0, ErrEdgeNotFound()
 	}
 
 	chanID := byteOrder.Uint64(chanIDBytes)
@@ -1672,7 +1672,7 @@ func (c *ChannelGraph) FetchChanInfos(chanIDs []uint64) ([]ChannelEdge, error) {
 				edgeIndex, cidBytes[:],
 			)
 			switch {
-			case err == ErrEdgeNotFound:
+			case err == ErrEdgeNotFoundCode:
 				continue
 			case err != nil:
 				return err
@@ -1868,12 +1868,12 @@ func (c *ChannelGraph) UpdateEdgePolicy(edge *ChannelEdgePolicy) error {
 func updateEdgePolicy(tx *bbolt.Tx, edge *ChannelEdgePolicy) (bool, error) {
 	edges := tx.Bucket(edgeBucket)
 	if edges == nil {
-		return false, ErrEdgeNotFound
+		return false, ErrEdgeNotFound()
 
 	}
 	edgeIndex := edges.Bucket(edgeIndexBucket)
 	if edgeIndex == nil {
-		return false, ErrEdgeNotFound
+		return false, ErrEdgeNotFound()
 	}
 	nodes, err := tx.CreateBucketIfNotExists(nodeBucket)
 	if err != nil {
@@ -1889,7 +1889,7 @@ func updateEdgePolicy(tx *bbolt.Tx, edge *ChannelEdgePolicy) (bool, error) {
 	// nodes which connect this channel edge.
 	nodeInfo := edgeIndex.Get(chanID[:])
 	if nodeInfo == nil {
-		return false, ErrEdgeNotFound
+		return false, ErrEdgeNotFound()
 	}
 
 	// Depending on the flags value passed above, either the first
@@ -2763,7 +2763,7 @@ func (c *ChannelGraph) FetchChannelEdgesByOutpoint(op *wire.OutPoint,
 		}
 		chanID := chanIndex.Get(b.Bytes())
 		if chanID == nil {
-			return ErrEdgeNotFound
+			return ErrEdgeNotFound()
 		}
 
 		// If the channel is found to exists, then we'll first retrieve
@@ -2842,20 +2842,20 @@ func (c *ChannelGraph) FetchChannelEdgesByID(chanID uint64,
 
 		// If it doesn't exist, we'll quickly check our zombie index to
 		// see if we've previously marked it as so.
-		if err == ErrEdgeNotFound {
+		if err == ErrEdgeNotFoundCode {
 			// If the zombie index doesn't exist, or the edge is not
 			// marked as a zombie within it, then we'll return the
 			// original ErrEdgeNotFound error.
 			zombieIndex := edges.Bucket(zombieBucket)
 			if zombieIndex == nil {
-				return ErrEdgeNotFound
+				return ErrEdgeNotFound()
 			}
 
 			isZombie, pubKey1, pubKey2 := isZombieEdge(
 				zombieIndex, chanID,
 			)
 			if !isZombie {
-				return ErrEdgeNotFound
+				return ErrEdgeNotFound()
 			}
 
 			// Otherwise, the edge is marked as a zombie, so we'll
@@ -3455,7 +3455,7 @@ func fetchChanEdgeInfo(edgeIndex *bbolt.Bucket,
 
 	edgeInfoBytes := edgeIndex.Get(chanID)
 	if edgeInfoBytes == nil {
-		return ChannelEdgeInfo{}, ErrEdgeNotFound
+		return ChannelEdgeInfo{}, ErrEdgeNotFound()
 	}
 
 	edgeInfoReader := bytes.NewReader(edgeInfoBytes)
@@ -3630,7 +3630,7 @@ func fetchChanEdgePolicy(edges *bbolt.Bucket, chanID []byte,
 
 	edgeBytes := edges.Get(edgeKey[:])
 	if edgeBytes == nil {
-		return nil, ErrEdgeNotFound
+		return nil, ErrEdgeNotFound()
 	}
 
 	// No need to deserialize unknown policy.
@@ -3660,7 +3660,7 @@ func fetchChanEdgePolicies(edgeIndex *bbolt.Bucket, edges *bbolt.Bucket,
 
 	edgeInfo := edgeIndex.Get(chanID)
 	if edgeInfo == nil {
-		return nil, nil, ErrEdgeNotFound
+		return nil, nil, ErrEdgeNotFound()
 	}
 
 	// The first node is contained within the first half of the edge
