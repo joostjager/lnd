@@ -24,9 +24,13 @@ type Config struct {
 	// directory, named DefaultRouterMacFilename.
 	RouterMacPath string `long:"routermacaroonpath" description:"Path to the router macaroon"`
 
-	// MinProbability is the minimum required route probability to attempt
-	// the payment.
-	MinProbability float64 `long:"minprobability" description:"Minimum required route probability to attempt the payment"`
+	// MinProbability is the minimum required route success probability to
+	// attempt the payment.
+	MinRouteProbability float64 `long:"minrtprob" description:"Minimum required route success probability to attempt the payment"`
+
+	// AprioriHopProbability is the assumed success probability of a hop in
+	// a route when no other information is available.
+	AprioriHopProbability float64 `long:"apriorihopprob" description:"Assumed success probability of a hop in a route when no other information is available."`
 
 	// PenaltyHalfLife defines after how much time a penalized node or
 	// channel is back at 50% probability.
@@ -67,8 +71,9 @@ type Config struct {
 // DefaultConfig defines the config defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		MinProbability:  routing.DefaultMinProbability,
-		PenaltyHalfLife: routing.DefaultPenaltyHalfLife,
+		AprioriHopProbability: routing.DefaultAprioriHopProbability,
+		MinRouteProbability:   routing.DefaultMinRouteProbability,
+		PenaltyHalfLife:       routing.DefaultPenaltyHalfLife,
 		AttemptCost: int64(
 			routing.DefaultPaymentAttemptPenalty.ToSatoshis(),
 		),
@@ -79,7 +84,8 @@ func DefaultConfig() *Config {
 // server config.
 func GetMissionControlConfig(cfg *Config) *routing.MissionControlConfig {
 	return &routing.MissionControlConfig{
-		MinProbability: cfg.MinProbability,
+		AprioriHopProbability: cfg.AprioriHopProbability,
+		MinRouteProbability:   cfg.MinRouteProbability,
 		PaymentAttemptPenalty: lnwire.NewMSatFromSatoshis(
 			btcutil.Amount(cfg.AttemptCost),
 		),

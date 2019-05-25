@@ -14,7 +14,8 @@ func TestMissionControl(t *testing.T) {
 
 	mc := NewMissionControl(
 		nil, nil, nil, &MissionControlConfig{
-			PenaltyHalfLife: 30 * time.Minute,
+			PenaltyHalfLife:       30 * time.Minute,
+			AprioriHopProbability: 0.8,
 		},
 	)
 	mc.now = func() time.Time { return now }
@@ -39,7 +40,7 @@ func TestMissionControl(t *testing.T) {
 	}
 
 	// Initial probability is expected to be 1.
-	expectP(1000, 1)
+	expectP(1000, 0.8)
 
 	// Expect probability to be zero after reporting the edge as failed.
 	mc.reportEdgeFailure(testEdge, 1000)
@@ -47,11 +48,11 @@ func TestMissionControl(t *testing.T) {
 
 	// As we reported with a min penalization amt, a lower amt than reported
 	// should be unaffected.
-	expectP(500, 1)
+	expectP(500, 0.8)
 
 	// Edge decay started.
 	now = testTime.Add(30 * time.Minute)
-	expectP(1000, 0.5)
+	expectP(1000, 0.4)
 
 	// Edge fails again, this time without a min penalization amt. The edge
 	// should be penalized regardless of amount.
@@ -61,7 +62,7 @@ func TestMissionControl(t *testing.T) {
 
 	// Edge decay started.
 	now = testTime.Add(60 * time.Minute)
-	expectP(1000, 0.5)
+	expectP(1000, 0.4)
 
 	// A node level failure should bring probability of every channel back
 	// to zero.

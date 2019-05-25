@@ -18,7 +18,8 @@ func DefaultConfig() *Config {
 // server config.
 func GetMissionControlConfig(cfg *Config) *routing.MissionControlConfig {
 	return &routing.MissionControlConfig{
-		MinProbability:        routing.DefaultMinProbability,
+		AprioriHopProbability: routing.DefaultAprioriHopProbability,
+		MinRouteProbability:   routing.DefaultMinRouteProbability,
 		PaymentAttemptPenalty: routing.DefaultPaymentAttemptPenalty,
 		PenaltyHalfLife:       routing.DefaultPenaltyHalfLife,
 	}

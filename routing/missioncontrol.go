@@ -67,7 +67,11 @@ type MissionControlConfig struct {
 
 	// MinProbability defines the minimum success probability of the
 	// returned route.
-	MinProbability float64
+	MinRouteProbability float64
+
+	// AprioriHopProbability is the assumed success probability of a hop in
+	// a route when no other information is available.
+	AprioriHopProbability float64
 }
 
 // nodeHistory contains a summary of payment attempt outcomes involving a
@@ -143,9 +147,10 @@ func NewMissionControl(g *channeldb.ChannelGraph, selfNode *channeldb.LightningN
 
 	log.Debugf("Instantiating mission control with config: "+
 		"PenaltyHalfLife=%v, PaymentAttemptPenalty=%v, "+
-		"MinProbability=%v", cfg.PenaltyHalfLife,
+		"MinRouteProbability=%v, AprioriHopProbability=%v",
+		cfg.PenaltyHalfLife,
 		int64(cfg.PaymentAttemptPenalty.ToSatoshis()),
-		cfg.MinProbability)
+		cfg.MinRouteProbability, cfg.AprioriHopProbability)
 
 	return &MissionControl{
 		history:        make(map[route.Vertex]*nodeHistory),
@@ -304,7 +309,7 @@ func (m *MissionControl) getEdgeProbability(fromNode route.Vertex,
 	// information becomes available to adjust this probability.
 	nodeHistory, ok := m.history[fromNode]
 	if !ok {
-		return 1
+		return m.cfg.AprioriHopProbability
 	}
 
 	return m.getEdgeProbabilityForNode(nodeHistory, edge.ChannelID, amt)
@@ -333,17 +338,17 @@ func (m *MissionControl) getEdgeProbabilityForNode(nodeHistory *nodeHistory,
 	}
 
 	if lastFailure == nil {
-		return 1
+		return m.cfg.AprioriHopProbability
 	}
 
 	timeSinceLastFailure := m.now().Sub(*lastFailure)
 
 	// Calculate success probability. It is an exponential curve that brings
 	// the probability down to zero when a failure occurs. From there it
-	// recovers asymptotically back to 1. The rate at which this happens is
-	// controlled by the penaltyHalfLife parameter.
+	// recovers asymptotically back to the a priori probability. The rate at
+	// which this happens is controlled by the penaltyHalfLife parameter.
 	exp := -timeSinceLastFailure.Hours() / m.cfg.PenaltyHalfLife.Hours()
-	probability := 1 - math.Pow(2, exp)
+	probability := m.cfg.AprioriHopProbability * (1 - math.Pow(2, exp))
 
 	return probability
 }
