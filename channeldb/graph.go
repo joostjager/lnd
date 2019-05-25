@@ -734,7 +734,7 @@ func (c *ChannelGraph) UpdateChannelEdge(edge *ChannelEdgeInfo) error {
 
 	return c.db.Update(func(tx *bbolt.Tx) error {
 		edges := tx.Bucket(edgeBucket)
-		if edge == nil {
+		if edges == nil {
 			return ErrEdgeNotFound
 		}
 
