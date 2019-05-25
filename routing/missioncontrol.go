@@ -253,22 +253,25 @@ func (m *MissionControl) getEdgeProbabilityForNode(nodeHistory *nodeHistory,
 	// Calculate the last failure of the given edge. A node failure is
 	// considered a failure that would have affected every edge. Therefore
 	// we insert a node level failure into the history of every channel.
-	var lastFailure time.Time
-	if nodeHistory.lastFail != nil {
-		lastFailure = *nodeHistory.lastFail
-	}
+	lastFailure := nodeHistory.lastFail
 
 	// Take into account a minimum penalize amount. For balance errors, a
 	// failure may be reported with such a minimum to prevent too aggresive
 	// penalization.
 	channelHistory, ok := nodeHistory.channelLastFail[channelID]
 	if ok && channelHistory.minPenalizeAmt <= amt {
-		if channelHistory.lastFail.After(lastFailure) {
-			lastFailure = channelHistory.lastFail
+		if lastFailure == nil ||
+			channelHistory.lastFail.After(*lastFailure) {
+
+			lastFailure = &channelHistory.lastFail
 		}
 	}
 
-	timeSinceLastFailure := m.now().Sub(lastFailure)
+	if lastFailure == nil {
+		return 1
+	}
+
+	timeSinceLastFailure := m.now().Sub(*lastFailure)
 
 	// Calculate success probability. It is an exponential curve that brings
 	// the probability down to zero when a failure occurs. From there it
