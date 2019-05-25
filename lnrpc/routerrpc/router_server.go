@@ -467,10 +467,12 @@ func (s *Server) QueryMissionControl(ctx context.Context,
 		channels := make([]*ChannelHistory, len(node.Channels))
 		for j, channel := range node.Channels {
 			channels[j] = &ChannelHistory{
-				ChannelId:      channel.ChannelID,
-				LastFailTime:   channel.LastFail.Unix(),
-				MinPenalizeAmt: int64(channel.MinPenalizeAmt),
-				SuccessProb:    float32(channel.SuccessProb),
+				ChannelId:    channel.ChannelID,
+				LastFailTime: channel.LastFail.Unix(),
+				MinPenalizeAmt: int64(
+					channel.MinPenalizeAmt.ToSatoshis(),
+				),
+				SuccessProb: float32(channel.SuccessProb),
 			}
 		}
 
