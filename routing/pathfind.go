@@ -558,6 +558,10 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 				tx, pivot[:],
 			)
 			if err != nil {
+				if err == channeldb.ErrEdgeNotFoundCode {
+					log.Errorf("FetchOtherNode for node %v of channel %v",
+						pivot, edgeInfo.ChannelID)
+				}
 				return err
 			}
 
