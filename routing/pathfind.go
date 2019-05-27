@@ -393,6 +393,10 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 			fromVertex, *locator,
 		)
 
+		log.Tracef("path finding probability: fromnode=%v, chanid=%v, "+
+			"probability=%v", fromVertex, locator.ChannelID,
+			edgeProbability)
+
 		// If the probability is zero, there is no point in trying.
 		if edgeProbability == 0 {
 			return
@@ -482,9 +486,7 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 		// route, return. It is important to also return if the distance
 		// is equal, because otherwise the algorithm could run into an
 		// endless loop.
-		if distance[fromVertex].dist != infinity &&
-			tempDist >= distance[fromVertex].dist {
-
+		if tempDist >= distance[fromVertex].dist {
 			return
 		}
 
