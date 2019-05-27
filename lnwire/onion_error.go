@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	"bytes"
 
@@ -1139,12 +1140,21 @@ func DecodeFailure(r io.Reader, pver uint32) (FailureMessage, error) {
 		}
 	}
 
+	var fwdTimestampNano, bwdTimestampNano uint64
+	if err := ReadElements(dataReader, &fwdTimestampNano, &bwdTimestampNano); err != nil {
+		return nil, err
+	}
+	fwdTimestamp := time.Unix(0, int64(fwdTimestampNano))
+	bwdTimestamp := time.Unix(0, int64(bwdTimestampNano))
+
+	fmt.Printf("DEBUG: final node hmac OK, timestamps: add=%v,response=%v\n", fwdTimestamp, bwdTimestamp)
+
 	return failure, nil
 }
 
 // EncodeFailure encodes, including the necessary onion failure header
 // information.
-func EncodeFailure(w io.Writer, failure FailureMessage, pver uint32) error {
+func EncodeFailure(w io.Writer, failure FailureMessage, fwdTime, bwdTime time.Time, pver uint32) error {
 	var failureMessageBuffer bytes.Buffer
 
 	// First, we'll write out the error code itself into the failure
@@ -1167,6 +1177,13 @@ func EncodeFailure(w io.Writer, failure FailureMessage, pver uint32) error {
 		}
 	}
 
+	// Write timestamps
+	fmt.Printf("Failure timestamps: %v -> %v\n", fwdTime, bwdTime)
+	err = WriteElements(&failureMessageBuffer, uint64(fwdTime.UnixNano()), uint64(bwdTime.UnixNano()))
+	if err != nil {
+		return err
+	}
+
 	// The combined size of this message must be below the max allowed
 	// failure message length.
 	failureMessage := failureMessageBuffer.Bytes()
@@ -1178,6 +1195,8 @@ func EncodeFailure(w io.Writer, failure FailureMessage, pver uint32) error {
 	// Finally, we'll add some padding in order to ensure that all failure
 	// messages are fixed size.
 	pad := make([]byte, FailureMessageLength-len(failureMessage))
+
+	// fmt.Printf("Failure message encoded: %x\n", hex.EncodeToString(failureMessage))
 
 	return WriteElements(w,
 		uint16(len(failureMessage)),

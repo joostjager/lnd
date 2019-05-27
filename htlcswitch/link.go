@@ -1300,7 +1300,7 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket, isReProcess bool) {
 				// the payment was generated locally.
 				if pkt.obfuscator == nil {
 					var b bytes.Buffer
-					err := lnwire.EncodeFailure(&b, failure, 0)
+					err := lnwire.EncodeFailure(&b, failure, fwdTimestamps[htlc.PaymentHash], time.Now(), 0)
 					if err != nil {
 						l.errorf("unable to encode failure: %v", err)
 						l.mailBox.AckPacket(pkt.inKey())
@@ -1630,7 +1630,9 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 		// With the error parsed, we'll convert the into it's opaque
 		// form.
 		var b bytes.Buffer
-		if err := lnwire.EncodeFailure(&b, failure, 0); err != nil {
+
+		// TODO: Get fwd timestamp
+		if err := lnwire.EncodeFailure(&b, failure, time.Now(), time.Now(), 0); err != nil {
 			l.errorf("unable to encode malformed error: %v", err)
 			return
 		}
@@ -2844,9 +2846,19 @@ func (l *channelLink) settleHTLC(preimage lntypes.Preimage, htlcIndex uint64,
 
 	l.infof("settling htlc %v as exit hop", hash)
 
-	reason := e.EncryptError(true, []byte{}, fwdTimestamps[preimage.Hash()])
+	var b bytes.Buffer
+	err := lnwire.WriteElements(
+		&b,
+		uint64(fwdTimestamps[preimage.Hash()].UnixNano()),
+		uint64(time.Now().UnixNano()),
+	)
+	if err != nil {
+		return fmt.Errorf("unable to settle htlc: %v", err)
+	}
 
-	err := l.channel.SettleHTLC(
+	reason := e.EncryptError(true, b.Bytes())
+
+	err = l.channel.SettleHTLC(
 		preimage, reason, htlcIndex, sourceRef, nil, nil,
 	)
 	if err != nil {

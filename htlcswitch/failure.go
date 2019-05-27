@@ -2,6 +2,7 @@ package htlcswitch
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"time"
@@ -121,7 +122,7 @@ type ErrorEncrypter interface {
 	// reinitialize the error encrypter.
 	Reextract(ErrorEncrypterExtracter) error
 
-	EncryptError(initial bool, data []byte, fwdTimestamp time.Time) []byte
+	EncryptError(initial bool, data []byte) []byte
 }
 
 // SphinxErrorEncrypter is a concrete implementation of both the ErrorEncrypter
@@ -156,7 +157,7 @@ func NewSphinxErrorEncrypter() *SphinxErrorEncrypter {
 // NOTE: Part of the ErrorEncrypter interface.
 func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage, fwdTimestamp time.Time) (lnwire.OpaqueReason, error) {
 	var b bytes.Buffer
-	if err := lnwire.EncodeFailure(&b, failure, 0); err != nil {
+	if err := lnwire.EncodeFailure(&b, failure, fwdTimestamp, time.Now(), 0); err != nil {
 		return nil, err
 	}
 
@@ -164,7 +165,7 @@ func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage, fw
 	// be added.
 	//
 	// TODO: Produce fixed size padding with deterministic padding.
-	return s.EncryptError(true, b.Bytes(), fwdTimestamp), nil
+	return s.EncryptError(true, b.Bytes()), nil
 }
 
 // EncryptMalformedError is similar to EncryptFirstHop (it adds the MAC), but
@@ -175,7 +176,7 @@ func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage, fw
 //
 // NOTE: Part of the ErrorEncrypter interface.
 func (s *SphinxErrorEncrypter) EncryptMalformedError(reason lnwire.OpaqueReason, fwdTimestamp time.Time) lnwire.OpaqueReason {
-	return s.EncryptError(true, reason, fwdTimestamp)
+	return s.EncryptError(true, reason)
 }
 
 // IntermediateEncrypt wraps an already encrypted opaque reason error in an
@@ -188,7 +189,18 @@ func (s *SphinxErrorEncrypter) EncryptMalformedError(reason lnwire.OpaqueReason,
 func (s *SphinxErrorEncrypter) IntermediateEncrypt(reason lnwire.OpaqueReason, fwdTimestamp time.Time) lnwire.OpaqueReason {
 	// TODO: Keep packet fixed size
 
-	return s.EncryptError(true, reason, fwdTimestamp)
+	timestamps := make([]byte, 16)
+	binary.BigEndian.PutUint64(
+		timestamps, uint64(fwdTimestamp.UnixNano()),
+	)
+	binary.BigEndian.PutUint64(
+		timestamps[8:], uint64(time.Now().UnixNano()),
+	)
+	reason = append(reason, timestamps...)
+
+	log.Debugf("Intermediate encrypt with extended data: len(reason)=%v", len(reason))
+
+	return s.EncryptError(false, reason)
 }
 
 // Type returns the identifier for a sphinx error encrypter.
@@ -289,10 +301,22 @@ func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*Forwar
 }
 
 func (s *SphinxErrorDecrypter) DecryptSettleMessage(reason lnwire.OpaqueReason) {
-	_, _, err := s.OnionErrorDecrypter.DecryptError(reason)
+	_, msg, err := s.OnionErrorDecrypter.DecryptError(reason)
 	if err != nil {
 		log.Errorf("decrypt settle: %v", err)
+		return
 	}
+
+	r := bytes.NewReader(msg)
+	var fwdTimestampNano, bwdTimestampNano uint64
+	if err := lnwire.ReadElements(r, &fwdTimestampNano, &bwdTimestampNano); err != nil {
+		log.Errorf("decrypt settle: %v", err)
+		return
+	}
+	fwdTimestamp := time.Unix(0, int64(fwdTimestampNano))
+	bwdTimestamp := time.Unix(0, int64(bwdTimestampNano))
+
+	fmt.Printf("DEBUG: final node hmac OK, timestamps: add=%v,response=%v\n", fwdTimestamp, bwdTimestamp)
 }
 
 // A compile time check to ensure ErrorDecrypter implements the Deobfuscator

@@ -360,13 +360,13 @@ func (o *mockObfuscator) EncryptFirstHop(failure lnwire.FailureMessage, fwdTimes
 	lnwire.OpaqueReason, error) {
 
 	var b bytes.Buffer
-	if err := lnwire.EncodeFailure(&b, failure, 0); err != nil {
+	if err := lnwire.EncodeFailure(&b, failure, time.Time{}, time.Time{}, 0); err != nil {
 		return nil, err
 	}
 	return b.Bytes(), nil
 }
 
-func (o *mockObfuscator) EncryptError(initial bool, data []byte, fwdTimestamp time.Time) []byte {
+func (o *mockObfuscator) EncryptError(initial bool, data []byte) []byte {
 	return nil
 }
 

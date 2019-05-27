@@ -1280,8 +1280,13 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 			// If this is a resolution message, then we'll need to
 			// encrypt it as it's actually internally sourced.
 			case packet.isResolution:
-				settle.Reason = circuit.ErrorEncrypter.EncryptError(true, []byte{},
-					fwdTimestamps[packet.circuit.PaymentHash])
+				var b bytes.Buffer
+				lnwire.WriteElements(
+					&b,
+					fwdTimestamps[packet.circuit.PaymentHash].UnixNano(),
+					time.Now().UnixNano(),
+				)
+				settle.Reason = circuit.ErrorEncrypter.EncryptError(true, b.Bytes())
 
 			default:
 				// Otherwise, it's a forwarded error, so we'll perform a
