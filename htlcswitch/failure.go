@@ -2,6 +2,7 @@ package htlcswitch
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -196,11 +197,13 @@ func (s *SphinxErrorEncrypter) IntermediateEncrypt(reason lnwire.OpaqueReason, f
 	binary.BigEndian.PutUint64(
 		timestamps[8:], uint64(time.Now().UnixNano()),
 	)
-	reason = append(reason, timestamps...)
+
+	data := append(reason[:292], timestamps...)
+	data = append(data, reason[292:1450-sha256.Size-16]...)
 
 	log.Debugf("Intermediate encrypt with extended data: len(reason)=%v", len(reason))
 
-	return s.EncryptError(false, reason)
+	return s.EncryptError(false, data)
 }
 
 // Type returns the identifier for a sphinx error encrypter.

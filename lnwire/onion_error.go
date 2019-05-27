@@ -29,7 +29,7 @@ type FailureMessage interface {
 
 // FailureMessageLength is the size of the failure message plus the size of
 // padding. The FailureMessage message should always be EXACTLY this size.
-const FailureMessageLength = 256
+const FailureMessageLength = 1450 - sha256.Size
 
 const (
 	// FlagBadOnion error flag describes an unparsable, encrypted by
@@ -1194,7 +1194,7 @@ func EncodeFailure(w io.Writer, failure FailureMessage, fwdTime, bwdTime time.Ti
 
 	// Finally, we'll add some padding in order to ensure that all failure
 	// messages are fixed size.
-	pad := make([]byte, FailureMessageLength-len(failureMessage))
+	pad := make([]byte, FailureMessageLength-len(failureMessage)-4)
 
 	// fmt.Printf("Failure message encoded: %x\n", hex.EncodeToString(failureMessage))
 
