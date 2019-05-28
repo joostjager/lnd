@@ -3046,52 +3046,58 @@ type paymentIntentResponse struct {
 func (r *rpcServer) dispatchPaymentIntent(
 	payIntent *rpcPaymentIntent) (*paymentIntentResponse, error) {
 
-	// Construct a payment request to send to the channel router. If the
-	// payment is successful, the route chosen will be returned. Otherwise,
-	// we'll get a non-nil error.
-	var (
-		preImage  [32]byte
-		route     *route.Route
-		routerErr error
-	)
-
 	// If a route was specified, then we'll pass the route directly to the
-	// router, otherwise we'll create a payment session to execute it.
-	if payIntent.route == nil {
-		payment := &routing.LightningPayment{
-			Target:            payIntent.dest,
-			Amount:            payIntent.msat,
-			FinalCLTVDelta:    int16(payIntent.cltvDelta),
-			FeeLimit:          payIntent.feeLimit,
-			CltvLimit:         payIntent.cltvLimit,
-			PaymentHash:       payIntent.rHash,
-			RouteHints:        payIntent.routeHints,
-			OutgoingChannelID: payIntent.outgoingChannelID,
-		}
-
-		preImage, route, routerErr = r.server.chanRouter.SendPayment(
-			payment,
-		)
-	} else {
-		preImage, routerErr = r.server.chanRouter.SendToRoute(
+	// router.
+	if payIntent.route != nil {
+		preImage, err := r.server.chanRouter.SendToRoute(
 			payIntent.rHash, payIntent.route,
 		)
 
-		route = payIntent.route
-	}
-
-	// If the route failed, then we'll return a nil save err, but a non-nil
-	// routing err.
-	if routerErr != nil {
 		return &paymentIntentResponse{
-			Err: routerErr,
+			Route:    payIntent.route,
+			Preimage: preImage,
+			Err:      err,
 		}, nil
 	}
 
-	return &paymentIntentResponse{
-		Route:    route,
-		Preimage: preImage,
-	}, nil
+	// Construct a payment request to send to the channel router. If the
+	// payment is successful, the route chosen will be returned. Otherwise,
+	// we'll get a non-nil error.
+	payment := &routing.LightningPayment{
+		Target:            payIntent.dest,
+		Amount:            payIntent.msat,
+		FinalCLTVDelta:    int16(payIntent.cltvDelta),
+		FeeLimit:          payIntent.feeLimit,
+		CltvLimit:         payIntent.cltvLimit,
+		PaymentHash:       payIntent.rHash,
+		RouteHints:        payIntent.routeHints,
+		OutgoingChannelID: payIntent.outgoingChannelID,
+	}
+
+	// Initiate payment.
+	err := r.server.chanRouter.SendPayment(payment)
+	if err != nil {
+		return &paymentIntentResponse{Err: err}, nil
+	}
+
+	// Payment initiated successfully, subscribe for outcome.
+	_, resultChan, err := r.server.controlTower.SubscribePayment(payment.PaymentHash)
+	if err != nil {
+		return &paymentIntentResponse{Err: err}, nil
+	}
+
+	select {
+	case result := <-resultChan:
+		return &paymentIntentResponse{
+			Route:    result.Route,
+			Preimage: result.Preimage,
+
+			// TODO: Get error from control tower here.
+		}, nil
+
+	case <-r.quit:
+		return nil, errors.New("shutting down")
+	}
 }
 
 // sendPayment takes a paymentStream (a source of pre-built routes or payment

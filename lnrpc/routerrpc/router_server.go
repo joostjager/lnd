@@ -197,7 +197,7 @@ func (s *Server) SendPayment(ctx context.Context,
 	// available through LookupPayment. Exception to this are internal
 	// errors, but those should not happen.
 	go func() {
-		_, _, err := s.cfg.Router.SendPayment(payment)
+		err := s.cfg.Router.SendPayment(payment)
 		if err != nil {
 			log.Debugf("SendPayment async result for hash %v: %v",
 				payment.PaymentHash, err)

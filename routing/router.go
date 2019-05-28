@@ -1594,7 +1594,7 @@ type LightningPayment struct {
 // will be returned which describes the path the successful payment traversed
 // within the network to reach the destination. Additionally, the payment
 // preimage will also be returned.
-func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *route.Route, error) {
+func (r *ChannelRouter) SendPayment(payment *LightningPayment) error {
 	// Before starting the HTLC routing attempt, we'll create a fresh
 	// payment session which will report our errors back to mission
 	// control.
@@ -1602,7 +1602,7 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *route
 		payment.RouteHints, payment.Target,
 	)
 	if err != nil {
-		return [32]byte{}, nil, err
+		return err
 	}
 
 	// Record this payment hash with the ControlTower, ensuring it is not
@@ -1616,12 +1616,23 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *route
 
 	err = r.cfg.Control.InitPayment(payment.PaymentHash, info)
 	if err != nil {
-		return [32]byte{}, nil, err
+		return err
 	}
 
 	// Since this is the first time this payment is being made, we pass nil
 	// for the existing attempt.
-	return r.sendPayment(nil, payment, paySession)
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+
+		_, _, err := r.sendPayment(nil, payment, paySession)
+		if err != nil {
+			log.Errorf("SendPayment for hash %v: %v",
+				payment.PaymentHash, err)
+		}
+	}()
+
+	return nil
 }
 
 // SendToRoute attempts to send a payment with the given hash through the
