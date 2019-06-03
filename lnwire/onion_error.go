@@ -1192,17 +1192,11 @@ func EncodeFailure(w io.Writer, failure FailureMessage, fwdTime, bwdTime time.Ti
 			"available size: %v", len(failureMessage))
 	}
 
-	// Finally, we'll add some padding in order to ensure that all failure
-	// messages are fixed size.
-	pad := make([]byte, FailureMessageLength-len(failureMessage)-4)
-
 	// fmt.Printf("Failure message encoded: %x\n", hex.EncodeToString(failureMessage))
 
 	return WriteElements(w,
 		uint16(len(failureMessage)),
 		failureMessage,
-		uint16(len(pad)),
-		pad,
 	)
 }
 

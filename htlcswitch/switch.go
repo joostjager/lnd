@@ -1286,7 +1286,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 					fwdTimestamps[packet.circuit.PaymentHash].UnixNano(),
 					time.Now().UnixNano(),
 				)
-				settle.Reason = circuit.ErrorEncrypter.EncryptError(true, b.Bytes())
+				settle.Reason = circuit.ErrorEncrypter.EncryptInitial(b.Bytes())
 
 			default:
 				// Otherwise, it's a forwarded error, so we'll perform a

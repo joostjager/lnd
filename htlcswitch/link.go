@@ -2856,7 +2856,7 @@ func (l *channelLink) settleHTLC(preimage lntypes.Preimage, htlcIndex uint64,
 		return fmt.Errorf("unable to settle htlc: %v", err)
 	}
 
-	reason := e.EncryptError(true, b.Bytes())
+	reason := e.EncryptInitial(b.Bytes())
 
 	err = l.channel.SettleHTLC(
 		preimage, reason, htlcIndex, sourceRef, nil, nil,

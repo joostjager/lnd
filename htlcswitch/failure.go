@@ -2,7 +2,6 @@ package htlcswitch
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -123,7 +122,9 @@ type ErrorEncrypter interface {
 	// reinitialize the error encrypter.
 	Reextract(ErrorEncrypterExtracter) error
 
-	EncryptError(initial bool, data []byte) []byte
+	EncryptInitial(data []byte) []byte
+
+	EncryptIntermediate(blobIn, data []byte) []byte
 }
 
 // SphinxErrorEncrypter is a concrete implementation of both the ErrorEncrypter
@@ -166,7 +167,7 @@ func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage, fw
 	// be added.
 	//
 	// TODO: Produce fixed size padding with deterministic padding.
-	return s.EncryptError(true, b.Bytes()), nil
+	return s.EncryptInitial(b.Bytes()), nil
 }
 
 // EncryptMalformedError is similar to EncryptFirstHop (it adds the MAC), but
@@ -177,7 +178,7 @@ func (s *SphinxErrorEncrypter) EncryptFirstHop(failure lnwire.FailureMessage, fw
 //
 // NOTE: Part of the ErrorEncrypter interface.
 func (s *SphinxErrorEncrypter) EncryptMalformedError(reason lnwire.OpaqueReason, fwdTimestamp time.Time) lnwire.OpaqueReason {
-	return s.EncryptError(true, reason)
+	return s.EncryptInitial(reason)
 }
 
 // IntermediateEncrypt wraps an already encrypted opaque reason error in an
@@ -198,12 +199,9 @@ func (s *SphinxErrorEncrypter) IntermediateEncrypt(reason lnwire.OpaqueReason, f
 		timestamps[8:], uint64(time.Now().UnixNano()),
 	)
 
-	data := append(reason[:292], timestamps...)
-	data = append(data, reason[292:1450-sha256.Size-16]...)
-
 	log.Debugf("Intermediate encrypt with extended data: len(reason)=%v", len(reason))
 
-	return s.EncryptError(false, data)
+	return s.EncryptIntermediate(reason, timestamps)
 }
 
 // Type returns the identifier for a sphinx error encrypter.

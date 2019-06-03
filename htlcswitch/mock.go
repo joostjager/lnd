@@ -366,7 +366,11 @@ func (o *mockObfuscator) EncryptFirstHop(failure lnwire.FailureMessage, fwdTimes
 	return b.Bytes(), nil
 }
 
-func (o *mockObfuscator) EncryptError(initial bool, data []byte) []byte {
+func (o *mockObfuscator) EncryptInitial(data []byte) []byte {
+	return nil
+}
+
+func (o *mockObfuscator) EncryptIntermediate(blob, data []byte) []byte {
 	return nil
 }
 
