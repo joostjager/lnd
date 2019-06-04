@@ -163,11 +163,14 @@ type PaymentSessionSource interface {
 	// attempts for.
 	NewPaymentSessionEmpty() PaymentSession
 
-	// reportPaymentOutcome reports a failed payment to mission control as input for
+	// reportPaymentResult reports a failed payment to mission control as input for
 	// future probability estimates. It returns a bool indicating whether this error
 	// is a final error and no further payment attempts need to be made.
-	reportPaymentOutcome(rt *route.Route, errorSourceIndex int,
+	reportPaymentResult(paymentID uint64, errorSourceIndex int,
 		failure lnwire.FailureMessage) (bool, error)
+
+	// reportPaymentAttempt reports a payment attempt to mission control.
+	reportPaymentInitiate(paymentID uint64, rt *route.Route) error
 }
 
 // FeeSchema is the set fee configuration for a Lightning Node on the network.
@@ -1772,7 +1775,7 @@ func (r *ChannelRouter) sendPayment(
 // error type, this error is either the final outcome of the payment or we need
 // to continue with an alternative route. This is indicated by the boolean
 // return value.
-func (r *ChannelRouter) processSendError(rt *route.Route,
+func (r *ChannelRouter) processSendError(paymentID uint64, rt *route.Route,
 	fErr *htlcswitch.ForwardingError) bool {
 
 	errSource := fErr.ErrorSource
@@ -1796,12 +1799,11 @@ func (r *ChannelRouter) processSendError(rt *route.Route,
 	}
 
 	// Report outcome to mission control.
-	finalOutcome, err := r.cfg.MissionControl.reportPaymentOutcome(
-		rt, errorSourceIdx, fErr.FailureMessage,
+	finalOutcome, err := r.cfg.MissionControl.reportPaymentResult(
+		paymentID, errorSourceIdx, fErr.FailureMessage,
 	)
 	if err != nil {
-		log.Errorf("error reporting outcome: %v", err)
-		return true
+		log.Errorf("Error reporting payment result to mc: %v", err)
 	}
 
 	return finalOutcome

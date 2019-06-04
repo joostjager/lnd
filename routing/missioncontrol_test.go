@@ -39,6 +39,8 @@ type mcTestContext struct {
 
 	db     *bbolt.DB
 	dbPath string
+
+	pid uint64
 }
 
 func createMcTestContext(t *testing.T) *mcTestContext {
@@ -104,12 +106,19 @@ func (ctx *mcTestContext) reportFailure(t time.Time,
 
 	mcTestRoute.Hops[0].AmtToForward = amt
 
-	_, err := ctx.mc.reportPaymentOutcome(
-		mcTestRoute, 1, failure,
+	err := ctx.mc.reportPaymentInitiate(ctx.pid, mcTestRoute)
+	if err != nil {
+		ctx.t.Fatal(err)
+	}
+
+	_, err = ctx.mc.reportPaymentResult(
+		ctx.pid, 1, failure,
 	)
 	if err != nil {
 		ctx.t.Fatal(err)
 	}
+
+	ctx.pid++
 }
 
 // TestMissionControl tests mission control probability estimation.

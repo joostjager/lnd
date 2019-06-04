@@ -7,15 +7,16 @@ import (
 	"time"
 
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/routing/route"
 
 	"github.com/coreos/bbolt"
-	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
 
 var (
 	// attemptsKey is the fixed key under which the attempts are stored.
-	attemptsKey = []byte("missioncontrol-attempts")
+	initiatesKey = []byte("missioncontrol-initiates")
+	resultsKey   = []byte("missioncontrol-results")
 
 	// Big endian is the preferred byte order, due to cursor scans over
 	// integer keys iterating in order.
@@ -25,103 +26,176 @@ var (
 type missionControlStore interface {
 }
 
+type paymentInitiate struct {
+	id        uint64
+	timestamp time.Time
+	route     *route.Route
+}
+
+type paymentResult struct {
+	id               uint64
+	timestamp        time.Time
+	errorSourceIndex int
+	failure          lnwire.FailureMessage
+}
+
 type bboltMissionControlStore struct {
 	db *bbolt.DB
 }
 
-func newMissionControlStore(db *bbolt.DB) *bboltMissionControlStore {
-	return &bboltMissionControlStore{
-		db: db,
-	}
-}
+func newMissionControlStore(db *bbolt.DB) (*bboltMissionControlStore, error) {
+	// Create buckets if not yet existing.
+	err := db.Update(func(tx *bbolt.Tx) error {
+		buckets := [][]byte{initiatesKey, resultsKey}
 
-// Clear removes all reports from the db.
-func (b *bboltMissionControlStore) Clear() error {
-	return b.db.Update(func(tx *bbolt.Tx) error {
-		return tx.DeleteBucket(attemptsKey)
-	})
-}
-
-// Fetch returns all reports currently stored in the database.
-func (b *bboltMissionControlStore) Fetch() ([]*paymentReport, error) {
-	var reports []*paymentReport
-
-	err := b.db.Update(func(tx *bbolt.Tx) error {
-		attemptsBucket, err := tx.CreateBucketIfNotExists(attemptsKey)
-		if err != nil {
-			return fmt.Errorf("cannot create attempts bucket: %v",
-				err)
+		for _, bucketKey := range buckets {
+			_, err := tx.CreateBucketIfNotExists(bucketKey)
+			if err != nil {
+				return fmt.Errorf("cannot create bucket %v"+
+					": %v", bucketKey, err)
+			}
 		}
 
-		return attemptsBucket.ForEach(func(k, v []byte) error {
-			report := paymentReport{}
-
-			b := bytes.NewReader(v)
-
-			// Read timestamp.
-			var timestamp uint64
-			err := channeldb.ReadElement(b, &timestamp)
-			if err != nil {
-				return err
-			}
-			report.timestamp = time.Unix(int64(timestamp), 0).UTC()
-
-			// Read route.
-			route, err := channeldb.DeserializeRoute(b)
-			if err != nil {
-				return err
-			}
-			report.route = &route
-
-			// Read error source index.
-			var errorSourceIndex int32
-			err = channeldb.ReadElement(b, &errorSourceIndex)
-			if err != nil {
-				return err
-			}
-			report.errorSourceIndex = int(errorSourceIndex)
-
-			// Read failure.
-			report.failure, err = lnwire.DecodeFailure(b, 0)
-			if err != nil {
-				return err
-			}
-
-			// Add to list.
-			reports = append(reports, &report)
-
-			return nil
-		})
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	log.Debugf("Fetched %v historical reports from db", len(reports))
+	return &bboltMissionControlStore{
+		db: db,
+	}, nil
+}
 
-	return reports, nil
+// Clear removes all reports from the db.
+func (b *bboltMissionControlStore) Clear() error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		if err := tx.DeleteBucket(initiatesKey); err != nil {
+			return err
+		}
+
+		return tx.DeleteBucket(resultsKey)
+	})
+}
+
+// Fetch returns all reports currently stored in the database.
+func (b *bboltMissionControlStore) Fetch() ([]*paymentInitiate,
+	[]*paymentResult, error) {
+
+	var (
+		initiates []*paymentInitiate
+		results   []*paymentResult
+	)
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		// Initiates.
+		initiateBucket := tx.Bucket(initiatesKey)
+
+		err := initiateBucket.ForEach(func(k, v []byte) error {
+			initiate, err := deserializeInitiate(k, v)
+			if err != nil {
+				return err
+			}
+
+			initiates = append(initiates, initiate)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		// Results.
+		resultBucket := tx.Bucket(resultsKey)
+
+		return resultBucket.ForEach(func(k, v []byte) error {
+			result, err := deserializeResult(k, v)
+			if err != nil {
+				return err
+			}
+
+			results = append(results, result)
+			return nil
+		})
+
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log.Debugf("Fetched from db: %v initiates, %v results", len(initiates),
+		len(results))
+
+	return initiates, results, nil
+}
+
+func deserializeInitiate(k, v []byte) (
+	*paymentInitiate, error) {
+
+	initiate := paymentInitiate{
+		id: byteOrder.Uint64(k),
+	}
+	r := bytes.NewReader(v)
+
+	// Read timestamp.
+	var timestamp uint64
+	err := channeldb.ReadElements(r, &timestamp)
+	if err != nil {
+		return nil, err
+	}
+	initiate.timestamp = time.Unix(0, int64(timestamp)).UTC()
+
+	// Read route.
+	route, err := channeldb.DeserializeRoute(r)
+	if err != nil {
+		return nil, err
+	}
+	initiate.route = &route
+
+	return &initiate, nil
+}
+
+func deserializeResult(k, v []byte) (
+	*paymentResult, error) {
+
+	result := paymentResult{
+		id: byteOrder.Uint64(k),
+	}
+
+	r := bytes.NewReader(v)
+
+	// Read timestamp and error source index.
+	var (
+		timestamp      uint64
+		errorSourceIdx int32
+	)
+
+	err := channeldb.ReadElements(r, &timestamp, &errorSourceIdx)
+	if err != nil {
+		return nil, err
+	}
+	result.timestamp = time.Unix(0, int64(timestamp)).UTC()
+	result.errorSourceIndex = int(errorSourceIdx)
+
+	// Read failure.
+	result.failure, err = lnwire.DecodeFailure(r, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &result, nil
 }
 
 // Add adds a new report to the db.
-func (b *bboltMissionControlStore) Add(rp *paymentReport) error {
+func (b *bboltMissionControlStore) AddInitiate(rp *paymentInitiate) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		attemptsBucket, err := tx.CreateBucketIfNotExists(attemptsKey)
-		if err != nil {
-			return errors.New("cannot create attempts bucket")
-		}
-
-		seq, err := attemptsBucket.NextSequence()
-		if err != nil {
-			return errors.New("cannot create next sequence number")
-		}
-
-		var seqBytes [8]byte
-		byteOrder.PutUint64(seqBytes[:], seq)
+		bucket := tx.Bucket(initiatesKey)
 
 		var b bytes.Buffer
 
 		// Write timestamp.
-		err = channeldb.WriteElements(&b, uint64(rp.timestamp.Unix()))
+		err := channeldb.WriteElements(
+			&b, uint64(rp.timestamp.UnixNano()),
+		)
 		if err != nil {
 			return err
 		}
@@ -131,9 +205,24 @@ func (b *bboltMissionControlStore) Add(rp *paymentReport) error {
 			return err
 		}
 
-		// Write error source.
+		// Put into attempts bucket.
+		return bucket.Put(idToKey(rp.id), b.Bytes())
+	})
+}
+
+// Add adds a new report to the db.
+func (b *bboltMissionControlStore) AddResult(rp *paymentResult) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(resultsKey)
+
+		var b bytes.Buffer
+
+		// Write timestamp and error source.
 		// TODO(joostjager): support unknown source.
-		err = channeldb.WriteElements(&b, int32(rp.errorSourceIndex))
+		err := channeldb.WriteElements(
+			&b, uint64(rp.timestamp.UnixNano()),
+			int32(rp.errorSourceIndex),
+		)
 		if err != nil {
 			return err
 		}
@@ -144,6 +233,14 @@ func (b *bboltMissionControlStore) Add(rp *paymentReport) error {
 		}
 
 		// Put into attempts bucket.
-		return attemptsBucket.Put(seqBytes[:], b.Bytes())
+		return bucket.Put(idToKey(rp.id), b.Bytes())
 	})
+}
+
+// idToKey returns a byte slice representing the provided id.
+func idToKey(id uint64) []byte {
+	var seqBytes [8]byte
+	byteOrder.PutUint64(seqBytes[:], id)
+
+	return seqBytes[:]
 }

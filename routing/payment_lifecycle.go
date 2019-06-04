@@ -315,11 +315,18 @@ func (p *paymentLifecycle) sendPaymentAttempt(firstHop lnwire.ShortChannelID,
 		}),
 	)
 
+	err := p.router.cfg.MissionControl.reportPaymentInitiate(
+		p.attempt.PaymentID, &p.attempt.Route,
+	)
+	if err != nil {
+		log.Errorf("Error reporting payment initiate to mc: %v", err)
+	}
+
 	// Send it to the Switch. When this method returns we assume
 	// the Switch successfully has persisted the payment attempt,
 	// such that we can resume waiting for the result after a
 	// restart.
-	err := p.router.cfg.Payer.SendHTLC(
+	err = p.router.cfg.Payer.SendHTLC(
 		firstHop, p.attempt.PaymentID, htlcAdd,
 	)
 	if err != nil {
@@ -346,7 +353,7 @@ func (p *paymentLifecycle) handleSendError(sendErr error) error {
 		finalOutcome = true
 	} else {
 		finalOutcome = p.router.processSendError(
-			&p.attempt.Route, fErr,
+			p.attempt.PaymentID, &p.attempt.Route, fErr,
 		)
 
 		// Save the forwarding error so it can be returned if this turns

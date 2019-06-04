@@ -97,6 +97,15 @@ func (m *mockPaymentSessionSource) reportPaymentOutcome(rt *route.Route,
 	return false, nil
 }
 
+func (m *mockPaymentSessionSource) reportPaymentResult(paymentID uint64, errorSourceIndex int,
+	failure lnwire.FailureMessage) (bool, error) {
+	return false, nil
+}
+
+func (m *mockPaymentSessionSource) reportPaymentInitiate(paymentID uint64, rt *route.Route) error {
+	return nil
+}
+
 type mockPaymentSession struct {
 	routes []*route.Route
 }

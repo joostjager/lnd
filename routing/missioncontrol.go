@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -39,6 +40,8 @@ type MissionControl struct {
 	graph *channeldb.ChannelGraph
 
 	secondChanceChannels map[uint64]struct{}
+
+	paymentAttempts map[uint64]*paymentAttempt
 
 	selfNode *channeldb.LightningNode
 
@@ -84,6 +87,11 @@ type MissionControlConfig struct {
 	// AprioriHopProbability is the assumed success probability of a hop in
 	// a route when no other information is available.
 	AprioriHopProbability float64
+}
+
+type paymentAttempt struct {
+	route          *route.Route
+	initiationTime time.Time
 }
 
 // nodeHistory contains a summary of payment attempt outcomes involving a
@@ -174,11 +182,15 @@ func NewMissionControl(db *bbolt.DB, g *channeldb.ChannelGraph,
 		int64(cfg.PaymentAttemptPenalty.ToSatoshis()),
 		cfg.MinRouteProbability, cfg.AprioriHopProbability)
 
-	store := newMissionControlStore(db)
+	store, err := newMissionControlStore(db)
+	if err != nil {
+		return nil, err
+	}
 
 	mc := &MissionControl{
 		history:              make(map[route.Vertex]*nodeHistory),
 		secondChanceChannels: make(map[uint64]struct{}),
+		paymentAttempts:      make(map[uint64]*paymentAttempt),
 		selfNode:             selfNode,
 		queryBandwidth:       qb,
 		graph:                g,
@@ -196,13 +208,16 @@ func NewMissionControl(db *bbolt.DB, g *channeldb.ChannelGraph,
 
 // init initializes mission control with historical data.
 func (m *MissionControl) init() error {
-	reports, err := m.store.Fetch()
+	initiates, results, err := m.store.Fetch()
 	if err != nil {
 		return err
 	}
 
-	for _, report := range reports {
-		m.processPaymentOutcome(report)
+	for _, initiate := range initiates {
+		m.processPaymentInitiate(initiate)
+	}
+	for _, result := range results {
+		m.processPaymentResult(result)
 	}
 
 	return nil
@@ -550,63 +565,112 @@ func (m *MissionControl) GetHistorySnapshot() *MissionControlSnapshot {
 	return &snapshot
 }
 
+// reportPaymentAttempt reports a payment attempt to mission control.
+func (m *MissionControl) reportPaymentInitiate(paymentID uint64,
+	rt *route.Route) error {
+
+	timestamp := m.now()
+
+	initiate := paymentInitiate{
+		id:        paymentID,
+		route:     rt,
+		timestamp: timestamp,
+	}
+
+	err := m.store.AddInitiate(&initiate)
+	if err != nil {
+		return err
+	}
+
+	return m.processPaymentInitiate(&initiate)
+}
+
+// processPaymentAttempt processes an initiated payment attempt.
+func (m *MissionControl) processPaymentInitiate(
+	initiate *paymentInitiate) error {
+
+	m.Lock()
+	defer m.Unlock()
+
+	if _, exists := m.paymentAttempts[initiate.id]; exists {
+		return fmt.Errorf("payment attempt %v already exists",
+			initiate.id)
+	}
+
+	m.paymentAttempts[initiate.id] = &paymentAttempt{
+		initiationTime: initiate.timestamp,
+		route:          initiate.route,
+	}
+
+	return nil
+}
+
 // reportPaymentOutcome reports a failed payment to mission control as input for
 // future probability estimates. It returns a bool indicating whether this error
 // is a final error and no further payment attempts need to be made.
-func (m *MissionControl) reportPaymentOutcome(rt *route.Route,
+func (m *MissionControl) reportPaymentResult(paymentID uint64,
 	errorSourceIndex int, failure lnwire.FailureMessage) (bool, error) {
 
 	timestamp := m.now()
 
-	report := &paymentReport{
+	result := &paymentResult{
 		timestamp:        timestamp,
-		route:            rt,
 		errorSourceIndex: errorSourceIndex,
 		failure:          failure,
+		id:               paymentID,
 	}
 
-	err := m.store.Add(report)
+	err := m.store.AddResult(result)
 	if err != nil {
 		return false, err
 	}
 
-	return m.processPaymentOutcome(report), nil
+	return m.processPaymentResult(result)
 }
 
 // processPaymentOutcome processes a failed payment as input for future
 // probability estimates. It returns a bool indicating whether this error is a
 // final error and no further payment attempts need to be made.
-func (m *MissionControl) processPaymentOutcome(rp *paymentReport) bool {
+func (m *MissionControl) processPaymentResult(result *paymentResult) (
+	bool, error) {
+
+	initiate, ok := m.paymentAttempts[result.id]
+	if !ok {
+		return false, fmt.Errorf("initiate not found for payment %v",
+			result.id)
+	}
 
 	// TODO: Improve error attribution. Depending on the failure type,
 	// either the incoming or the outgoing channel should be penalized. Also
 	// the position of the node in the route is relevant (first after
 	// source, last before destination).
-	errorSource := rp.route.GetNodePubkeyByIndex(rp.errorSourceIndex)
-	failedEdge, failedAmt := getFailedEdge(rp.route, rp.errorSourceIndex)
+	errorSource := initiate.route.GetNodePubkeyByIndex(result.errorSourceIndex)
+	failedEdge, failedAmt := getFailedEdge(
+		initiate.route, result.errorSourceIndex,
+	)
 
-	switch rp.failure.(type) {
+	switch result.failure.(type) {
 
 	// If the end destination didn't know the payment
 	// hash or we sent the wrong payment amount to the
 	// destination, then we'll terminate immediately.
 	case *lnwire.FailUnknownPaymentHash:
-		return true
+		return true, nil
 
 	// If we sent the wrong amount to the destination, then
 	// we'll exit early.
 	case *lnwire.FailIncorrectPaymentAmount:
-		return true
+		return true, nil
 
 	// If the time-lock that was extended to the final node
 	// was incorrect, then we can't proceed.
 	case *lnwire.FailFinalIncorrectCltvExpiry:
-		return true
+		return true, nil
 
 	// If we crafted an invalid onion payload for the final
 	// node, then we'll exit early.
 	case *lnwire.FailFinalIncorrectHtlcAmount:
-		return true
+		return true, nil
 
 	// Similarly, if the HTLC expiry that we extended to
 	// the final hop expires too soon, then will fail the
@@ -615,30 +679,30 @@ func (m *MissionControl) processPaymentOutcome(rp *paymentReport) bool {
 	// TODO(roasbeef): can happen to to race condition, try
 	// again with recent block height
 	case *lnwire.FailFinalExpiryTooSoon:
-		return true
+		return true, nil
 
 	// If we erroneously attempted to cross a chain border,
 	// then we'll cancel the payment.
 	case *lnwire.FailInvalidRealm:
-		return true
+		return true, nil
 
 	// If we get a notice that the expiry was too soon for
 	// an intermediate node, then we'll prune out the node
 	// that sent us this error, as it doesn't now what the
 	// correct block height is.
 	case *lnwire.FailExpiryTooSoon:
-		m.reportVertexFailure(rp.timestamp, errorSource)
-		return false
+		m.reportVertexFailure(result.timestamp, errorSource)
+		return false, nil
 
 	// If we hit an instance of onion payload corruption or
 	// an invalid version, then we'll exit early as this
 	// shouldn't happen in the typical case.
 	case *lnwire.FailInvalidOnionVersion:
-		return true
+		return true, nil
 	case *lnwire.FailInvalidOnionHmac:
-		return true
+		return true, nil
 	case *lnwire.FailInvalidOnionKey:
-		return true
+		return true, nil
 
 	// If we get a failure due to violating the minimum amount, we'll apply
 	// the new minimum amount and retry routing.
@@ -648,50 +712,50 @@ func (m *MissionControl) processPaymentOutcome(rp *paymentReport) bool {
 	//
 	// TODO: Check update for nilness.
 	case *lnwire.FailAmountBelowMinimum:
-		m.reportEdgeFailure(rp.timestamp, failedEdge, 0, true)
-		return false
+		m.reportEdgeFailure(result.timestamp, failedEdge, 0, true)
+		return false, nil
 
 	// If we get a failure due to a fee, we'll apply the
 	// new fee update, and retry our attempt using the
 	// newly updated fees.
 	case *lnwire.FailFeeInsufficient:
-		m.reportEdgeFailure(rp.timestamp, failedEdge, 0, true)
-		return false
+		m.reportEdgeFailure(result.timestamp, failedEdge, 0, true)
+		return false, nil
 
 	// If we get the failure for an intermediate node that
 	// disagrees with our time lock values, then we'll
 	// apply the new delta value and try it once more.
 	case *lnwire.FailIncorrectCltvExpiry:
-		m.reportEdgeFailure(rp.timestamp, failedEdge, 0, true)
-		return false
+		m.reportEdgeFailure(result.timestamp, failedEdge, 0, true)
+		return false, nil
 
 	// The outgoing channel that this node was meant to
 	// forward one is currently disabled, so we'll apply
 	// the update and continue.
 	case *lnwire.FailChannelDisabled:
-		m.reportEdgeFailure(rp.timestamp, failedEdge, 0, false)
-		return false
+		m.reportEdgeFailure(result.timestamp, failedEdge, 0, false)
+		return false, nil
 
 	// It's likely that the outgoing channel didn't have
 	// sufficient capacity, so we'll prune this edge for
 	// now, and continue onwards with our path finding.
 	case *lnwire.FailTemporaryChannelFailure:
-		m.reportEdgeFailure(rp.timestamp, failedEdge, failedAmt, false)
-		return false
+		m.reportEdgeFailure(result.timestamp, failedEdge, failedAmt, false)
+		return false, nil
 
 	// If the send fail due to a node not having the
 	// required features, then we'll note this error and
 	// continue.
 	case *lnwire.FailRequiredNodeFeatureMissing:
-		m.reportVertexFailure(rp.timestamp, errorSource)
-		return false
+		m.reportVertexFailure(result.timestamp, errorSource)
+		return false, nil
 
 	// If the send fail due to a node not having the
 	// required features, then we'll note this error and
 	// continue.
 	case *lnwire.FailRequiredChannelFeatureMissing:
-		m.reportVertexFailure(rp.timestamp, errorSource)
-		return false
+		m.reportVertexFailure(result.timestamp, errorSource)
+		return false, nil
 
 	// If the next hop in the route wasn't known or
 	// offline, we'll only the channel which we attempted
@@ -701,19 +765,19 @@ func (m *MissionControl) processPaymentOutcome(rp *paymentReport) bool {
 	// returning errors in order to attempt to black list
 	// another node.
 	case *lnwire.FailUnknownNextPeer:
-		m.reportEdgeFailure(rp.timestamp, failedEdge, 0, false)
-		return false
+		m.reportEdgeFailure(result.timestamp, failedEdge, 0, false)
+		return false, nil
 
 	// If the node wasn't able to forward for which ever
 	// reason, then we'll note this and continue with the
 	// routes.
 	case *lnwire.FailTemporaryNodeFailure:
-		m.reportVertexFailure(rp.timestamp, errorSource)
-		return false
+		m.reportVertexFailure(result.timestamp, errorSource)
+		return false, nil
 
 	case *lnwire.FailPermanentNodeFailure:
-		m.reportVertexFailure(rp.timestamp, errorSource)
-		return false
+		m.reportVertexFailure(result.timestamp, errorSource)
+		return false, nil
 
 	// If we crafted a route that contains a too long time
 	// lock for an intermediate node, we'll prune the node.
@@ -725,26 +789,26 @@ func (m *MissionControl) processPaymentOutcome(rp *paymentReport) bool {
 	// that as a hint during future path finding through
 	// that node.
 	case *lnwire.FailExpiryTooFar:
-		m.reportVertexFailure(rp.timestamp, errorSource)
-		return false
+		m.reportVertexFailure(result.timestamp, errorSource)
+		return false, nil
 
 	// If we get a permanent channel or node failure, then
 	// we'll prune the channel in both directions and
 	// continue with the rest of the routes.
 	case *lnwire.FailPermanentChannelFailure:
-		m.reportEdgeFailure(rp.timestamp, failedEdge, 0, false)
+		m.reportEdgeFailure(result.timestamp, failedEdge, 0, false)
 		m.reportEdgeFailure(
-			rp.timestamp,
+			result.timestamp,
 			edge{
 				from:    failedEdge.to,
 				to:      failedEdge.from,
 				channel: failedEdge.channel,
 			}, 0, false,
 		)
-		return false
+		return false, nil
 
 	default:
-		return true
+		return true, nil
 	}
 }
 
