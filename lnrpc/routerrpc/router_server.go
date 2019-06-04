@@ -485,6 +485,12 @@ func (s *Server) trackPayment(paymentHash lntypes.Hash,
 				return err
 			}
 			status.State = state
+			if result.Route != nil {
+				status.Route = s.cfg.RouterBackend.
+					MarshallRoute(
+						result.Route,
+					)
+			}
 		}
 
 		// Send event to the client.
