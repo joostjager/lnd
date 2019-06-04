@@ -338,12 +338,12 @@ func (p *paymentLifecycle) sendPaymentAttempt(firstHop lnwire.ShortChannelID,
 // handleSendError inspects the given error from the Switch and determines
 // whether we should make another payment attempt.
 func (p *paymentLifecycle) handleSendError(sendErr error) error {
-	var finalOutcome bool
+	var finalOutcome *channeldb.FailureReason
 
 	// If an internal, non-forwarding error occurred, we can stop trying.
 	fErr, ok := sendErr.(*htlcswitch.ForwardingError)
 	if !ok {
-		finalOutcome = true
+		finalOutcome = channeldb.FailureReasonError.Ref()
 	} else {
 		finalOutcome = p.router.processSendError(
 			p.paySession, &p.attempt.Route, fErr,
@@ -354,15 +354,15 @@ func (p *paymentLifecycle) handleSendError(sendErr error) error {
 		p.lastError = fErr
 	}
 
-	if finalOutcome {
-		log.Errorf("Payment %x failed with final outcome: %v",
-			p.payment.PaymentHash, sendErr)
+	if finalOutcome != nil {
+		log.Debugf("Payment %x failed: final_outcome=%v, raw_err=%v",
+			p.payment.PaymentHash, finalOutcome, sendErr)
 
 		// Mark the payment failed with no route.
 		// TODO(halseth): make payment codes for the actual reason we
 		// don't continue path finding.
 		err := p.router.cfg.Control.Fail(
-			p.payment.PaymentHash, channeldb.FailureReasonNoRoute,
+			p.payment.PaymentHash, *finalOutcome,
 		)
 		if err != nil {
 			return err
