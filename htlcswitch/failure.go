@@ -278,7 +278,7 @@ type SphinxErrorDecrypter struct {
 // NOTE: Part of the ErrorDecrypter interface.
 func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*ForwardingError, error) {
 
-	source, failureData, err := s.OnionErrorDecrypter.DecryptError(reason)
+	source, failureData, timestamps, err := s.OnionErrorDecrypter.DecryptError(reason)
 	if err != nil {
 		// Reuse invalid onion error for the failure reason. This should
 		// be a local error instead of a wire error.
@@ -295,6 +295,13 @@ func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*Forwar
 		return nil, err
 	}
 
+	for i, ts := range timestamps {
+		fwdTimestamp := time.Unix(0, int64(binary.BigEndian.Uint64(ts[:8])))
+		bwdTimestamp := time.Unix(0, int64(binary.BigEndian.Uint64(ts[8:16])))
+
+		fmt.Printf("DEBUG: node %v hmac OK, timestamps: add=%v,response=%v\n", i, fwdTimestamp, bwdTimestamp)
+	}
+
 	return &ForwardingError{
 		ErrorSource:    source,
 		FailureMessage: failureMsg,
@@ -302,7 +309,7 @@ func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*Forwar
 }
 
 func (s *SphinxErrorDecrypter) DecryptSettleMessage(reason lnwire.OpaqueReason) {
-	_, msg, err := s.OnionErrorDecrypter.DecryptError(reason)
+	_, msg, _, err := s.OnionErrorDecrypter.DecryptError(reason)
 	if err != nil {
 		log.Errorf("decrypt settle: %v", err)
 		return
