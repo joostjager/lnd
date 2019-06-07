@@ -1718,6 +1718,8 @@ func (r *ChannelRouter) sendPaymentAttempt(paySession *paymentSession,
 		return [32]byte{}, true, err
 	}
 
+	sendTime := time.Now()
+
 	err = r.cfg.Payer.SendHTLC(
 		firstHop, paymentID, htlcAdd,
 	)
@@ -1765,6 +1767,9 @@ func (r *ChannelRouter) sendPaymentAttempt(paySession *paymentSession,
 	case <-r.quit:
 		return [32]byte{}, true, ErrRouterShuttingDown
 	}
+
+	responseTime := time.Now()
+	fmt.Printf("DEBUG: self node timestamps: add=%v,response=%v\n", sendTime, responseTime)
 
 	if result.Error != nil {
 		log.Errorf("Attempt to send payment %x failed: %v",
