@@ -101,6 +101,10 @@ github.com/jackpal/go-nat-pmp v0.0.0-20170405195558-28a68d0c24ad/go.mod h1:QPH04
 github.com/jessevdk/go-flags v0.0.0-20141203071132-1679536dcc89/go.mod h1:4FA24M0QyGHXBuZZK/XkWh8h0e1EYbRYJSGM75WSRxI=
 github.com/jessevdk/go-flags v1.4.0 h1:4IU2WS7AumrZ/40jfhf4QVDMsQwqA7VEHozFRrGARJA=
 github.com/jessevdk/go-flags v1.4.0/go.mod h1:4FA24M0QyGHXBuZZK/XkWh8h0e1EYbRYJSGM75WSRxI=
+github.com/joostjager/lightning-onion v0.0.0-20190611082152-7d1f799ee4ffa3dab00a4de8d96a4ec888b735fb h1:PsS6+/Xi7TkKnT31jwyTSNXye57SxYBURozuZO60WA4=
+github.com/joostjager/lightning-onion v0.0.0-20190611082152-7d1f799ee4ffa3dab00a4de8d96a4ec888b735fb/go.mod h1:Sooe/CoCqa85JxqHV+IBR2HW+6t2Cv+36awSmoccswM=
+github.com/joostjager/lightning-onion v0.0.0-20190611082152-991dab9ac9d3 h1:FeQhnXc0jq2jR3h3SDO9oZJDE6QvJxsAILEJDlSSdbs=
+github.com/joostjager/lightning-onion v0.0.0-20190611082152-991dab9ac9d3/go.mod h1:Sooe/CoCqa85JxqHV+IBR2HW+6t2Cv+36awSmoccswM=
 github.com/jrick/logrotate v1.0.0 h1:lQ1bL/n9mBNeIXoTUoYRlK4dHuNJVofX9oWqBtPnSzI=
 github.com/jrick/logrotate v1.0.0/go.mod h1:LNinyqDIJnpAur+b8yyulnQw/wDuN1+BYKlTRt3OuAQ=
 github.com/juju/clock v0.0.0-20180808021310-bab88fc67299 h1:K9nBHQ3UNqg/HhZkQnGG2AE4YxDyNmGS9FFT2gGegLQ=
