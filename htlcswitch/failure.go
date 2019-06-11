@@ -6,17 +6,18 @@ import (
 	"io"
 
 	"github.com/btcsuite/btcd/btcec"
-	"github.com/lightningnetwork/lightning-onion"
+	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/lnwire"
 )
 
 // ForwardingError wraps an lnwire.FailureMessage in a struct that also
 // includes the source of the error.
 type ForwardingError struct {
-	// ErrorSource is the public key of the node that sent the error. With
-	// this information, the dispatcher of a payment can modify their set
-	// of candidate routes in response to the type of error extracted.
-	ErrorSource *btcec.PublicKey
+	// FailureSourceIdx is the index of the node that sent the failure. With
+	// this information, the dispatcher of a payment can modify their set of
+	// candidate routes in response to the type of failure extracted. Index
+	// zero is the self node.
+	FailureSourceIdx int
 
 	// ExtraMsg is an additional error message that callers can provide in
 	// order to provide context specific error details.
@@ -256,7 +257,7 @@ type SphinxErrorDecrypter struct {
 // NOTE: Part of the ErrorDecrypter interface.
 func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*ForwardingError, error) {
 
-	source, failureData, err := s.OnionErrorDecrypter.DecryptError(reason)
+	sourceIdx, failureData, err := s.OnionErrorDecrypter.DecryptError(reason)
 	if err != nil {
 		return nil, err
 	}
@@ -268,8 +269,8 @@ func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*Forwar
 	}
 
 	return &ForwardingError{
-		ErrorSource:    source,
-		FailureMessage: failureMsg,
+		FailureSourceIdx: sourceIdx,
+		FailureMessage:   failureMsg,
 	}, nil
 }
 

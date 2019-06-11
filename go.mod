@@ -53,3 +53,5 @@ require (
 replace github.com/lightningnetwork/lnd/ticker => ./ticker
 
 replace github.com/lightningnetwork/lnd/queue => ./queue
+
+replace github.com/lightningnetwork/lightning-onion => github.com/joostjager/lightning-onion v0.0.0-20190611082152-991dab9ac9d3
