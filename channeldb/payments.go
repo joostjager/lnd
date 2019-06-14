@@ -473,7 +473,7 @@ func serializePaymentAttemptInfo(w io.Writer, a *PaymentAttemptInfo) error {
 		return err
 	}
 
-	if err := serializeRoute(w, a.Route); err != nil {
+	if err := SerializeRoute(w, a.Route); err != nil {
 		return err
 	}
 
@@ -486,7 +486,7 @@ func deserializePaymentAttemptInfo(r io.Reader) (*PaymentAttemptInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.Route, err = deserializeRoute(r)
+	a.Route, err = DeserializeRoute(r)
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +522,8 @@ func deserializeHop(r io.Reader) (*route.Hop, error) {
 	return h, nil
 }
 
-func serializeRoute(w io.Writer, r route.Route) error {
+// SerializeRoute serializes a route.
+func SerializeRoute(w io.Writer, r route.Route) error {
 	if err := WriteElements(w,
 		r.TotalTimeLock, r.TotalAmount, r.SourcePubKey[:],
 	); err != nil {
@@ -542,7 +543,8 @@ func serializeRoute(w io.Writer, r route.Route) error {
 	return nil
 }
 
-func deserializeRoute(r io.Reader) (route.Route, error) {
+// DeserializeRoute deserializes a route.
+func DeserializeRoute(r io.Reader) (route.Route, error) {
 	rt := route.Route{}
 	if err := ReadElements(r,
 		&rt.TotalTimeLock, &rt.TotalAmount,
