@@ -826,55 +826,6 @@ func TestSendPaymentErrorPathPruning(t *testing.T) {
 			getAliasFromPubKey(rt.Hops[0].PubKeyBytes,
 				ctx.aliases))
 	}
-
-	ctx.router.cfg.MissionControl.(*MissionControl).ResetHistory()
-
-	// Finally, we'll modify the SendToSwitch function to indicate that the
-	// roasbeef -> luoji channel has insufficient capacity. This should
-	// again cause us to instead go via the satoshi route.
-	ctx.router.cfg.Payer.(*mockPaymentAttemptDispatcher).setPaymentResult(
-		func(firstHop lnwire.ShortChannelID) ([32]byte, error) {
-
-			if firstHop == roasbeefLuoji {
-				// We'll first simulate an error from the first
-				// outgoing link to simulate the channel from luo ji to
-				// roasbeef not having enough capacity.
-				return [32]byte{}, &htlcswitch.ForwardingError{
-					FailureSourceIdx: 0,
-					FailureMessage:   &lnwire.FailTemporaryChannelFailure{},
-				}
-			}
-			return preImage, nil
-		})
-
-	// We flip a bit in the payment hash to allow resending this payment.
-	payment.PaymentHash[1] ^= 1
-	paymentPreImage, rt, err = ctx.router.SendPayment(&payment)
-	if err != nil {
-		t.Fatalf("unable to send payment: %v", err)
-	}
-
-	// This should succeed finally.  The route selected should have two
-	// hops.
-	if len(rt.Hops) != 2 {
-		t.Fatalf("incorrect route length: expected %v got %v", 2,
-			len(rt.Hops))
-	}
-
-	// The preimage should match up with the once created above.
-	if !bytes.Equal(paymentPreImage[:], preImage[:]) {
-		t.Fatalf("incorrect preimage used: expected %x got %x",
-			preImage[:], paymentPreImage[:])
-	}
-
-	// The route should have satoshi as the first hop.
-	if rt.Hops[0].PubKeyBytes != ctx.aliases["satoshi"] {
-
-		t.Fatalf("route should go through satoshi as first hop, "+
-			"instead passes through: %v",
-			getAliasFromPubKey(rt.Hops[0].PubKeyBytes,
-				ctx.aliases))
-	}
 }
 
 // TestAddProof checks that we can update the channel proof after channel
