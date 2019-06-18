@@ -171,6 +171,18 @@ type PaymentSessionSource interface {
 	NewPaymentSessionEmpty() PaymentSession
 }
 
+// missionControlInterface is an interface that exposes failure reporting and
+// probability estimation.
+type missionControlInterface interface {
+	reportEdgeFailure(failedEdge edge,
+		minPenalizeAmt lnwire.MilliSatoshi)
+
+	reportVertexFailure(v route.Vertex)
+
+	getEdgeProbability(fromNode route.Vertex, edge EdgeLocator,
+		amt lnwire.MilliSatoshi) float64
+}
+
 // FeeSchema is the set fee configuration for a Lightning Node on the network.
 // Using the coefficients described within the schema, the required fee to
 // forward outgoing payments can be derived.
@@ -234,7 +246,11 @@ type Config struct {
 	// Each run will then take into account this set of pruned
 	// vertexes/edges to reduce route failure and pass on graph information
 	// gained to the next execution.
-	MissionControl PaymentSessionSource
+	MissionControl missionControlInterface
+
+	// SessionSource defines a source for the router to retrieve new payment
+	// sessions.
+	SessionSource PaymentSessionSource
 
 	// ChannelPruneExpiry is the duration used to determine if a channel
 	// should be pruned or not. If the delta between now and when the
@@ -544,7 +560,7 @@ func (r *ChannelRouter) Start() error {
 			//
 			// PayAttemptTime doesn't need to be set, as there is
 			// only a single attempt.
-			paySession := r.cfg.MissionControl.NewPaymentSessionEmpty()
+			paySession := r.cfg.SessionSource.NewPaymentSessionEmpty()
 
 			lPayment := &LightningPayment{
 				PaymentHash: payment.Info.PaymentHash,
@@ -1659,7 +1675,7 @@ func (r *ChannelRouter) preparePayment(payment *LightningPayment) (
 	// Before starting the HTLC routing attempt, we'll create a fresh
 	// payment session which will report our errors back to mission
 	// control.
-	paySession, err := r.cfg.MissionControl.NewPaymentSession(
+	paySession, err := r.cfg.SessionSource.NewPaymentSession(
 		payment.RouteHints, payment.Target,
 	)
 	if err != nil {
@@ -1690,7 +1706,7 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, route *route.Route) (
 	lntypes.Preimage, error) {
 
 	// Create a payment session for just this route.
-	paySession := r.cfg.MissionControl.NewPaymentSessionForRoute(route)
+	paySession := r.cfg.SessionSource.NewPaymentSessionForRoute(route)
 
 	// Calculate amount paid to receiver.
 	amt := route.TotalAmount - route.TotalFees()
