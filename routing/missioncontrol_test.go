@@ -29,7 +29,7 @@ func createMcTestContext(t *testing.T) *mcTestContext {
 	}
 
 	mc := NewMissionControl(
-		nil, nil, nil, &MissionControlConfig{
+		&MissionControlConfig{
 			PenaltyHalfLife:       30 * time.Minute,
 			AprioriHopProbability: 0.8,
 		},
