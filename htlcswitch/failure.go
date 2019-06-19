@@ -247,7 +247,7 @@ var _ ErrorEncrypter = (*SphinxErrorEncrypter)(nil)
 // SphinxErrorDecrypter wraps the sphinx data SphinxErrorDecrypter and maps the
 // returned errors to concrete lnwire.FailureMessage instances.
 type SphinxErrorDecrypter struct {
-	*sphinx.OnionErrorDecrypter
+	Decrypt func(encryptedData []byte) (int, []byte, error)
 }
 
 // DecryptError peels off each layer of onion encryption from the first hop, to
@@ -257,7 +257,7 @@ type SphinxErrorDecrypter struct {
 // NOTE: Part of the ErrorDecrypter interface.
 func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*ForwardingError, error) {
 
-	sourceIdx, failureData, err := s.OnionErrorDecrypter.DecryptError(reason)
+	sourceIdx, failureData, err := s.Decrypt(reason)
 	if err != nil {
 		return nil, err
 	}

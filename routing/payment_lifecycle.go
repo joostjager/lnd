@@ -89,7 +89,8 @@ func (p *paymentLifecycle) resumePayment() ([32]byte, *route.Route, error) {
 		// parse+decode any failures incurred by this payment within the
 		// switch.
 		errorDecryptor := &htlcswitch.SphinxErrorDecrypter{
-			OnionErrorDecrypter: sphinx.NewOnionErrorDecrypter(p.circuit),
+			Decrypt: sphinx.NewOnionErrorDecrypter(p.circuit).
+				DecryptError,
 		}
 
 		// Now ask the switch to return the result of the payment when
