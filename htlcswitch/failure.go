@@ -31,10 +31,10 @@ type ForwardingError struct {
 // returned.
 func (f *ForwardingError) Error() string {
 	if f.ExtraMsg == "" {
-		return f.FailureMessage.Error()
+		return fmt.Sprintf("%v", f.FailureMessage)
 	}
 
-	return fmt.Sprintf("%v: %v", f.FailureMessage.Error(), f.ExtraMsg)
+	return fmt.Sprintf("%v: %v", f.FailureMessage, f.ExtraMsg)
 }
 
 // ErrorDecrypter is an interface that is used to decrypt the onion encrypted
@@ -262,10 +262,14 @@ func (s *SphinxErrorDecrypter) DecryptError(reason lnwire.OpaqueReason) (*Forwar
 		return nil, err
 	}
 
+	// Decode the failure. If an error occurs, we leave the failure message
+	// field nil.
 	r := bytes.NewReader(failureData)
 	failureMsg, err := lnwire.DecodeFailure(r, 0)
 	if err != nil {
-		return nil, err
+		return &ForwardingError{
+			FailureSourceIdx: sourceIdx,
+		}, nil
 	}
 
 	return &ForwardingError{
