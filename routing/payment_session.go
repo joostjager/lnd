@@ -150,12 +150,10 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	ss := p.sessionSource
 
 	restrictions := &RestrictParams{
-		ProbabilitySource:     ss.MissionControl.getEdgeProbability,
-		FeeLimit:              payment.FeeLimit,
-		OutgoingChannelID:     payment.OutgoingChannelID,
-		CltvLimit:             cltvLimit,
-		PaymentAttemptPenalty: ss.PaymentAttemptPenalty,
-		MinProbability:        ss.MinRouteProbability,
+		ProbabilitySource: ss.MissionControl.getEdgeProbability,
+		FeeLimit:          payment.FeeLimit,
+		OutgoingChannelID: payment.OutgoingChannelID,
+		CltvLimit:         cltvLimit,
 	}
 
 	path, err := p.pathFinder(
@@ -164,7 +162,8 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 			additionalEdges: p.additionalEdges,
 			bandwidthHints:  p.bandwidthHints,
 		},
-		restrictions, ss.SelfNode.PubKeyBytes, payment.Target,
+		restrictions, &ss.PathFindingConfig,
+		ss.SelfNode.PubKeyBytes, payment.Target,
 		payment.Amount,
 	)
 	if err != nil {
