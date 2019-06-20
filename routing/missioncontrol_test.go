@@ -112,9 +112,24 @@ func (ctx *mcTestContext) reportFailure(t time.Time,
 	}
 
 	errorSourceIdx := 1
-	_, err = ctx.mc.reportPaymentResult(
+	_, err = ctx.mc.reportPaymentFail(
 		ctx.pid, &errorSourceIdx, failure,
 	)
+	if err != nil {
+		ctx.t.Fatal(err)
+	}
+
+	ctx.pid++
+}
+
+// reportSuccess reports a success by using a test route.
+func (ctx *mcTestContext) reportSuccess(t time.Time) {
+	err := ctx.mc.reportPaymentInitiate(ctx.pid, mcTestRoute)
+	if err != nil {
+		ctx.t.Fatal(err)
+	}
+
+	err = ctx.mc.reportPaymentSuccess(ctx.pid)
 	if err != nil {
 		ctx.t.Fatal(err)
 	}
@@ -187,6 +202,11 @@ func TestMissionControl(t *testing.T) {
 	// Test reporting an unknown failure.
 	ctx.reportFailure(
 		ctx.now, 0, nil,
+	)
+
+	// Test reporting a success.
+	ctx.reportSuccess(
+		ctx.now,
 	)
 }
 

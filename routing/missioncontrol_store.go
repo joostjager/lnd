@@ -167,7 +167,9 @@ func deserializeResult(k, v []byte) (
 		dbErrSourceIdx int32
 	)
 
-	err := channeldb.ReadElements(r, &timestamp, &dbErrSourceIdx)
+	err := channeldb.ReadElements(
+		r, &timestamp, &result.success, &dbErrSourceIdx,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -175,18 +177,18 @@ func deserializeResult(k, v []byte) (
 	if dbErrSourceIdx != -1 {
 		errSourceIdx := int(dbErrSourceIdx)
 		result.errorSourceIndex = &errSourceIdx
+	}
 
-		failureFlag, err := r.ReadByte()
+	failureFlag, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	if failureFlag != 0 {
+		// Read failure.
+		result.failure, err = lnwire.DecodeFailure(r, 0)
 		if err != nil {
 			return nil, err
-		}
-
-		if failureFlag != 0 {
-			// Read failure.
-			result.failure, err = lnwire.DecodeFailure(r, 0)
-			if err != nil {
-				return nil, err
-			}
 		}
 	}
 
@@ -236,26 +238,24 @@ func (b *bboltMissionControlStore) AddResult(rp *paymentResult) error {
 		// TODO(joostjager): support unknown source.
 		err := channeldb.WriteElements(
 			&b, uint64(rp.timestamp.UnixNano()),
-			dbErrSourceIdx,
+			rp.success, dbErrSourceIdx,
 		)
 		if err != nil {
 			return err
 		}
 
 		// Write failure flag and failure.
-		if rp.errorSourceIndex != nil {
-			if rp.failure == nil {
-				if err := b.WriteByte(0); err != nil {
-					return err
-				}
-			} else {
-				if err := b.WriteByte(1); err != nil {
-					return err
-				}
-				err := lnwire.EncodeFailure(&b, rp.failure, 0)
-				if err != nil {
-					return err
-				}
+		if rp.failure == nil {
+			if err := b.WriteByte(0); err != nil {
+				return err
+			}
+		} else {
+			if err := b.WriteByte(1); err != nil {
+				return err
+			}
+			err := lnwire.EncodeFailure(&b, rp.failure, 0)
+			if err != nil {
+				return err
 			}
 		}
 

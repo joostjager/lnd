@@ -149,6 +149,7 @@ type paymentInitiate struct {
 type paymentResult struct {
 	id               uint64
 	timestamp        time.Time
+	success          bool
 	errorSourceIndex *int
 	failure          lnwire.FailureMessage
 }
@@ -485,19 +486,20 @@ func (m *MissionControl) processPaymentInitiate(
 	return nil
 }
 
-// reportPaymentOutcome reports a failed payment to mission control as input for
+// reportPaymentFail reports a failed payment to mission control as input for
 // future probability estimates. It returns a bool indicating whether this error
 // is a final error and no further payment attempts need to be made.
-func (m *MissionControl) reportPaymentResult(paymentID uint64,
+func (m *MissionControl) reportPaymentFail(paymentID uint64,
 	errorSourceIndex *int, failure lnwire.FailureMessage) (bool, error) {
 
 	timestamp := m.now()
 
 	result := &paymentResult{
 		timestamp:        timestamp,
+		id:               paymentID,
+		success:          false,
 		errorSourceIndex: errorSourceIndex,
 		failure:          failure,
-		id:               paymentID,
 	}
 
 	err := m.store.AddResult(result)
@@ -506,6 +508,25 @@ func (m *MissionControl) reportPaymentResult(paymentID uint64,
 	}
 
 	return m.processPaymentResult(result)
+}
+
+// reportPaymentSuccess reports a successful payment to mission control as input
+// for future probability estimates.
+func (m *MissionControl) reportPaymentSuccess(paymentID uint64) error {
+	timestamp := m.now()
+
+	result := &paymentResult{
+		timestamp: timestamp,
+		id:        paymentID,
+		success:   true,
+	}
+
+	if err := m.store.AddResult(result); err != nil {
+		return err
+	}
+
+	_, err := m.processPaymentResult(result)
+	return err
 }
 
 // processPaymentOutcomeFinal handles failures sent by the final hop.
@@ -697,35 +718,59 @@ func (m *MissionControl) processPaymentResult(result *paymentResult) (
 			result.id)
 	}
 
-	if result.errorSourceIndex == nil {
-		m.processPaymentOutcomeUnknown(result.timestamp, initiate.route)
+	if result.success {
+		return true, m.processPaymentSuccess(
+			result.timestamp, initiate.route,
+		)
+	}
+
+	return m.processPaymentFail(
+		result.timestamp, initiate.route, result.errorSourceIndex,
+		result.failure,
+	)
+}
+
+// processPaymentFail processes a success payment result.
+func (m *MissionControl) processPaymentSuccess(timestamp time.Time,
+	route *route.Route) error {
+
+	return nil
+}
+
+// processPaymentFail processes a failed payment result.
+func (m *MissionControl) processPaymentFail(timestamp time.Time,
+	route *route.Route, errSourceIdx *int, failure lnwire.FailureMessage) (
+	bool, error) {
+
+	if errSourceIdx == nil {
+		m.processPaymentOutcomeUnknown(timestamp, route)
 
 		return false, nil
 	}
 
-	switch *result.errorSourceIndex {
+	switch *errSourceIdx {
 
 	// We don't keep a reputation for ourselves, as information about
 	// channels should be available directly in links. Just retry with local
 	// info that should now be updated.
 	case 0:
 		log.Warnf("Routing error for local channel %v occurred",
-			initiate.route.Hops[0].ChannelID)
+			route.Hops[0].ChannelID)
 
 		return false, nil
 
 	// An error from the final hop was received.
-	case len(initiate.route.Hops):
+	case len(route.Hops):
 		return m.processPaymentOutcomeFinal(
-			result.timestamp, initiate.route, result.failure,
+			timestamp, route, failure,
 		), nil
 	}
 
 	// An intermediate hop failed. Interpret the outcome, update reputation
 	// and try again.
 	m.processPaymentOutcomeIntermediate(
-		result.timestamp, initiate.route, *result.errorSourceIndex,
-		result.failure,
+		timestamp, route, *errSourceIdx,
+		failure,
 	)
 
 	return false, nil

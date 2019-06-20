@@ -174,12 +174,16 @@ type PaymentSessionSource interface {
 // missionControlInterface is an interface that exposes failure reporting and
 // probability estimation.
 type missionControlInterface interface {
-	// reportPaymentResult reports a failed payment to mission control as
+	// reportPaymentFail reports a failed payment to mission control as
 	// input for future probability estimates. It returns a bool indicating
 	// whether this error is a final error and no further payment attempts
 	// need to be made.
-	reportPaymentResult(paymentID uint64, errorSourceIndex *int,
+	reportPaymentFail(paymentID uint64, errorSourceIndex *int,
 		failure lnwire.FailureMessage) (bool, error)
+
+	// reportPaymentSuccess reports a successful payment to mission control
+	// as input for future probability estimates.
+	reportPaymentSuccess(paymentID uint64) error
 
 	// reportPaymentAttempt reports a payment attempt to mission control.
 	reportPaymentInitiate(paymentID uint64, rt *route.Route) error
@@ -1900,10 +1904,12 @@ func (r *ChannelRouter) processSendError(paymentID uint64, rt *route.Route,
 
 		log.Tracef("node=%v reported failure when sending htlc",
 			*failureSourceIdx)
+	} else {
+		log.Tracef("unreadable failure when sending htlc")
 	}
 
 	// Report outcome to mission control.
-	finalOutcome, err := r.cfg.MissionControl.reportPaymentResult(
+	finalOutcome, err := r.cfg.MissionControl.reportPaymentFail(
 		paymentID, failureSourceIdx, failureMessage,
 	)
 	if err != nil {

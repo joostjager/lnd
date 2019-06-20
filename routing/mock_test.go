@@ -98,9 +98,13 @@ type mockMissionControl struct {
 
 var _ missionControlInterface = (*mockMissionControl)(nil)
 
-func (m *mockMissionControl) reportPaymentResult(paymentID uint64,
+func (m *mockMissionControl) reportPaymentFail(paymentID uint64,
 	errorSourceIndex *int, failure lnwire.FailureMessage) (bool, error) {
 	return false, nil
+}
+
+func (m *mockMissionControl) reportPaymentSuccess(paymentID uint64) error {
+	return nil
 }
 
 func (m *mockMissionControl) reportPaymentInitiate(paymentID uint64,
