@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"sync"
@@ -33,9 +34,11 @@ const (
 // since the last failure is used to estimate a success probability that is fed
 // into the path finding process for subsequent payment attempts.
 type MissionControl struct {
-	history map[route.Vertex]*nodeHistory
+	history map[nodePair]*pairHistory
 
-	secondChanceChannels map[uint64]struct{}
+	lastNodeFail map[route.Vertex]time.Time
+
+	lastSecondChance map[directedNodePair]time.Time
 
 	paymentAttempts map[uint64]*paymentInitiate
 
@@ -55,6 +58,31 @@ type MissionControl struct {
 	// TODO(roasbeef): also add favorable metrics for nodes
 }
 
+type directedNodePair struct {
+	from, to route.Vertex
+}
+
+type nodePair struct {
+	a, b route.Vertex
+}
+
+// newNodePair instantiates a new nodePair struct. It makes sure that node a is
+// the node with the lower pubkey. A second return parameters indicates whether
+// the given node ordering is reversed or not.
+func newNodePair(a, b route.Vertex) (nodePair, bool) {
+	if bytes.Compare(a[:], b[:]) == 1 {
+		return nodePair{
+			a: b,
+			b: a,
+		}, true
+	}
+
+	return nodePair{
+		a: a,
+		b: b,
+	}, false
+}
+
 // MissionControlConfig defines parameters that control mission control
 // behaviour.
 type MissionControlConfig struct {
@@ -67,31 +95,32 @@ type MissionControlConfig struct {
 	AprioriHopProbability float64
 }
 
-// nodeHistory contains a summary of payment attempt outcomes involving a
-// particular node.
-type nodeHistory struct {
-	// lastFail is the last time a node level failure occurred, if any.
-	lastFail *time.Time
+type channelResultType byte
 
-	// channelLastFail tracks history per channel, if available for that
-	// channel.
-	channelLastFail map[uint64]*channelHistory
+const (
+	channelResultSuccess channelResultType = iota
 
-	channelLastSecondChance map[uint64]time.Time
-}
+	channelResultFail
 
-// channelHistory contains a summary of payment attempt outcomes involving a
-// particular channel.
-type channelHistory struct {
-	// lastFail is the last time a channel level failure occurred.
-	lastFail time.Time
+	channelResultFailBalance
+)
 
-	// minPenalizeAmt is the minimum amount for which to take this failure
-	// into account.
-	minPenalizeAmt lnwire.MilliSatoshi
+// pairHistory contains a summary of payment attempt outcomes involving a
+// particular node pair.
+type pairHistory struct {
+	// lastTime is the last time this channel was used in a route.
+	lastTime time.Time
 
-	// lastSecondChance is the last time this channel got a second chance.
-	lastSecondChance time.Time
+	// amount is the amount that was sent across the channel.
+	amount lnwire.MilliSatoshi
+
+	// resultType is the type of channel result that collected from the
+	// payment attempt.
+	resultType channelResultType
+
+	// directionReverse indicates the direction the htlc went. If false it
+	// went from a to b.
+	directionReverse bool
 }
 
 // MissionControlSnapshot contains a snapshot of the current state of mission
@@ -168,12 +197,13 @@ func NewMissionControl(db *bbolt.DB, cfg *MissionControlConfig) (
 	}
 
 	mc := &MissionControl{
-		history:              make(map[route.Vertex]*nodeHistory),
-		secondChanceChannels: make(map[uint64]struct{}),
-		paymentAttempts:      make(map[uint64]*paymentInitiate),
-		now:                  time.Now,
-		cfg:                  cfg,
-		store:                store,
+		history:          make(map[nodePair]*pairHistory),
+		lastNodeFail:     make(map[route.Vertex]time.Time),
+		lastSecondChance: make(map[directedNodePair]time.Time),
+		paymentAttempts:  make(map[uint64]*paymentInitiate),
+		now:              time.Now,
+		cfg:              cfg,
+		store:            store,
 	}
 
 	if err := mc.init(); err != nil {
@@ -211,7 +241,9 @@ func (m *MissionControl) ResetHistory() error {
 		return err
 	}
 
-	m.history = make(map[route.Vertex]*nodeHistory)
+	m.history = make(map[nodePair]*pairHistory)
+	m.lastNodeFail = make(map[route.Vertex]time.Time)
+	m.lastSecondChance = make(map[directedNodePair]time.Time)
 
 	log.Debugf("Mission control history cleared")
 
@@ -220,8 +252,8 @@ func (m *MissionControl) ResetHistory() error {
 
 // getEdgeProbability is expected to return the success probability of a payment
 // from fromNode along edge.
-func (m *MissionControl) getEdgeProbability(fromNode route.Vertex,
-	edge EdgeLocator, amt lnwire.MilliSatoshi) float64 {
+func (m *MissionControl) getEdgeProbability(fromNode, toNode route.Vertex,
+	amt lnwire.MilliSatoshi) float64 {
 
 	m.Lock()
 	defer m.Unlock()
@@ -230,18 +262,26 @@ func (m *MissionControl) getEdgeProbability(fromNode route.Vertex,
 	// assume that it's success probability is a constant a priori
 	// probability. After the attempt new information becomes available to
 	// adjust this probability.
-	nodeHistory, ok := m.history[fromNode]
+	pair, reversed := newNodePair(fromNode, toNode)
+
+	pairHistory, ok := m.history[pair]
 	if !ok {
 		return m.cfg.AprioriHopProbability
 	}
 
-	return m.getEdgeProbabilityForNode(nodeHistory, edge.ChannelID, amt)
+	return m.getEdgeProbabilityForNode(pairHistory, reversed, amt)
 }
 
 // getEdgeProbabilityForNode estimates the probability of successfully
 // traversing a channel based on the node history.
-func (m *MissionControl) getEdgeProbabilityForNode(nodeHistory *nodeHistory,
-	channelID uint64, amt lnwire.MilliSatoshi) float64 {
+func (m *MissionControl) getEdgeProbabilityForNode(history *pairHistory,
+	reversed bool, amt lnwire.MilliSatoshi) float64 {
+
+	if history.resultType == channelResultSuccess {
+		return 1
+	}
+
+	if history.resultType == channelResultFailBalance
 
 	// Calculate the last failure of the given edge. A node failure is
 	// considered a failure that would have affected every edge. Therefore
@@ -350,9 +390,9 @@ func (m *MissionControl) requestSecondChance(timestamp time.Time,
 // parameter should indicate whether the attached update - if any - was valid.
 //
 // TODO(roasbeef): also add value attempted to send and capacity of channel
-func (m *MissionControl) reportEdgeFailure(timestamp time.Time,
-	fromNode route.Vertex, channelID uint64,
-	minPenalizeAmt lnwire.MilliSatoshi) {
+func (m *MissionControl) reportEdge(timestamp time.Time,
+	fromNode route.Vertex, channelID uint64, resultType channelResultType,
+	amount lnwire.MilliSatoshi) {
 
 	log.Debugf("Reporting edge failure to Mission Control: "+
 		"node=%v, chan=%v", fromNode, channelID)
@@ -363,8 +403,9 @@ func (m *MissionControl) reportEdgeFailure(timestamp time.Time,
 	history := m.createHistoryIfNotExists(fromNode)
 
 	history.channelLastFail[channelID] = &channelHistory{
-		lastFail:       timestamp,
-		minPenalizeAmt: minPenalizeAmt,
+		lastTime:   timestamp,
+		amount:     amount,
+		resultType: resultType,
 	}
 }
 
