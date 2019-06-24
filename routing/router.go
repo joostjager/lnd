@@ -188,7 +188,7 @@ type missionControlInterface interface {
 	// reportPaymentAttempt reports a payment attempt to mission control.
 	reportPaymentInitiate(paymentID uint64, rt *route.Route) error
 
-	getEdgeProbability(fromNode route.Vertex, edge EdgeLocator,
+	getEdgeProbability(fromNode, toNode route.Vertex,
 		amt lnwire.MilliSatoshi) float64
 }
 

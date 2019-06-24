@@ -35,11 +35,20 @@ func queryMissionControl(ctx *cli.Context) error {
 		Pubkey               string
 		LastFailTime         int64
 		OtherChanSuccessProb float32
-		Channels             []*routerrpc.ChannelHistory
+	}
+
+	type displayPairHistory struct {
+		NodeA, NodeB     string
+		Timestamp        int64
+		SuccessProb      float32
+		Amt              int64
+		DirectionReverse bool
+		Result           string
 	}
 
 	displayResp := struct {
 		Nodes []displayNodeHistory
+		Pairs []displayPairHistory
 	}{}
 
 	for _, n := range snapshot.Nodes {
@@ -49,7 +58,21 @@ func queryMissionControl(ctx *cli.Context) error {
 				Pubkey:               hex.EncodeToString(n.Pubkey),
 				LastFailTime:         n.LastFailTime,
 				OtherChanSuccessProb: n.OtherChanSuccessProb,
-				Channels:             n.Channels,
+			},
+		)
+	}
+
+	for _, n := range snapshot.Pairs {
+		displayResp.Pairs = append(
+			displayResp.Pairs,
+			displayPairHistory{
+				NodeA:            hex.EncodeToString(n.NodeA),
+				NodeB:            hex.EncodeToString(n.NodeB),
+				Timestamp:        n.Timestamp,
+				SuccessProb:      n.SuccessProb,
+				Amt:              n.Amt,
+				DirectionReverse: n.DirectionReverse,
+				Result:           n.Result.String(),
 			},
 		)
 	}

@@ -113,8 +113,8 @@ func (m *mockMissionControl) reportPaymentInitiate(paymentID uint64,
 	return nil
 }
 
-func (m *mockMissionControl) getEdgeProbability(fromNode route.Vertex,
-	edge EdgeLocator, amt lnwire.MilliSatoshi) float64 {
+func (m *mockMissionControl) getEdgeProbability(fromNode, toNode route.Vertex,
+	amt lnwire.MilliSatoshi) float64 {
 
 	return 0
 }

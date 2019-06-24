@@ -451,37 +451,51 @@ func (s *Server) QueryMissionControl(ctx context.Context,
 
 	snapshot := s.cfg.RouterBackend.MissionControl.GetHistorySnapshot()
 
-	rpcNodes := make([]*NodeHistory, len(snapshot.Nodes))
-	for i, node := range snapshot.Nodes {
-		channels := make([]*ChannelHistory, len(node.Channels))
-		for j, channel := range node.Channels {
-			channels[j] = &ChannelHistory{
-				ChannelId:    channel.ChannelID,
-				LastFailTime: channel.LastFail.Unix(),
-				MinPenalizeAmtSat: int64(
-					channel.MinPenalizeAmt.ToSatoshis(),
-				),
-				SuccessProb: float32(channel.SuccessProb),
-			}
-		}
-
-		var lastFail int64
-		if node.LastFail != nil {
-			lastFail = node.LastFail.Unix()
-		}
-
-		rpcNodes[i] = &NodeHistory{
+	rpcNodes := make([]*NodeHistory, 0, len(snapshot.Nodes))
+	for _, node := range snapshot.Nodes {
+		rpcNode := NodeHistory{
 			Pubkey:       node.Node[:],
-			LastFailTime: lastFail,
+			LastFailTime: node.LastFail.Unix(),
 			OtherChanSuccessProb: float32(
 				node.OtherChanSuccessProb,
 			),
-			Channels: channels,
 		}
+
+		rpcNodes = append(rpcNodes, &rpcNode)
+	}
+
+	rpcPairs := make([]*PairHistory, 0, len(snapshot.Pairs))
+	for _, pair := range snapshot.Pairs {
+		var result PairResult
+		switch pair.ResultType {
+		case routing.ChannelResultFail:
+			result = PairResult_FAIL
+		case routing.ChannelResultFailBalance:
+			result = PairResult_FAIL_BALANCE
+		case routing.ChannelResultSuccess:
+			result = PairResult_SUCCESS
+		default:
+			return nil, errors.New("unknown result")
+		}
+
+		rpcPair := PairHistory{
+			NodeA:     pair.NodeA[:],
+			NodeB:     pair.NodeB[:],
+			Timestamp: pair.Timestamp.Unix(),
+			Amt: int64(
+				pair.Amount.ToSatoshis(),
+			),
+			SuccessProb:      float32(pair.SuccessProb),
+			DirectionReverse: pair.DirectionReverse,
+			Result:           result,
+		}
+
+		rpcPairs = append(rpcPairs, &rpcPair)
 	}
 
 	response := QueryMissionControlResponse{
 		Nodes: rpcNodes,
+		Pairs: rpcPairs,
 	}
 
 	return &response, nil

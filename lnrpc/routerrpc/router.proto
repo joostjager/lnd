@@ -310,6 +310,8 @@ message QueryMissionControlRequest {}
 /// QueryMissionControlResponse contains mission control state per node.
 message QueryMissionControlResponse {
     repeated NodeHistory nodes = 1;
+
+    repeated PairHistory pairs = 2;
 }
 
 /// NodeHistory contains the mission control state for a particular node.
@@ -322,24 +324,34 @@ message NodeHistory {
 
     /// Estimation of success probability for channels not in the channel array.
     float other_chan_success_prob = 3 [json_name = "other_chan_success_prob"];
+}
 
-    /// Historical information of particular channels.
-    repeated ChannelHistory channels = 4 [json_name = "channels"];
+enum PairResult {
+    SUCCESS = 0;
+
+    FAIL = 1;
+
+    FAIL_BALANCE = 2;
 }
 
 /// NodeHistory contains the mission control state for a particular channel.
-message ChannelHistory {
-    /// Short channel id
-    uint64 channel_id = 1 [json_name = "channel_id"];
+message PairHistory {
+    bytes node_a = 1;
+    
+    bytes node_b = 2;
     
     /// Time stamp of last failure.
-    int64 last_fail_time = 2 [json_name = "last_fail_time"];
+    int64 timestamp = 3 [json_name = "timestamp"];
 
     /// Minimum penalization amount.
-    int64 min_penalize_amt_sat = 3 [json_name = "min_penalize_amt_sat"];
+    int64 amt = 4 [json_name = "amt"];
 
     /// Estimation of success probability for this channel.
-    float success_prob = 4 [json_name = "success_prob"];
+    float success_prob = 5 [json_name = "success_prob"];
+
+    bool direction_reverse = 6;
+
+    PairResult result = 7;
 }
 
 service Router {

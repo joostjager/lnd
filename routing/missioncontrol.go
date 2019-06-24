@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/coreos/bbolt"
-	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing/route"
 )
@@ -22,6 +21,8 @@ const (
 	// minSecondChanceInterval is the minimum time required between
 	// second-chance failures.
 	minSecondChanceInterval = time.Minute
+
+	prevSuccessProbability = 1.0
 )
 
 // MissionControl contains state which summarizes the past attempts of HTLC
@@ -34,11 +35,11 @@ const (
 // since the last failure is used to estimate a success probability that is fed
 // into the path finding process for subsequent payment attempts.
 type MissionControl struct {
-	history map[nodePair]*pairHistory
+	lastPairResult map[NodePair]pairHistory
 
-	lastNodeFail map[route.Vertex]time.Time
+	lastNodeFailure map[route.Vertex]time.Time
 
-	lastSecondChance map[directedNodePair]time.Time
+	lastSecondChance map[DirectedNodePair]time.Time
 
 	paymentAttempts map[uint64]*paymentInitiate
 
@@ -58,28 +59,34 @@ type MissionControl struct {
 	// TODO(roasbeef): also add favorable metrics for nodes
 }
 
-type directedNodePair struct {
-	from, to route.Vertex
+type pairHistory struct {
+	timestamp time.Time
+
+	pairResult
 }
 
-type nodePair struct {
-	a, b route.Vertex
+type DirectedNodePair struct {
+	From, To route.Vertex
+}
+
+type NodePair struct {
+	A, B route.Vertex
 }
 
 // newNodePair instantiates a new nodePair struct. It makes sure that node a is
 // the node with the lower pubkey. A second return parameters indicates whether
 // the given node ordering is reversed or not.
-func newNodePair(a, b route.Vertex) (nodePair, bool) {
+func newNodePair(a, b route.Vertex) (NodePair, bool) {
 	if bytes.Compare(a[:], b[:]) == 1 {
-		return nodePair{
-			a: b,
-			b: a,
+		return NodePair{
+			A: b,
+			B: a,
 		}, true
 	}
 
-	return nodePair{
-		a: a,
-		b: b,
+	return NodePair{
+		A: a,
+		B: b,
 	}, false
 }
 
@@ -95,39 +102,15 @@ type MissionControlConfig struct {
 	AprioriHopProbability float64
 }
 
-type channelResultType byte
-
-const (
-	channelResultSuccess channelResultType = iota
-
-	channelResultFail
-
-	channelResultFailBalance
-)
-
-// pairHistory contains a summary of payment attempt outcomes involving a
-// particular node pair.
-type pairHistory struct {
-	// lastTime is the last time this channel was used in a route.
-	lastTime time.Time
-
-	// amount is the amount that was sent across the channel.
-	amount lnwire.MilliSatoshi
-
-	// resultType is the type of channel result that collected from the
-	// payment attempt.
-	resultType channelResultType
-
-	// directionReverse indicates the direction the htlc went. If false it
-	// went from a to b.
-	directionReverse bool
-}
-
 // MissionControlSnapshot contains a snapshot of the current state of mission
 // control.
 type MissionControlSnapshot struct {
 	// Nodes contains the per node information of this snapshot.
 	Nodes []MissionControlNodeSnapshot
+
+	// Pairs is a list of channels for which specific information is
+	// logged.
+	Pairs []MissionControlChannelSnapshot
 }
 
 // MissionControlNodeSnapshot contains a snapshot of the current node state in
@@ -137,11 +120,7 @@ type MissionControlNodeSnapshot struct {
 	Node route.Vertex
 
 	// Lastfail is the time of last failure, if any.
-	LastFail *time.Time
-
-	// Channels is a list of channels for which specific information is
-	// logged.
-	Channels []MissionControlChannelSnapshot
+	LastFail time.Time
 
 	// OtherChanSuccessProb is the success probability for channels not in
 	// the Channels slice.
@@ -151,15 +130,18 @@ type MissionControlNodeSnapshot struct {
 // MissionControlChannelSnapshot contains a snapshot of the current channel
 // state in mission control.
 type MissionControlChannelSnapshot struct {
-	// ChannelID is the short channel id of the snapshot.
-	ChannelID uint64
+	NodeA, NodeB route.Vertex
 
-	// LastFail is the time of last failure.
-	LastFail time.Time
+	// Timestamp is the time of last outcome.
+	Timestamp time.Time
 
-	// MinPenalizeAmt is the minimum amount for which the channel will be
+	// Amount is the minimum amount for which the channel will be
 	// penalized.
-	MinPenalizeAmt lnwire.MilliSatoshi
+	Amount lnwire.MilliSatoshi
+
+	ResultType ChannelResultType
+
+	DirectionReverse bool
 
 	// SuccessProb is the success probability estimation for this channel.
 	SuccessProb float64
@@ -197,9 +179,9 @@ func NewMissionControl(db *bbolt.DB, cfg *MissionControlConfig) (
 	}
 
 	mc := &MissionControl{
-		history:          make(map[nodePair]*pairHistory),
-		lastNodeFail:     make(map[route.Vertex]time.Time),
-		lastSecondChance: make(map[directedNodePair]time.Time),
+		lastPairResult:   make(map[NodePair]pairHistory),
+		lastNodeFailure:  make(map[route.Vertex]time.Time),
+		lastSecondChance: make(map[DirectedNodePair]time.Time),
 		paymentAttempts:  make(map[uint64]*paymentInitiate),
 		now:              time.Now,
 		cfg:              cfg,
@@ -230,7 +212,6 @@ func (m *MissionControl) init() error {
 	return nil
 }
 
-
 // ResetHistory resets the history of MissionControl returning it to a state as
 // if no payment attempts have been made.
 func (m *MissionControl) ResetHistory() error {
@@ -241,9 +222,9 @@ func (m *MissionControl) ResetHistory() error {
 		return err
 	}
 
-	m.history = make(map[nodePair]*pairHistory)
-	m.lastNodeFail = make(map[route.Vertex]time.Time)
-	m.lastSecondChance = make(map[directedNodePair]time.Time)
+	m.lastPairResult = make(map[NodePair]pairHistory)
+	m.lastNodeFailure = make(map[route.Vertex]time.Time)
+	m.lastSecondChance = make(map[DirectedNodePair]time.Time)
 
 	log.Debugf("Mission control history cleared")
 
@@ -258,59 +239,15 @@ func (m *MissionControl) getEdgeProbability(fromNode, toNode route.Vertex,
 	m.Lock()
 	defer m.Unlock()
 
-	// Get the history for this node. If there is no history available,
-	// assume that it's success probability is a constant a priori
-	// probability. After the attempt new information becomes available to
-	// adjust this probability.
-	pair, reversed := newNodePair(fromNode, toNode)
-
-	pairHistory, ok := m.history[pair]
-	if !ok {
-		return m.cfg.AprioriHopProbability
-	}
-
-	return m.getEdgeProbabilityForNode(pairHistory, reversed, amt)
+	return m.getEdgeProbabilityForNode(fromNode, toNode, amt)
 }
 
-// getEdgeProbabilityForNode estimates the probability of successfully
-// traversing a channel based on the node history.
-func (m *MissionControl) getEdgeProbabilityForNode(history *pairHistory,
-	reversed bool, amt lnwire.MilliSatoshi) float64 {
-
-	if history.resultType == channelResultSuccess {
-		return 1
-	}
-
-	if history.resultType == channelResultFailBalance
-
-	// Calculate the last failure of the given edge. A node failure is
-	// considered a failure that would have affected every edge. Therefore
-	// we insert a node level failure into the history of every channel.
-	lastFailure := nodeHistory.lastFail
-
-	// Take into account a minimum penalize amount. For balance errors, a
-	// failure may be reported with such a minimum to prevent too aggresive
-	// penalization. We only take into account a previous failure if the
-	// amount that we currently get the probability for is greater or equal
-	// than the minPenalizeAmt of the previous failure.
-	channelHistory, ok := nodeHistory.channelLastFail[channelID]
-	if ok && channelHistory.minPenalizeAmt <= amt {
-
-		// If there is both a node level failure recorded and a channel
-		// level failure is applicable too, we take the most recent of
-		// the two.
-		if lastFailure == nil ||
-			channelHistory.lastFail.After(*lastFailure) {
-
-			lastFailure = &channelHistory.lastFail
-		}
-	}
-
-	if lastFailure == nil {
+func (m *MissionControl) getProbAfterFail(lastFailure time.Time) float64 {
+	if lastFailure.IsZero() {
 		return m.cfg.AprioriHopProbability
 	}
 
-	timeSinceLastFailure := m.now().Sub(*lastFailure)
+	timeSinceLastFailure := m.now().Sub(lastFailure)
 
 	// Calculate success probability. It is an exponential curve that brings
 	// the probability down to zero when a failure occurs. From there it
@@ -322,56 +259,64 @@ func (m *MissionControl) getEdgeProbabilityForNode(history *pairHistory,
 	return probability
 }
 
-// createHistoryIfNotExists returns the history for the given node. If the node
-// is yet unknown, it will create an empty history structure.
-func (m *MissionControl) createHistoryIfNotExists(vertex route.Vertex) *nodeHistory {
-	if node, ok := m.history[vertex]; ok {
-		return node
+// getEdgeProbabilityForNode estimates the probability of successfully
+// traversing a channel based on the node history.
+func (m *MissionControl) getEdgeProbabilityForNode(fromNode,
+	toNode route.Vertex, amt lnwire.MilliSatoshi) float64 {
+
+	// Start by getting the last node level failure. If there is none,
+	// lastFail will be zero.
+	lastFail := m.lastNodeFailure[fromNode]
+
+	// Retrieve the last pair outcome.
+	pair, _ := newNodePair(fromNode, toNode)
+	lastPairResult, lastPairResultExists := m.lastPairResult[pair]
+
+	// If there is none or it happened before the last node level failure,
+	// the node level failure is the most recent and thus returned.
+	if lastPairResultExists && lastPairResult.timestamp.After(lastFail) {
+		switch lastPairResult.resultType {
+		case ChannelResultSuccess:
+			return prevSuccessProbability
+
+		// If the last pair outcome is a balance failure and the current
+		// amount is less than the failed amount, ignore this as a
+		// failure.
+		case ChannelResultFailBalance:
+			if amt >= lastPairResult.amount {
+				lastFail = lastPairResult.timestamp
+			}
+
+		case ChannelResultFail:
+			lastFail = lastPairResult.timestamp
+		}
 	}
 
-	node := &nodeHistory{
-		channelLastFail: make(map[uint64]*channelHistory),
-	}
-	m.history[vertex] = node
-
-	return node
-}
-
-// reportVertexFailure reports a node level failure.
-func (m *MissionControl) reportVertexFailure(timestamp time.Time, v route.Vertex) {
-	log.Debugf("Reporting vertex %v failure to Mission Control", v)
-
-	m.Lock()
-	defer m.Unlock()
-
-	history := m.createHistoryIfNotExists(v)
-	history.lastFail = &timestamp
+	return m.getProbAfterFail(lastFail)
 }
 
 func (m *MissionControl) requestSecondChance(timestamp time.Time,
-	fromNode route.Vertex, channelID uint64) bool {
+	fromNode, toNode route.Vertex) bool {
 
 	m.Lock()
 	defer m.Unlock()
 
 	// Look up previous second chance time.
-	history := m.createHistoryIfNotExists(fromNode)
-
-	chanHistory, ok := history.channelLastFail[channelID]
-	if !ok {
-		chanHistory = &channelHistory{}
-		history.channelLastFail[channelID] = chanHistory
+	pair := DirectedNodePair{
+		From: fromNode,
+		To:   toNode,
 	}
+	lastSecondChance := m.lastSecondChance[pair]
 
 	// If the channel hasn't already be given a second chance or its last
 	// second chance was long ago, we give it another chance.
-	if chanHistory.lastSecondChance.IsZero() ||
-		timestamp.Sub(chanHistory.lastSecondChance) >
+	if lastSecondChance.IsZero() ||
+		timestamp.Sub(lastSecondChance) >
 			minSecondChanceInterval {
 
-		chanHistory.lastSecondChance = timestamp
+		m.lastSecondChance[pair] = timestamp
 
-		log.Debugf("Second chance granted for chan=%v", channelID)
+		log.Debugf("Second chance granted for %v->%v", fromNode, toNode)
 
 		return true
 
@@ -381,61 +326,9 @@ func (m *MissionControl) requestSecondChance(timestamp time.Time,
 		// channel updates.
 	}
 
-	log.Debugf("Second chance denied for chan=%v", channelID)
+	log.Debugf("Second chance denied for %v->%v", fromNode, toNode)
 
 	return false
-}
-
-// reportEdgeFailure reports a channel level failure. The validUpdateAttached
-// parameter should indicate whether the attached update - if any - was valid.
-//
-// TODO(roasbeef): also add value attempted to send and capacity of channel
-func (m *MissionControl) reportEdge(timestamp time.Time,
-	fromNode route.Vertex, channelID uint64, resultType channelResultType,
-	amount lnwire.MilliSatoshi) {
-
-	log.Debugf("Reporting edge failure to Mission Control: "+
-		"node=%v, chan=%v", fromNode, channelID)
-
-	m.Lock()
-	defer m.Unlock()
-
-	history := m.createHistoryIfNotExists(fromNode)
-
-	history.channelLastFail[channelID] = &channelHistory{
-		lastTime:   timestamp,
-		amount:     amount,
-		resultType: resultType,
-	}
-}
-
-// reportChannelFailure reports a bidirectional failure of a channel.
-func (m *MissionControl) reportChannelFailure(timestamp time.Time,
-	rt *route.Route, channelIdx int) {
-
-	channelID := rt.Hops[channelIdx].ChannelID
-	log.Debugf("Reporting channel failure to Mission Control: "+
-		"chan=%v", channelID)
-
-	nodeB := rt.Hops[channelIdx].PubKeyBytes
-	var nodeA route.Vertex
-	if channelIdx == 0 {
-		nodeA = rt.SourcePubKey
-	} else {
-		nodeA = rt.Hops[channelIdx-1].PubKeyBytes
-	}
-
-	m.Lock()
-	defer m.Unlock()
-
-	nodes := []route.Vertex{nodeA, nodeB}
-	for _, n := range nodes {
-		history := m.createHistoryIfNotExists(n)
-
-		history.channelLastFail[channelID] = &channelHistory{
-			lastFail: timestamp,
-		}
-	}
 }
 
 // GetHistorySnapshot takes a snapshot from the current mission control state
@@ -445,46 +338,44 @@ func (m *MissionControl) GetHistorySnapshot() *MissionControlSnapshot {
 	defer m.Unlock()
 
 	log.Debugf("Requesting history snapshot from mission control: "+
-		"node_count=%v", len(m.history))
+		"node_count=%v", len(m.lastPairResult))
 
-	nodes := make([]MissionControlNodeSnapshot, 0, len(m.history))
+	nodes := make([]MissionControlNodeSnapshot, 0, len(m.lastNodeFailure))
+	for v, h := range m.lastNodeFailure {
+		otherProb := m.getEdgeProbabilityForNode(v, route.Vertex{}, 0)
 
-	for v, h := range m.history {
-		channelSnapshot := make([]MissionControlChannelSnapshot, 0,
-			len(h.channelLastFail),
+		nodes = append(nodes, MissionControlNodeSnapshot{
+			Node:                 v,
+			LastFail:             h,
+			OtherChanSuccessProb: otherProb,
+		})
+	}
+
+	pairs := make([]MissionControlChannelSnapshot, 0, len(m.lastPairResult))
+
+	for v, h := range m.lastPairResult {
+		// Show probability assuming amount meets min
+		// penalization amount.
+		prob := m.getEdgeProbabilityForNode(
+			v.A, v.B, h.amount,
 		)
 
-		for id, lastFail := range h.channelLastFail {
-			// Show probability assuming amount meets min
-			// penalization amount.
-			prob := m.getEdgeProbabilityForNode(
-				h, id, lastFail.minPenalizeAmt,
-			)
-
-			channelSnapshot = append(channelSnapshot,
-				MissionControlChannelSnapshot{
-					ChannelID:      id,
-					LastFail:       lastFail.lastFail,
-					MinPenalizeAmt: lastFail.minPenalizeAmt,
-					SuccessProb:    prob,
-				},
-			)
+		pair := MissionControlChannelSnapshot{
+			NodeA:            v.A,
+			NodeB:            v.B,
+			DirectionReverse: h.directionReverse,
+			Amount:           h.amount,
+			Timestamp:        h.timestamp,
+			ResultType:       h.resultType,
+			SuccessProb:      prob,
 		}
 
-		otherProb := m.getEdgeProbabilityForNode(h, 0, 0)
-
-		nodes = append(nodes,
-			MissionControlNodeSnapshot{
-				Node:                 v,
-				LastFail:             h.lastFail,
-				OtherChanSuccessProb: otherProb,
-				Channels:             channelSnapshot,
-			},
-		)
+		pairs = append(pairs, pair)
 	}
 
 	snapshot := MissionControlSnapshot{
 		Nodes: nodes,
+		Pairs: pairs,
 	}
 
 	return &snapshot
@@ -570,183 +461,7 @@ func (m *MissionControl) reportPaymentSuccess(paymentID uint64) error {
 	return err
 }
 
-// processPaymentOutcomeFinal handles failures sent by the final hop.
-func (m *MissionControl) processPaymentOutcomeFinal(timestamp time.Time,
-	route *route.Route, failure lnwire.FailureMessage) bool {
-
-	n := len(route.Hops)
-
-	reportNode := func() {
-		m.reportVertexFailure(
-			timestamp, route.Hops[n-1].PubKeyBytes,
-		)
-	}
-
-	// If a failure from the final node is received, we will fail the
-	// payment in almost all cases. Only when the penultimate node sends an
-	// incorrect htlc, we want to retry via another route. Invalid onion
-	// failures are not expected, because the final node wouldn't be able to
-	// encrypt that failure.
-	switch failure.(type) {
-
-	// Expiry or amount of the HTLC doesn't match the onion, try another
-	// route.
-	case *lnwire.FailFinalIncorrectCltvExpiry,
-		*lnwire.FailFinalIncorrectHtlcAmount:
-
-		// We trust ourselves. If this is a direct payment, we penalize
-		// the final node and fail the payment.
-		if n == 1 {
-			reportNode()
-			return true
-		}
-
-		// Otherwise penalize the last channel of the route and retry.
-		m.reportChannelFailure(
-			timestamp,
-			route, n-1,
-		)
-
-		return false
-
-	// We are using wrong payment hash or amount, fail the payment.
-	case *lnwire.FailIncorrectPaymentAmount,
-		*lnwire.FailUnknownPaymentHash:
-
-		return true
-
-	// The HTLC that was extended to the final hop expires too soon. Fail
-	// the payment, because we may be using the wrong final cltv delta.
-	case *lnwire.FailFinalExpiryTooSoon:
-		// TODO(roasbeef): can happen to to race condition, try again
-		// with recent block height
-
-		// TODO(joostjager): can also happen because a node delayed
-		// deliberately. What to penalize?
-		return true
-
-	default:
-		// All other errors are considered terminal if coming from the
-		// final hop. They indicate that something is wrong at the
-		// recipient, so we do apply a penalty.
-
-		reportNode()
-		return true
-	}
-}
-
-// processPaymentOutcomeIntermediate handles failures sent by an intermediate
-// hop.
-func (m *MissionControl) processPaymentOutcomeIntermediate(timestamp time.Time,
-	route *route.Route, errorSourceIdx int,
-	failure lnwire.FailureMessage) {
-
-	reportNode := func() {
-		m.reportVertexFailure(
-			timestamp, route.Hops[errorSourceIdx-1].PubKeyBytes,
-		)
-	}
-
-	reportOutgoingWithAmt := func() {
-		m.reportEdgeFailure(
-			timestamp, route.Hops[errorSourceIdx-1].PubKeyBytes,
-			route.Hops[errorSourceIdx].ChannelID,
-			route.Hops[errorSourceIdx-1].AmtToForward,
-		)
-	}
-
-	reportOutgoing := func() {
-		m.reportChannelFailure(timestamp, route, errorSourceIdx)
-	}
-
-	reportIncoming := func() {
-		// We trust ourselves. If the error comes from the first hop, we
-		// can penalize the whole node. In that case there is no
-		// uncertainty as to which node to blame.
-		if errorSourceIdx == 1 {
-			reportNode()
-			return
-		}
-
-		// Otherwise report the incoming channel.
-		m.reportChannelFailure(timestamp, route, errorSourceIdx-1)
-	}
-
-	switch failure.(type) {
-
-	// If a hop reports onion payload corruption or an invalid version, we
-	// will report the outgoing channel of that node. It may be either their
-	// or the next node's fault.
-	case *lnwire.FailInvalidOnionVersion,
-		*lnwire.FailInvalidOnionHmac,
-		*lnwire.FailInvalidOnionKey:
-
-		reportOutgoing()
-
-	// If the next hop in the route wasn't known or offline, we'll only
-	// penalize the channel which we attempted to route over. This is
-	// conservative, and it can handle faulty channels between nodes
-	// properly. Additionally, this guards against routing nodes returning
-	// errors in order to attempt to black list another node.
-	case *lnwire.FailUnknownNextPeer:
-		reportOutgoing()
-
-	// If we get a permanent channel or node failure, then
-	// we'll prune the channel in both directions and
-	// continue with the rest of the routes.
-	case *lnwire.FailPermanentChannelFailure:
-		reportOutgoing()
-
-	// If we get a failure due to violating the channel policy, we request a
-	// second chance because our graph may be out of date. An attached
-	// channel update should have been applied by now. If the second chance
-	// is granted, we try again. Otherwise either the error source or its
-	// predecessor sending an incorrect htlc is to blame.
-	case *lnwire.FailAmountBelowMinimum,
-		*lnwire.FailFeeInsufficient,
-		*lnwire.FailIncorrectCltvExpiry,
-		*lnwire.FailChannelDisabled:
-
-		// Ask for second chance for using the outgoing channel of the
-		// error source.
-		if m.requestSecondChance(
-			timestamp, route.Hops[errorSourceIdx-1].PubKeyBytes,
-			route.Hops[errorSourceIdx].ChannelID,
-		) {
-			return
-		}
-
-		// If no second chance, report incoming channel.
-		reportIncoming()
-
-	// If the outgoing channel doesn't have enough capacity, we penalize.
-	// But we penalize only in a single direction and only for amounts
-	// greater than the attempted amount.
-	case *lnwire.FailTemporaryChannelFailure:
-		reportOutgoingWithAmt()
-
-	// TODO(joostjager): Retry when FailExpiryTooSoon is received. Could
-	// also be any node that delayed.
-
-	default:
-		// In all other cases, we report the whole node. These are all
-		// failures that should not happen.
-		reportNode()
-	}
-}
-
-// processPaymentOutcomeUnknown processes a payment outcome for which no failure
-// message or source is available.
-func (m *MissionControl) processPaymentOutcomeUnknown(timestamp time.Time,
-	route *route.Route) {
-
-	// Penalize all channels in the route to make sure the responsible node
-	// is at least hit too.
-	for i := range route.Hops {
-		m.reportChannelFailure(timestamp, route, i)
-	}
-}
-
+// applyInterpretation processes a payment result as input for future
 // processPaymentResult processes a payment result as input for future
 // probability estimates. It returns a bool indicating whether this error is a
 // final error and no further payment attempts need to be made.
@@ -759,60 +474,38 @@ func (m *MissionControl) processPaymentResult(result *paymentResult) (
 			result.id)
 	}
 
-	if result.success {
-		return true, m.processPaymentSuccess(
-			result.timestamp, initiate.route,
-		)
+	i := newInterpretedResult(initiate, result)
+
+	if i.policyFailure != nil {
+		if m.requestSecondChance(
+			result.timestamp,
+			i.policyFailure.From, i.policyFailure.To,
+		) {
+			return false, nil
+		}
 	}
 
-	return m.processPaymentFail(
-		result.timestamp, initiate.route, result.errorSourceIndex,
-		result.failure,
-	)
+	m.applyInterpretation(result.timestamp, i)
+
+	return i.final, nil
 }
 
-// processPaymentFail processes a success payment result.
-func (m *MissionControl) processPaymentSuccess(timestamp time.Time,
-	route *route.Route) error {
+// probability estimates. It returns a bool indicating whether this error is a
+// final error and no further payment attempts need to be made.
+func (m *MissionControl) applyInterpretation(timestamp time.Time,
+	i *interpretedResult) {
 
-	return nil
-}
+	m.Lock()
+	defer m.Unlock()
 
-// processPaymentFail processes a failed payment result.
-func (m *MissionControl) processPaymentFail(timestamp time.Time,
-	route *route.Route, errSourceIdx *int, failure lnwire.FailureMessage) (
-	bool, error) {
-
-	if errSourceIdx == nil {
-		m.processPaymentOutcomeUnknown(timestamp, route)
-
-		return false, nil
+	for node := range i.nodeFailures {
+		m.lastNodeFailure[node] = timestamp
 	}
 
-	switch *errSourceIdx {
-
-	// We don't keep a reputation for ourselves, as information about
-	// channels should be available directly in links. Just retry with local
-	// info that should now be updated.
-	case 0:
-		log.Warnf("Routing error for local channel %v occurred",
-			route.Hops[0].ChannelID)
-
-		return false, nil
-
-	// An error from the final hop was received.
-	case len(route.Hops):
-		return m.processPaymentOutcomeFinal(
-			timestamp, route, failure,
-		), nil
+	for pair, result := range i.pairResults {
+		m.lastPairResult[pair] = pairHistory{
+			pairResult: result,
+			timestamp:  timestamp,
+		}
 	}
-
-	// An intermediate hop failed. Interpret the outcome, update reputation
-	// and try again.
-	m.processPaymentOutcomeIntermediate(
-		timestamp, route, *errSourceIdx,
-		failure,
-	)
-
-	return false, nil
 }
