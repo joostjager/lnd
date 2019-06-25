@@ -227,6 +227,21 @@ func (i *interpretedResult) processPaymentOutcomeIntermediate(
 		}
 	}
 
+	reportAll := func() {
+		// We trust ourselves. If the error comes from the first hop, we
+		// can penalize the whole node. In that case there is no
+		// uncertainty as to which node to blame.
+		if errorSourceIdx == 1 {
+			i.failNode(route, errorSourceIdx-1)
+			return
+		}
+
+		// Otherwise report all channels up to the error source.
+		i.reportChannelRangeResult(
+			route, 1, errorSourceIdx-1, ChannelResultFail,
+		)
+	}
+
 	switch failure.(type) {
 
 	// If a hop reports onion payload corruption or an invalid version, we
@@ -262,12 +277,14 @@ func (i *interpretedResult) processPaymentOutcomeIntermediate(
 		*lnwire.FailIncorrectCltvExpiry,
 		*lnwire.FailChannelDisabled:
 
+		// Set the node pair that is responsible for this failure. The
+		// second chance logic uses the policyFailure field.
 		i.policyFailure = &DirectedNodePair{
 			From: route.Hops[errorSourceIdx-1].PubKeyBytes,
 			To:   route.Hops[errorSourceIdx].PubKeyBytes,
 		}
 
-		// If no second chance, report incoming channel.
+		// Assuming no second chance, we report incoming channel.
 		reportIncoming()
 
 	// If the outgoing channel doesn't have enough capacity, we penalize.
@@ -276,12 +293,15 @@ func (i *interpretedResult) processPaymentOutcomeIntermediate(
 	case *lnwire.FailTemporaryChannelFailure:
 		reportOutgoing(ChannelResultFailBalance)
 
-	// TODO(joostjager): Retry when FailExpiryTooSoon is received. Could
-	// also be any node that delayed.
+	// If FailExpiryTooSoon is received, there must have been some delay
+	// along the path. We can't know which node is causing the delay, so we
+	// penalize all of them up to the error source.
+	case *lnwire.FailExpiryTooSoon:
+		reportAll()
 
+	// In all other cases, we report the whole node. These are all failures
+	// that should not happen.
 	default:
-		// In all other cases, we report the whole node. These are all
-		// failures that should not happen.
 		i.failNode(route, errorSourceIdx-1)
 	}
 }
