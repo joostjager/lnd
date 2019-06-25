@@ -141,8 +141,6 @@ type MissionControlChannelSnapshot struct {
 
 	ResultType ChannelResultType
 
-	DirectionReverse bool
-
 	// SuccessProb is the success probability estimation for this channel.
 	SuccessProb float64
 }
@@ -177,6 +175,8 @@ func NewMissionControl(db *bbolt.DB, cfg *MissionControlConfig) (
 	if err != nil {
 		return nil, err
 	}
+
+	store.Clear()
 
 	mc := &MissionControl{
 		lastPairResult:   make(map[NodePair]pairHistory),
@@ -361,13 +361,12 @@ func (m *MissionControl) GetHistorySnapshot() *MissionControlSnapshot {
 		)
 
 		pair := MissionControlChannelSnapshot{
-			NodeA:            v.A,
-			NodeB:            v.B,
-			DirectionReverse: h.directionReverse,
-			Amount:           h.amount,
-			Timestamp:        h.timestamp,
-			ResultType:       h.resultType,
-			SuccessProb:      prob,
+			NodeA:       v.A,
+			NodeB:       v.B,
+			Amount:      h.amount,
+			Timestamp:   h.timestamp,
+			ResultType:  h.resultType,
+			SuccessProb: prob,
 		}
 
 		pairs = append(pairs, pair)
@@ -475,6 +474,8 @@ func (m *MissionControl) processPaymentResult(result *paymentResult) (
 	}
 
 	i := newInterpretedResult(initiate, result)
+
+	log.Debugf("Interpretation: %v", i)
 
 	if i.policyFailure != nil {
 		if m.requestSecondChance(

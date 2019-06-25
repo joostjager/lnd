@@ -53,7 +53,7 @@ var (
 
 	// DefaultAprioriHopProbability is the default a priori probability for
 	// a hop.
-	DefaultAprioriHopProbability = float64(0.95)
+	DefaultAprioriHopProbability = float64(0.6)
 )
 
 // edgePolicyWithSource is a helper struct to keep track of the source node
@@ -400,15 +400,17 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 		toNodeDist := distance[toNode]
 		amountToSend := toNodeDist.amountToReceive
 
-		// Request the success probability for this edge.
-		locator := newEdgeLocator(edge)
-		edgeProbability := r.ProbabilitySource(
-			fromVertex, toNode, amountToSend,
-		)
+		// Request the success probability for this edge. Assume
+		// probability one for our own channels.
+		edgeProbability := 1.0
+		if !isSourceChan {
+			edgeProbability = r.ProbabilitySource(
+				fromVertex, toNode, amountToSend,
+			)
+		}
 
-		log.Tracef("path finding probability: fromnode=%v, chanid=%v, "+
-			"probability=%v", fromVertex, locator.ChannelID,
-			edgeProbability)
+		log.Tracef("path finding probability: fromnode=%v, tonode=%v, "+
+			"probability=%v", fromVertex, toNode, edgeProbability)
 
 		// If the probability is zero, there is no point in trying.
 		if edgeProbability == 0 {

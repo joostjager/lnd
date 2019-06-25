@@ -452,7 +452,10 @@ func (s *Server) QueryMissionControl(ctx context.Context,
 	snapshot := s.cfg.RouterBackend.MissionControl.GetHistorySnapshot()
 
 	rpcNodes := make([]*NodeHistory, 0, len(snapshot.Nodes))
-	for _, node := range snapshot.Nodes {
+	for _, n := range snapshot.Nodes {
+		// Prevent binding to loop variable
+		node := n
+
 		rpcNode := NodeHistory{
 			Pubkey:       node.Node[:],
 			LastFailTime: node.LastFail.Unix(),
@@ -465,7 +468,10 @@ func (s *Server) QueryMissionControl(ctx context.Context,
 	}
 
 	rpcPairs := make([]*PairHistory, 0, len(snapshot.Pairs))
-	for _, pair := range snapshot.Pairs {
+	for _, p := range snapshot.Pairs {
+		// Prevent binding to loop variable
+		pair := p
+
 		var result PairResult
 		switch pair.ResultType {
 		case routing.ChannelResultFail:
@@ -485,9 +491,8 @@ func (s *Server) QueryMissionControl(ctx context.Context,
 			Amt: int64(
 				pair.Amount.ToSatoshis(),
 			),
-			SuccessProb:      float32(pair.SuccessProb),
-			DirectionReverse: pair.DirectionReverse,
-			Result:           result,
+			SuccessProb: float32(pair.SuccessProb),
+			Result:      result,
 		}
 
 		rpcPairs = append(rpcPairs, &rpcPair)

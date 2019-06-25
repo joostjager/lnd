@@ -349,9 +349,7 @@ message PairHistory {
     /// Estimation of success probability for this channel.
     float success_prob = 5 [json_name = "success_prob"];
 
-    bool direction_reverse = 6;
-
-    PairResult result = 7;
+    PairResult result = 6;
 }
 
 service Router {
