@@ -654,12 +654,16 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB,
 	// servers, the mission control instance itself can be moved there too.
 	routingConfig := routerrpc.GetRoutingConfig(cfg.SubRPCServers.RouterRPC)
 
-	s.missionControl = routing.NewMissionControl(
+	s.missionControl, err = routing.NewMissionControl(
+		chanDB.DB,
 		&routing.MissionControlConfig{
 			AprioriHopProbability: routingConfig.AprioriHopProbability,
 			PenaltyHalfLife:       routingConfig.PenaltyHalfLife,
 		},
 	)
+	if err != nil {
+		return nil, fmt.Errorf("can't create mission control: %v", err)
+	}
 
 	srvrLog.Debugf("Instantiating payment session source with config: "+
 		"PaymentAttemptPenalty=%v, MinRouteProbability=%v",

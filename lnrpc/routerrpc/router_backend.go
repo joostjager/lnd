@@ -124,28 +124,37 @@ func (r *RouterBackend) QueryRoutes(ctx context.Context,
 		ignoredNodes[ignoreVertex] = struct{}{}
 	}
 
-	ignoredEdges := make(map[routing.EdgeLocator]struct{})
+	ignoredEdges := make(map[routing.DirectedNodePair]struct{})
 	for _, ignoredEdge := range in.IgnoredEdges {
-		locator := routing.EdgeLocator{
-			ChannelID: ignoredEdge.ChannelId,
+		a, b, err := r.FetchChannelEndpoints(ignoredEdge.ChannelId)
+		if err != nil {
+			log.Warnf("Channel %v unknown", ignoredEdge.ChannelId)
+			continue
 		}
+
+		var pair routing.DirectedNodePair
 		if ignoredEdge.DirectionReverse {
-			locator.Direction = 1
+			pair.From, pair.To = b, a
+		} else {
+			pair.From, pair.To = a, b
 		}
-		ignoredEdges[locator] = struct{}{}
+		ignoredEdges[pair] = struct{}{}
 	}
 
 	restrictions := &routing.RestrictParams{
 		FeeLimit: feeLimit,
-		ProbabilitySource: func(node route.Vertex,
-			edge routing.EdgeLocator,
+		ProbabilitySource: func(fromNode, toNode route.Vertex,
 			amt lnwire.MilliSatoshi) float64 {
 
-			if _, ok := ignoredNodes[node]; ok {
+			if _, ok := ignoredNodes[fromNode]; ok {
 				return 0
 			}
 
-			if _, ok := ignoredEdges[edge]; ok {
+			pair := routing.DirectedNodePair{
+				From: fromNode,
+				To:   toNode,
+			}
+			if _, ok := ignoredEdges[pair]; ok {
 				return 0
 			}
 

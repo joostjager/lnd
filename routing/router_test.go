@@ -90,7 +90,8 @@ func createTestCtxFromGraphInstance(startingHeight uint32, graphInstance *testGr
 		return nil, nil, err
 	}
 
-	mc := NewMissionControl(
+	mc, err := NewMissionControl(
+		graphInstance.graph.Database().DB,
 		&MissionControlConfig{
 			PenaltyHalfLife:       time.Hour,
 			AprioriHopProbability: 0.9,
@@ -2895,6 +2896,7 @@ func TestRouterPaymentStateMachine(t *testing.T) {
 			ChainView:          chainView,
 			Control:            control,
 			SessionSource:      &mockPaymentSessionSource{},
+			MissionControl:     &mockMissionControl{},
 			Payer:              payer,
 			ChannelPruneExpiry: time.Hour * 24,
 			GraphPruneInterval: time.Hour * 2,

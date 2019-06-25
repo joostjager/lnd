@@ -83,6 +83,20 @@ func (p *paymentLifecycle) resumePayment() ([32]byte, *route.Route, error) {
 				return [32]byte{}, nil, err
 			}
 			p.circuit = c
+
+			// Report payment initiation to mission control. Mission
+			// control is not persisting this event and relies on it
+			// to be resupplied after restart.
+			//
+			// TODO(joostjager): Store payment attempt initiation
+			// time in payment control and pass in here.
+			err = p.router.cfg.MissionControl.reportPaymentInitiate(
+				p.attempt.PaymentID, &p.attempt.Route,
+			)
+			if err != nil {
+				log.Errorf("Error reporting resumed payment "+
+					"initiate to mc: %v", err)
+			}
 		}
 
 		// Using the created circuit, initialize the error decrypter so we can
@@ -161,6 +175,15 @@ func (p *paymentLifecycle) resumePayment() ([32]byte, *route.Route, error) {
 		// We successfully got a payment result back from the switch.
 		log.Debugf("Payment %x succeeded with pid=%v",
 			p.payment.PaymentHash, p.attempt.PaymentID)
+
+		// Report success to mission control.
+		err = p.router.cfg.MissionControl.reportPaymentSuccess(
+			p.attempt.PaymentID,
+		)
+		if err != nil {
+			log.Errorf("Error reporting payment success to mc: %v",
+				err)
+		}
 
 		// In case of success we atomically store the db payment and
 		// move the payment to the success state.
@@ -316,11 +339,18 @@ func (p *paymentLifecycle) sendPaymentAttempt(firstHop lnwire.ShortChannelID,
 		}),
 	)
 
+	err := p.router.cfg.MissionControl.reportPaymentInitiate(
+		p.attempt.PaymentID, &p.attempt.Route,
+	)
+	if err != nil {
+		log.Errorf("Error reporting payment initiate to mc: %v", err)
+	}
+
 	// Send it to the Switch. When this method returns we assume
 	// the Switch successfully has persisted the payment attempt,
 	// such that we can resume waiting for the result after a
 	// restart.
-	err := p.router.cfg.Payer.SendHTLC(
+	err = p.router.cfg.Payer.SendHTLC(
 		firstHop, p.attempt.PaymentID, htlcAdd,
 	)
 	if err != nil {
@@ -340,7 +370,7 @@ func (p *paymentLifecycle) sendPaymentAttempt(firstHop lnwire.ShortChannelID,
 // whether we should make another payment attempt.
 func (p *paymentLifecycle) handleSendError(sendErr error) error {
 	finalOutcome := p.router.processSendError(
-		p.paySession, &p.attempt.Route, sendErr,
+		p.attempt.PaymentID, &p.attempt.Route, sendErr,
 	)
 	if finalOutcome {
 		log.Errorf("Payment %x failed with final outcome: %v",
