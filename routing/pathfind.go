@@ -412,8 +412,8 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 		)
 
 		log.Tracef("path finding probability: fromnode=%v, chanid=%v, "+
-			"probability=%v", fromVertex, locator.ChannelID,
-			edgeProbability)
+			"amt=%v, probability=%v", fromVertex, locator.ChannelID,
+			amountToSend, edgeProbability)
 
 		// If the probability is zero, there is no point in trying.
 		if edgeProbability == 0 {

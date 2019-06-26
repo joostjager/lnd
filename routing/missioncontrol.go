@@ -321,8 +321,8 @@ func (m *MissionControl) reportEdgePolicyFailure(failedEdge edge) {
 func (m *MissionControl) reportEdgeFailure(failedEdge edge,
 	minPenalizeAmt lnwire.MilliSatoshi) {
 
-	log.Debugf("Reporting channel %v failure to Mission Control",
-		failedEdge.channel)
+	log.Debugf("Reporting channel %v failure to Mission Control: "+
+		"min_penalize_amt=%v", failedEdge.channel, minPenalizeAmt)
 
 	now := m.now()
 
