@@ -221,6 +221,12 @@ func (m *MissionControl) getEdgeProbabilityForNode(nodeHistory *nodeHistory,
 	}
 
 	if lastFailure == nil {
+		// if len(nodeHistory.channelLastFail) < 3 {
+		// 	return m.cfg.AprioriHopProbability
+		// }
+
+		// return m.cfg.AprioriHopProbability / 2
+
 		return m.cfg.AprioriHopProbability
 	}
 
