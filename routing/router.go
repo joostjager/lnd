@@ -177,6 +177,8 @@ type missionControlInterface interface {
 	reportEdgeFailure(failedEdge edge,
 		minPenalizeAmt lnwire.MilliSatoshi)
 
+	reportEdgePolicyFailure(failedEdge edge)
+
 	reportVertexFailure(v route.Vertex)
 
 	getEdgeProbability(fromNode route.Vertex, edge EdgeLocator,
@@ -1830,6 +1832,40 @@ func (r *ChannelRouter) sendPayment(
 
 }
 
+// tryApplyChannelUpdate tries to apply a channel update present in the failure
+// message if any.
+func (r *ChannelRouter) tryApplyChannelUpdate(rt *route.Route,
+	errorSourceIdx int, failure lnwire.FailureMessage) {
+
+	// It makes no sense to apply our own channel updates.
+	if errorSourceIdx == 0 {
+		log.Errorf("Channel update of ourselves received")
+		return
+	}
+
+	// Extract channel update if the error contains one.
+	update := r.extractChannelUpdate(failure)
+	if update == nil {
+		return
+	}
+
+	// Parse pubkey to allow validation of the channel update.
+	errVertex := rt.Hops[errorSourceIdx-1].PubKeyBytes
+	errSource, err := btcec.ParsePubKey(
+		errVertex[:], btcec.S256(),
+	)
+	if err != nil {
+		log.Debugf("Cannot parse pubkey: idx=%v, pubkey=%v",
+			errorSourceIdx, errVertex)
+	}
+
+	// Apply channel update.
+	if !r.applyChannelUpdate(update, errSource) {
+		log.Debugf("Invalid channel update received: node=%x",
+			errVertex)
+	}
+}
+
 // processSendError analyzes the error for the payment attempt received from the
 // switch and updates mission control and/or channel policies. Depending on the
 // error type, this error is either the final outcome of the payment or we need
@@ -1855,67 +1891,33 @@ func (r *ChannelRouter) processSendError(paySession PaymentSession,
 		return true
 	}
 
+	failureMessage := fErr.FailureMessage
 	failureSourceIdx := fErr.FailureSourceIdx
+
+	// Apply channel update if the error contains one. For unknown
+	// failures, failureMessage is nil.
+	if failureMessage != nil {
+		r.tryApplyChannelUpdate(
+			rt, failureSourceIdx, failureMessage,
+		)
+	}
+
 	log.Tracef("node=%x reported failure when sending htlc", failureSourceIdx)
 
 	var (
 		failureVertex route.Vertex
-		failureSource *btcec.PublicKey
-		err           error
 	)
 	if failureSourceIdx > 0 {
 		failureVertex = rt.Hops[failureSourceIdx-1].PubKeyBytes
-		failureSource, err = btcec.ParsePubKey(failureVertex[:], btcec.S256())
-		if err != nil {
-			return true
-		}
 	} else {
 		failureVertex = r.selfNode.PubKeyBytes
-		failureSource, err = r.selfNode.PubKey()
-		if err != nil {
-			return true
-		}
 	}
 
 	// Always determine chan id ourselves, because a channel
 	// update with id may not be available.
 	failedEdge, failedAmt := getFailedEdge(rt, failureSourceIdx)
 
-	// processChannelUpdateAndRetry is a closure that
-	// handles a failure message containing a channel
-	// update. This function always tries to apply the
-	// channel update and passes on the result to the
-	// payment session to adjust its view on the reliability
-	// of the network.
-	//
-	// As channel id, the locally determined channel id is
-	// used. It does not rely on the channel id that is part
-	// of the channel update message, because the remote
-	// node may lie to us or the update may be corrupt.
-	processChannelUpdateAndRetry := func(
-		update *lnwire.ChannelUpdate,
-		pubKey *btcec.PublicKey) {
-
-		// Try to apply the channel update.
-		updateOk := r.applyChannelUpdate(update, pubKey)
-
-		// If the update could not be applied, prune the
-		// edge. There is no reason to continue trying
-		// this channel.
-		//
-		// TODO: Could even prune the node completely?
-		// Or is there a valid reason for the channel
-		// update to fail?
-		if !updateOk {
-			paySession.ReportEdgeFailure(
-				failedEdge, 0,
-			)
-		}
-
-		paySession.ReportEdgePolicyFailure(failedEdge)
-	}
-
-	switch onionErr := fErr.FailureMessage.(type) {
+	switch fErr.FailureMessage.(type) {
 
 	// If the end destination didn't know the payment
 	// hash or we sent the wrong payment amount to the
@@ -1957,7 +1959,6 @@ func (r *ChannelRouter) processSendError(paySession PaymentSession,
 	// that sent us this error, as it doesn't now what the
 	// correct block height is.
 	case *lnwire.FailExpiryTooSoon:
-		r.applyChannelUpdate(&onionErr.Update, failureSource)
 		paySession.ReportVertexFailure(failureVertex)
 		return false
 
@@ -1975,34 +1976,27 @@ func (r *ChannelRouter) processSendError(paySession PaymentSession,
 	// amount, we'll apply the new minimum amount and retry
 	// routing.
 	case *lnwire.FailAmountBelowMinimum:
-		processChannelUpdateAndRetry(
-			&onionErr.Update, failureSource,
-		)
+		paySession.ReportEdgePolicyFailure(failedEdge)
 		return false
 
 	// If we get a failure due to a fee, we'll apply the
 	// new fee update, and retry our attempt using the
 	// newly updated fees.
 	case *lnwire.FailFeeInsufficient:
-		processChannelUpdateAndRetry(
-			&onionErr.Update, failureSource,
-		)
+		paySession.ReportEdgePolicyFailure(failedEdge)
 		return false
 
 	// If we get the failure for an intermediate node that
 	// disagrees with our time lock values, then we'll
 	// apply the new delta value and try it once more.
 	case *lnwire.FailIncorrectCltvExpiry:
-		processChannelUpdateAndRetry(
-			&onionErr.Update, failureSource,
-		)
+		paySession.ReportEdgePolicyFailure(failedEdge)
 		return false
 
 	// The outgoing channel that this node was meant to
 	// forward one is currently disabled, so we'll apply
 	// the update and continue.
 	case *lnwire.FailChannelDisabled:
-		r.applyChannelUpdate(&onionErr.Update, failureSource)
 		paySession.ReportEdgeFailure(failedEdge, 0)
 		return false
 
@@ -2010,7 +2004,6 @@ func (r *ChannelRouter) processSendError(paySession PaymentSession,
 	// sufficient capacity, so we'll prune this edge for
 	// now, and continue onwards with our path finding.
 	case *lnwire.FailTemporaryChannelFailure:
-		r.applyChannelUpdate(onionErr.Update, failureSource)
 		paySession.ReportEdgeFailure(failedEdge, failedAmt)
 		return false
 
@@ -2082,6 +2075,29 @@ func (r *ChannelRouter) processSendError(paySession PaymentSession,
 	}
 }
 
+// extractChannelUpdate examines the error and extracts the channel update.
+func (r *ChannelRouter) extractChannelUpdate(
+	failure lnwire.FailureMessage) *lnwire.ChannelUpdate {
+
+	var update *lnwire.ChannelUpdate
+	switch onionErr := failure.(type) {
+	case *lnwire.FailExpiryTooSoon:
+		update = &onionErr.Update
+	case *lnwire.FailAmountBelowMinimum:
+		update = &onionErr.Update
+	case *lnwire.FailFeeInsufficient:
+		update = &onionErr.Update
+	case *lnwire.FailIncorrectCltvExpiry:
+		update = &onionErr.Update
+	case *lnwire.FailChannelDisabled:
+		update = &onionErr.Update
+	case *lnwire.FailTemporaryChannelFailure:
+		update = onionErr.Update
+	}
+
+	return update
+}
+
 // getFailedEdge tries to locate the failing channel given a route and the
 // pubkey of the node that sent the failure. It will assume that the failure is
 // associated with the outgoing channel of the failing node. As a second result,
@@ -2121,11 +2137,6 @@ func getFailedEdge(route *route.Route, failureSource int) (edge,
 // database. It returns a bool indicating whether the updates was successful.
 func (r *ChannelRouter) applyChannelUpdate(msg *lnwire.ChannelUpdate,
 	pubKey *btcec.PublicKey) bool {
-	// If we get passed a nil channel update (as it's optional with some
-	// onion errors), then we'll exit early with a success result.
-	if msg == nil {
-		return true
-	}
 
 	ch, _, _, err := r.GetChannelByID(msg.ShortChannelID)
 	if err != nil {
