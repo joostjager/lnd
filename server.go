@@ -621,6 +621,14 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB,
 	}
 	s.currentNodeAnn = nodeAnn
 
+	if cfg.CleanDb {
+		srvrLog.Infof("Populating channels")
+		// err := chanDB.PopulateChannels()
+		// if err != nil {
+		// 	return nil, fmt.Errorf("populate channels: %v", err)
+		// }
+	}
+
 	// The router will get access to the payment ID sequencer, such that it
 	// can generate unique payment IDs.
 	sequencer, err := htlcswitch.NewPersistentSequencer(chanDB)

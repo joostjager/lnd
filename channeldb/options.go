@@ -21,6 +21,8 @@ type Options struct {
 	// ChannelCacheSize is the maximum number of ChannelEdges to hold in the
 	// channel cache.
 	ChannelCacheSize int
+
+	CleanDb bool
 }
 
 // DefaultOptions returns an Options populated with default values.
@@ -45,5 +47,11 @@ func OptionSetRejectCacheSize(n int) OptionModifier {
 func OptionSetChannelCacheSize(n int) OptionModifier {
 	return func(o *Options) {
 		o.ChannelCacheSize = n
+	}
+}
+
+func OptionCleanDb() OptionModifier {
+	return func(o *Options) {
+		o.CleanDb = true
 	}
 }

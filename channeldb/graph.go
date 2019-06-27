@@ -178,6 +178,21 @@ func (c *ChannelGraph) Database() *DB {
 	return c.db
 }
 
+func (c *ChannelGraph) clean() error {
+	return c.db.Update(func(tx *bbolt.Tx) error {
+		buckets := [][]byte{
+			nodeBucket,
+			edgeBucket,
+			graphMetaBucket,
+		}
+
+		for _, bucket := range buckets {
+			tx.DeleteBucket(bucket)
+		}
+		return nil
+	})
+}
+
 // ForEachChannel iterates through all the channel edges stored within the
 // graph and invokes the passed callback for each edge. The callback takes two
 // edges as since this is a directed graph, both the in/out edges are visited.

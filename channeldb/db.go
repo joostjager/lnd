@@ -148,6 +148,10 @@ func Open(dbPath string, modifiers ...OptionModifier) (*DB, error) {
 		chanDB, opts.RejectCacheSize, opts.ChannelCacheSize,
 	)
 
+	if opts.CleanDb {
+		chanDB.graph.clean()
+	}
+
 	// Synchronize the version of database and apply migrations if needed.
 	if err := chanDB.syncVersions(dbVersions); err != nil {
 		bdb.Close()
@@ -155,6 +159,109 @@ func Open(dbPath string, modifiers ...OptionModifier) (*DB, error) {
 	}
 
 	return chanDB, nil
+}
+
+func (d *DB) PopulateChannels() error {
+	self, err := d.graph.SourceNode()
+	if err != nil {
+		return err
+	}
+
+	dbChannels, err := d.FetchAllOpenChannels()
+	if err != nil {
+		return err
+	}
+
+	for _, c := range dbChannels {
+		chanID := c.ShortChannelID.ToUint64()
+
+		info := &ChannelEdgeInfo{
+			ChannelID: chanID,
+			ChainHash: c.ChainHash,
+			Capacity:  c.Capacity,
+		}
+
+		var featureBuf bytes.Buffer
+		if err := lnwire.NewRawFeatureVector().Encode(&featureBuf); err != nil {
+			return err
+		}
+		info.Features = featureBuf.Bytes()
+
+		var chanFlags lnwire.ChanUpdateChanFlags
+
+		localPubKey, err := self.PubKey()
+		if err != nil {
+			return err
+		}
+
+		remotePubKey := c.IdentityPub
+
+		localFundingKey := c.LocalChanCfg.MultiSigKey.PubKey
+		remoteFundingKey := c.RemoteChanCfg.MultiSigKey.PubKey
+
+		// The lexicographical ordering of the two identity public keys of the
+		// nodes indicates which of the nodes is "first". If our serialized
+		// identity key is lower than theirs then we're the "first" node and
+		// second otherwise.
+		selfBytes := localPubKey.SerializeCompressed()
+		remoteBytes := remotePubKey.SerializeCompressed()
+		if bytes.Compare(selfBytes, remoteBytes) == -1 {
+			copy(info.NodeKey1Bytes[:], localPubKey.SerializeCompressed())
+			copy(info.NodeKey2Bytes[:], remotePubKey.SerializeCompressed())
+			copy(info.BitcoinKey1Bytes[:], localFundingKey.SerializeCompressed())
+			copy(info.BitcoinKey2Bytes[:], remoteFundingKey.SerializeCompressed())
+			chanFlags = 0
+		} else {
+			copy(info.NodeKey1Bytes[:], remotePubKey.SerializeCompressed())
+			copy(info.NodeKey2Bytes[:], localPubKey.SerializeCompressed())
+			copy(info.BitcoinKey1Bytes[:], remoteFundingKey.SerializeCompressed())
+			copy(info.BitcoinKey2Bytes[:], localFundingKey.SerializeCompressed())
+			chanFlags = 1
+		}
+
+		log.Infof("Adding channel %v (%x-%x)", chanID, selfBytes[:3], remoteBytes[:3])
+		if err := d.graph.AddChannelEdge(info); err != nil {
+			return err
+		}
+
+		log.Infof("Adding channel %v policy", chanID)
+		policy := &ChannelEdgePolicy{
+			ChannelID:                 chanID,
+			ChannelFlags:              chanFlags,
+			MessageFlags:              lnwire.ChanUpdateOptionMaxHtlc,
+			TimeLockDelta:             144,
+			MinHTLC:                   1000,
+			MaxHTLC:                   lnwire.NewMSatFromSatoshis(c.Capacity),
+			FeeBaseMSat:               10000,
+			FeeProportionalMillionths: 1000,
+		}
+
+		// update := &lnwire.ChannelUpdate{
+		// 	ChainHash:       info.ChainHash,
+		// 	ShortChannelID:  lnwire.NewShortChanIDFromInt(policy.ChannelID),
+		// 	Timestamp:       uint32(policy.LastUpdate.Unix()),
+		// 	ChannelFlags:    policy.ChannelFlags,
+		// 	MessageFlags:    policy.MessageFlags,
+		// 	TimeLockDelta:   policy.TimeLockDelta,
+		// 	HtlcMinimumMsat: policy.MinHTLC,
+		// 	HtlcMaximumMsat: policy.MaxHTLC,
+		// 	BaseFee:         uint32(policy.FeeBaseMSat),
+		// 	FeeRate:         uint32(policy.FeeProportionalMillionths),
+		// 	ExtraOpaqueData: policy.ExtraOpaqueData,
+		// }
+
+		// var err error
+		// update.Signature, err = lnwire.NewSigFromRawSignature(policy.SigBytes)
+		// if err != nil {
+		// 	return nil, err
+		// }
+
+		if err := d.graph.UpdateEdgePolicy(policy); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Path returns the file path to the channel database.
