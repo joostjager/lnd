@@ -3,6 +3,7 @@ package routing
 import (
 	"container/heap"
 	"math"
+	"time"
 
 	"github.com/coreos/bbolt"
 
@@ -264,6 +265,8 @@ type RestrictParams struct {
 func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 	amt lnwire.MilliSatoshi) ([]*channeldb.ChannelEdgePolicy, error) {
 
+	start := time.Now()
+
 	var err error
 	tx := g.tx
 	if tx == nil {
@@ -350,12 +353,16 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 	if ignoredNodes == nil {
 		ignoredNodes = make(map[route.Vertex]struct{})
 	}
+	edgesExplored := 0
+	nodesExpanded := 0
 
 	// processEdge is a helper closure that will be used to make sure edges
 	// satisfy our specific requirements.
 	processEdge := func(fromNode *channeldb.LightningNode,
 		edge *channeldb.ChannelEdgePolicy,
 		bandwidth lnwire.MilliSatoshi, toNode route.Vertex) {
+
+		edgesExplored++
 
 		fromVertex := route.Vertex(fromNode.PubKeyBytes)
 
@@ -504,6 +511,8 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 	heap.Push(&nodeHeap, distance[target])
 
 	for nodeHeap.Len() != 0 {
+		nodesExpanded++
+
 		// Fetch the node within the smallest distance from our source
 		// from the heap.
 		partialPath := heap.Pop(&nodeHeap).(nodeWithDist)
@@ -582,6 +591,11 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 		}
 	}
 
+	log.Debugf("Path finding stats: src=%v, dest=%v, time=%v, nodes_expanded=%v, "+
+		"edges_explored=%v", source, target, time.Now().Sub(start), nodesExpanded,
+		edgesExplored,
+	)
+
 	// If the source node isn't found in the next hop map, then a path
 	// doesn't exist, so we terminate in an error.
 	if _, ok := next[source]; !ok {
@@ -613,6 +627,9 @@ func findPath(g *graphParams, r *RestrictParams, source, target route.Vertex,
 		return nil, newErr(ErrMaxHopsExceeded, "potential path has "+
 			"too many hops")
 	}
+
+	log.Debugf("Found route: hops=%v, fee=%v\n",
+		numEdges, distance[source].amountToReceive-amt)
 
 	return pathEdges, nil
 }
