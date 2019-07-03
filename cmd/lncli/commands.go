@@ -2959,6 +2959,11 @@ var queryRoutesCommand = cli.Command{
 	ArgsUsage:   "dest amt",
 	Flags: []cli.Flag{
 		cli.StringFlag{
+			Name: "source",
+			Usage: "the 33-byte hex-encoded public key for the payment " +
+				"source",
+		},
+		cli.StringFlag{
 			Name: "dest",
 			Usage: "the 33-byte hex-encoded public key for the payment " +
 				"destination",
@@ -3037,6 +3042,10 @@ func queryRoutes(ctx *cli.Context) error {
 		FeeLimit:       feeLimit,
 		NumRoutes:      int32(ctx.Int("num_max_routes")),
 		FinalCltvDelta: int32(ctx.Int("final_cltv_delta")),
+	}
+
+	if ctx.IsSet("source") {
+		req.SourcePubKey = ctx.String("source")
 	}
 
 	route, err := client.QueryRoutes(ctxb, req)
