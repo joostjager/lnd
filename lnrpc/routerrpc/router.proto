@@ -342,6 +342,22 @@ message ChannelHistory {
     float success_prob = 4 [json_name = "success_prob"];
 }
 
+
+message BuildRouteRequest {
+    /// The amount to send expressed in satoshis
+    int64 amt = 1;
+
+    /// An optional CLTV delta from the current height that should be used for the timelock of the final hop
+    int32 final_cltv_delta = 2;
+
+    repeated bytes hops = 3;
+}
+
+message BuildRouteResponse {
+     lnrpc.Route route = 1;
+}
+
+
 service Router {
     /**
     SendPayment attempts to route a payment described by the passed
@@ -381,4 +397,6 @@ service Router {
     It is a development feature.
     */
     rpc QueryMissionControl(QueryMissionControlRequest) returns (QueryMissionControlResponse);
+
+    rpc BuildRoute(BuildRouteRequest) returns (BuildRouteResponse);
 }

@@ -72,6 +72,10 @@ var (
 			Entity: "offchain",
 			Action: "write",
 		}},
+		"/routerrpc.Router/BuildRoute": {{
+			Entity: "offchain",
+			Action: "read",
+		}},
 	}
 
 	// DefaultRouterMacFilename is the default name of the router macaroon
@@ -571,4 +575,31 @@ func (s *Server) trackPayment(paymentHash lntypes.Hash,
 	}
 
 	return nil
+}
+
+func (s *Server) BuildRoute(ctx context.Context,
+	req *BuildRouteRequest) (*BuildRouteResponse, error) {
+
+	hops := []route.Vertex{}
+	for _, hop := range req.Hops {
+		var v route.Vertex
+		copy(v[:], hop)
+		hops = append(hops, v)
+	}
+
+	route, err := s.cfg.Router.BuildRoute(
+		lnwire.NewMSatFromSatoshis(btcutil.Amount(req.Amt)),
+		hops, int32(req.FinalCltvDelta),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rpcRoute := s.cfg.RouterBackend.MarshallRoute(route)
+
+	routeResp := &BuildRouteResponse{
+		Route: rpcRoute,
+	}
+
+	return routeResp, nil
 }

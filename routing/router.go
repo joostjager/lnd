@@ -2454,3 +2454,90 @@ func generateBandwidthHints(sourceNode *channeldb.LightningNode,
 
 	return bandwidthHints, nil
 }
+
+func (r *ChannelRouter) BuildRoute(amt lnwire.MilliSatoshi, hops []route.Vertex,
+	finalCltvDelta int32) (*route.Route, error) {
+
+	edges := make([]*channeldb.ChannelEdgePolicy, 0)
+
+	amtToSend := amt
+	for i := len(hops) - 2; i >= 0; i-- {
+		fromNode := hops[i]
+		dest := hops[i+1]
+		destKey, err := btcec.ParsePubKey(dest[:], btcec.S256())
+		if err != nil {
+			return nil, err
+		}
+
+		toNode, err := r.cfg.Graph.FetchLightningNode(destKey)
+		if err != nil {
+			return nil, err
+		}
+
+		var edge *channeldb.ChannelEdgePolicy
+		cb := func(tx *bbolt.Tx, edgeInfo *channeldb.ChannelEdgeInfo,
+			_, inEdge *channeldb.ChannelEdgePolicy) error {
+
+			// Skip rest if found.
+			if edge != nil {
+				return nil
+			}
+
+			// No unknown policy channels
+			if inEdge == nil {
+				return nil
+			}
+
+			// Before we can process the edge, we'll need to fetch
+			// the node on the _other_ end of this channel as we
+			// may later need to iterate over the incoming edges of
+			// this node if we explore it further.
+			chanFromNode, err := edgeInfo.FetchOtherNode(
+				tx, toNode.PubKeyBytes[:],
+			)
+			if err != nil {
+				return err
+			}
+
+			// Continue searching
+			if chanFromNode.PubKeyBytes != fromNode {
+				return nil
+			}
+
+			// Check capacity
+			if amtToSend > lnwire.NewMSatFromSatoshis(edgeInfo.Capacity) {
+				return nil
+			}
+
+			// Check HTLC value limits
+			if amtToSend < inEdge.MinHTLC || amtToSend > inEdge.MaxHTLC {
+				return nil
+			}
+
+			edge = inEdge
+
+			return nil
+		}
+
+		if err := toNode.ForEachChannel(nil, cb); err != nil {
+			return nil, err
+		}
+
+		if edge == nil {
+			return nil, errors.New("no channels available")
+		}
+		edges = append([]*channeldb.ChannelEdgePolicy{edge}, edges...)
+
+		amtToSend += edge.ComputeFee(amtToSend)
+	}
+
+	_, height, err := r.cfg.Chain.GetBestBlock()
+	if err != nil {
+		return nil, err
+	}
+
+	return newRoute(
+		amt, r.selfNode.PubKeyBytes, edges, uint32(height),
+		uint16(finalCltvDelta),
+	)
+}
