@@ -172,9 +172,9 @@ func (m *MissionControl) ResetHistory() {
 	log.Debugf("Mission control history cleared")
 }
 
-// getEdgeProbability is expected to return the success probability of a payment
+// GetEdgeProbability is expected to return the success probability of a payment
 // from fromNode along edge.
-func (m *MissionControl) getEdgeProbability(fromNode route.Vertex,
+func (m *MissionControl) GetEdgeProbability(fromNode route.Vertex,
 	edge EdgeLocator, amt lnwire.MilliSatoshi) float64 {
 
 	m.Lock()

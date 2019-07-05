@@ -47,7 +47,7 @@ func (ctx *mcTestContext) expectP(amt lnwire.MilliSatoshi,
 
 	ctx.t.Helper()
 
-	p := ctx.mc.getEdgeProbability(mcTestNode, mcTestEdge, amt)
+	p := ctx.mc.GetEdgeProbability(mcTestNode, mcTestEdge, amt)
 	if p != expected {
 		ctx.t.Fatalf("unexpected probability %v", p)
 	}

@@ -106,7 +106,7 @@ func (m *mockMissionControl) reportEdgePolicyFailure(failedEdge edge) {}
 
 func (m *mockMissionControl) reportVertexFailure(v route.Vertex) {}
 
-func (m *mockMissionControl) getEdgeProbability(fromNode route.Vertex, edge EdgeLocator,
+func (m *mockMissionControl) GetEdgeProbability(fromNode route.Vertex, edge EdgeLocator,
 	amt lnwire.MilliSatoshi) float64 {
 
 	return 0

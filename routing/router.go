@@ -181,7 +181,7 @@ type missionControlInterface interface {
 
 	reportVertexFailure(v route.Vertex)
 
-	getEdgeProbability(fromNode route.Vertex, edge EdgeLocator,
+	GetEdgeProbability(fromNode route.Vertex, edge EdgeLocator,
 		amt lnwire.MilliSatoshi) float64
 }
 
