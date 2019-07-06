@@ -47,6 +47,11 @@ func testMc(ctx *cli.Context) error {
 	}
 	fmt.Fprintf(os.Stderr, "Graph: nodes=%v\n", len(graphResp.Nodes))
 
+	alias := make(map[string]string)
+	for _, n := range graphResp.Nodes {
+		alias[n.PubKey[:6]] = n.Alias
+	}
+
 	chanResp, err := client.ListChannels(ctxb, &lnrpc.ListChannelsRequest{})
 	if err != nil {
 		return err
@@ -62,6 +67,7 @@ func testMc(ctx *cli.Context) error {
 		routerClient: routerClient,
 		self:         self,
 		channelPeers: channelPeers,
+		alias:        alias,
 	}
 
 	p.run()
@@ -72,6 +78,7 @@ func testMc(ctx *cli.Context) error {
 type prober struct {
 	self         string
 	probed       map[string]struct{}
+	alias        map[string]string
 	graphResp    *lnrpc.ChannelGraph
 	client       lnrpc.LightningClient
 	routerClient routerrpc.RouterClient
@@ -117,7 +124,8 @@ func (p *prober) run() {
 			color = "#ffc0c0"
 		}
 
-		fmt.Printf("{id: %v, label: '%v', color: '%v'},\n", id, n, color)
+		fmt.Printf("{id: %v, label: '%v', color: '%v'},\n",
+			id, p.alias[n], color)
 		ids[n] = id
 		id++
 	}
