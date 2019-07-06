@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -212,7 +213,7 @@ func (p *prober) probe(hops []string) (int, error) {
 	}
 
 	const attempts = 3
-	totalTime := 0
+	times := make([]int, attempts)
 	for cnt := 0; cnt < attempts; cnt++ {
 		sendStart := time.Now()
 
@@ -229,13 +230,16 @@ func (p *prober) probe(hops []string) (int, error) {
 			return 0, fmt.Errorf("sendtoroute error: %v", sendResp.Failure.Code)
 		}
 		sendTime := int(time.Now().Sub(sendStart) / 1e6)
-		totalTime += sendTime
+		times[cnt] = sendTime
 
 		fmt.Fprintf(os.Stderr, "sendtoroute success, time: %v\n", sendTime)
 	}
-	avgTime := totalTime / attempts
 
-	return avgTime, nil
+	sort.Ints(times)
+
+	median := times[(attempts-1)/2]
+
+	return median, nil
 }
 
 func (p *prober) probePeers(latency int, path []string) {
