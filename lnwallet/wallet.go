@@ -655,12 +655,17 @@ func (l *LightningWallet) handleFundingCancelRequest(req *fundingReserveCancelMs
 func CreateCommitmentTxns(localBalance, remoteBalance btcutil.Amount,
 	ourChanCfg, theirChanCfg *channeldb.ChannelConfig,
 	localCommitPoint, remoteCommitPoint *btcec.PublicKey,
-	fundingTxIn wire.TxIn) (*wire.MsgTx, *wire.MsgTx, error) {
+	fundingTxIn wire.TxIn,
+	tweaklessCommit bool) (*wire.MsgTx, *wire.MsgTx, error) {
 
-	localCommitmentKeys := deriveCommitmentKeys(localCommitPoint, true,
-		ourChanCfg, theirChanCfg)
-	remoteCommitmentKeys := deriveCommitmentKeys(remoteCommitPoint, false,
-		ourChanCfg, theirChanCfg)
+	localCommitmentKeys := deriveCommitmentKeys(
+		localCommitPoint, true, tweaklessCommit, ourChanCfg,
+		theirChanCfg,
+	)
+	remoteCommitmentKeys := deriveCommitmentKeys(
+		remoteCommitPoint, false, tweaklessCommit, ourChanCfg,
+		theirChanCfg,
+	)
 
 	ourCommitTx, err := CreateCommitTx(fundingTxIn, localCommitmentKeys,
 		uint32(ourChanCfg.CsvDelay), localBalance, remoteBalance,
