@@ -240,18 +240,18 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 
 	// We'll use our current default CLTV value unless one was specified as
 	// an option on the command line when creating an invoice.
+	//
+	// TODO(roasbeef): assumes set delta between versions
+	cltvExpiry := uint64(cfg.DefaultCLTVExpiry)
 	switch {
 	case invoice.CltvExpiry > math.MaxUint16:
 		return nil, nil, fmt.Errorf("CLTV delta of %v is too large, max "+
 			"accepted is: %v", invoice.CltvExpiry, math.MaxUint16)
 	case invoice.CltvExpiry != 0:
-		options = append(options,
-			zpay32.CLTVExpiry(invoice.CltvExpiry))
-	default:
-		// TODO(roasbeef): assumes set delta between versions
-		defaultDelta := cfg.DefaultCLTVExpiry
-		options = append(options, zpay32.CLTVExpiry(uint64(defaultDelta)))
+		cltvExpiry = invoice.CltvExpiry
 	}
+
+	options = append(options, zpay32.CLTVExpiry(cltvExpiry))
 
 	// If we were requested to include routing hints in the invoice, then
 	// we'll fetch all of our available private channels and create routing
@@ -394,6 +394,7 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 		Memo:           []byte(invoice.Memo),
 		Receipt:        invoice.Receipt,
 		PaymentRequest: []byte(payReqString),
+		FinalCltvDelta: int32(cltvExpiry),
 		Terms: channeldb.ContractTerm{
 			Value:           amtMSat,
 			PaymentPreimage: paymentPreimage,

@@ -172,6 +172,10 @@ type Invoice struct {
 	// for this invoice can be stored.
 	PaymentRequest []byte
 
+	// FinalCltvDelta is the minimum required number of blocks before htlc
+	// expiry when the invoice is accepted.
+	FinalCltvDelta int32
+
 	// CreationDate is the exact time the invoice was created.
 	CreationDate time.Time
 
@@ -209,6 +213,34 @@ type Invoice struct {
 	// that the invoice originally didn't specify an amount, or the sender
 	// overpaid.
 	AmtPaid lnwire.MilliSatoshi
+
+	// Htlcs records all htlcs that paid to this invoice. Some of these
+	// htlcs may have been marked as cancelled.
+	Htlcs map[CircuitKey]*InvoiceHTLC
+}
+
+// InvoiceHTLC contains details about an htlc paying to this invoice.
+type InvoiceHTLC struct {
+	// Amt is the amount that is carried by this htlc.
+	Amt lnwire.MilliSatoshi
+
+	// AcceptedHeight is the block height at which the invoice registry
+	// decided to accept this htlc as a payment to the invoice. At this
+	// height, the invoice cltv delay must have been met.
+	AcceptedHeight uint32
+
+	// AcceptedTime is the wall clock time at which the invoice registry
+	// decided to accept the htlc.
+	AcceptedTime time.Time
+
+	// Expiry is the expiry height of this htlc.
+	Expiry uint32
+
+	// Cancelled is set to true when the invoice registry decides that this
+	// htlc must be cancelled back. The htlc isn't just removed from the
+	// invoice htlcs map, because we need AcceptedHeight to properly cancel
+	// the htlc back.
+	Cancelled bool
 }
 
 func validateInvoice(i *Invoice) error {
@@ -865,6 +897,11 @@ func putInvoice(invoices, invoiceIndex, addIndex *bbolt.Bucket,
 	return nextAddSeqNo, nil
 }
 
+// serializeInvoice serializes an invoice to a writer.
+//
+// Note: this function is in use for a migration. Before making changes that
+// would modify the on disk format, make a copy of the original code and store
+// it with the migration.
 func serializeInvoice(w io.Writer, i *Invoice) error {
 	if err := wire.WriteVarBytes(w, 0, i.Memo[:]); err != nil {
 		return err
@@ -873,6 +910,10 @@ func serializeInvoice(w io.Writer, i *Invoice) error {
 		return err
 	}
 	if err := wire.WriteVarBytes(w, 0, i.PaymentRequest[:]); err != nil {
+		return err
+	}
+
+	if err := binary.Write(w, byteOrder, i.FinalCltvDelta); err != nil {
 		return err
 	}
 
@@ -918,6 +959,30 @@ func serializeInvoice(w io.Writer, i *Invoice) error {
 		return err
 	}
 
+	if err := serializeHtlcs(w, i.Htlcs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// serializeHtlcs serializes a map containing circuit keys and invoice htlcs to
+// a writer.
+func serializeHtlcs(w io.Writer, htlcs map[CircuitKey]*InvoiceHTLC) error {
+	if err := binary.Write(w, byteOrder, int64(len(htlcs))); err != nil {
+		return err
+	}
+	for key, htlc := range htlcs {
+		err := WriteElements(
+			w, key.ChanID.ToUint64(), key.HtlcID, htlc.Amt,
+			htlc.AcceptedHeight, htlc.AcceptedTime.UnixNano(),
+			htlc.Expiry, htlc.Cancelled,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -948,6 +1013,10 @@ func deserializeInvoice(r io.Reader) (Invoice, error) {
 
 	invoice.PaymentRequest, err = wire.ReadVarBytes(r, 0, MaxPaymentRequestSize, "")
 	if err != nil {
+		return invoice, err
+	}
+
+	if err := binary.Read(r, byteOrder, &invoice.FinalCltvDelta); err != nil {
 		return invoice, err
 	}
 
@@ -990,7 +1059,45 @@ func deserializeInvoice(r io.Reader) (Invoice, error) {
 		return invoice, err
 	}
 
+	invoice.Htlcs, err = deserializeHtlcs(r)
+	if err != nil {
+		return Invoice{}, err
+	}
+
 	return invoice, nil
+}
+
+// deserializeHtlcs reads a list of invoice htlcs from a reader and returns it
+// as a map.
+func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
+	var htlcCount int64
+	if err := binary.Read(r, byteOrder, &htlcCount); err != nil {
+		return nil, err
+	}
+	htlcs := make(map[CircuitKey]*InvoiceHTLC, int(htlcCount))
+	for i := 0; i < int(htlcCount); i++ {
+		var (
+			htlc         InvoiceHTLC
+			key          CircuitKey
+			chanID       uint64
+			acceptedTime int64
+		)
+		err := ReadElements(
+			r, &chanID, &key.HtlcID, &htlc.Amt,
+			&htlc.AcceptedHeight, &acceptedTime, &htlc.Expiry,
+			&htlc.Cancelled,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		key.ChanID = lnwire.NewShortChanIDFromInt(chanID)
+		htlc.AcceptedTime = time.Unix(0, acceptedTime)
+
+		htlcs[key] = &htlc
+	}
+
+	return htlcs, nil
 }
 
 func acceptOrSettleInvoice(invoices, settleIndex *bbolt.Bucket,
