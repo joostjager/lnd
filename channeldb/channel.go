@@ -145,6 +145,12 @@ func (c ChannelType) IsSingleFunder() bool {
 	return c == SingleFunder || c == SingleFunderTweakless
 }
 
+// IsTweakless returns true if the target channel uses a commitment that
+// doesn't tweak the key for the remote party.
+func (c ChannelType) IsTweakless() bool {
+	return c == SingleFunderTweakless
+}
+
 // ChannelConstraints represents a set of constraints meant to allow a node to
 // limit their exposure, enact flow control and ensure that all HTLCs are
 // economically relevant. This struct will be mirrored for both sides of the
