@@ -172,6 +172,13 @@ type Invoice struct {
 	// for this invoice can be stored.
 	PaymentRequest []byte
 
+	// FinalCltvDelta is the minimum required number of blocks before htlc
+	// expiry when the invoice is accepted.
+	FinalCltvDelta int32
+
+	// Expiry defines how long after creation this invoice should expire.
+	Expiry time.Duration
+
 	// CreationDate is the exact time the invoice was created.
 	CreationDate time.Time
 
@@ -209,6 +216,52 @@ type Invoice struct {
 	// that the invoice originally didn't specify an amount, or the sender
 	// overpaid.
 	AmtPaid lnwire.MilliSatoshi
+
+	// Htlcs records all htlcs that paid to this invoice. Some of these
+	// htlcs may have been marked as cancelled.
+	Htlcs map[CircuitKey]*InvoiceHTLC
+}
+
+// HtlcState defines the states an htlc paying to an invoice can be in.
+type HtlcState uint8
+
+const (
+	// HtlcStateAccepted indicates the htlc is locked-in, but not resolved.
+	HtlcStateAccepted HtlcState = iota
+
+	// HtlcStateCancelled indicates the htlc is cancelled back to the
+	// sender.
+	HtlcStateCancelled
+
+	// HtlcStateSettled indicates the htlc is settled.
+	HtlcStateSettled
+)
+
+// InvoiceHTLC contains details about an htlc paying to this invoice.
+type InvoiceHTLC struct {
+	// Amt is the amount that is carried by this htlc.
+	Amt lnwire.MilliSatoshi
+
+	// AcceptHeight is the block height at which the invoice registry
+	// decided to accept this htlc as a payment to the invoice. At this
+	// height, the invoice cltv delay must have been met.
+	AcceptHeight uint32
+
+	// AcceptTime is the wall clock time at which the invoice registry
+	// decided to accept the htlc.
+	AcceptTime time.Time
+
+	// ResolveTime is the wall clock time at which the invoice registry
+	// decided to settle the htlc.
+	ResolveTime time.Time
+
+	// Expiry is the expiry height of this htlc.
+	Expiry uint32
+
+	// State indicates the state the invoice htlc is currently in. A
+	// cancelled htlc isn't just removed from the invoice htlcs map, because
+	// we need AcceptedHeight to properly cancel the htlc back.
+	State HtlcState
 }
 
 func validateInvoice(i *Invoice) error {
@@ -865,6 +918,11 @@ func putInvoice(invoices, invoiceIndex, addIndex *bbolt.Bucket,
 	return nextAddSeqNo, nil
 }
 
+// serializeInvoice serializes an invoice to a writer.
+//
+// Note: this function is in use for a migration. Before making changes that
+// would modify the on disk format, make a copy of the original code and store
+// it with the migration.
 func serializeInvoice(w io.Writer, i *Invoice) error {
 	if err := wire.WriteVarBytes(w, 0, i.Memo[:]); err != nil {
 		return err
@@ -873,6 +931,14 @@ func serializeInvoice(w io.Writer, i *Invoice) error {
 		return err
 	}
 	if err := wire.WriteVarBytes(w, 0, i.PaymentRequest[:]); err != nil {
+		return err
+	}
+
+	if err := binary.Write(w, byteOrder, i.FinalCltvDelta); err != nil {
+		return err
+	}
+
+	if err := binary.Write(w, byteOrder, int64(i.Expiry)); err != nil {
 		return err
 	}
 
@@ -918,6 +984,31 @@ func serializeInvoice(w io.Writer, i *Invoice) error {
 		return err
 	}
 
+	if err := serializeHtlcs(w, i.Htlcs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// serializeHtlcs serializes a map containing circuit keys and invoice htlcs to
+// a writer.
+func serializeHtlcs(w io.Writer, htlcs map[CircuitKey]*InvoiceHTLC) error {
+	if err := binary.Write(w, byteOrder, int64(len(htlcs))); err != nil {
+		return err
+	}
+	for key, htlc := range htlcs {
+		err := WriteElements(
+			w, key.ChanID.ToUint64(), key.HtlcID, htlc.Amt,
+			htlc.AcceptHeight, htlc.AcceptTime.UnixNano(),
+			htlc.ResolveTime.UnixNano(),
+			htlc.Expiry, uint8(htlc.State),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -950,6 +1041,16 @@ func deserializeInvoice(r io.Reader) (Invoice, error) {
 	if err != nil {
 		return invoice, err
 	}
+
+	if err := binary.Read(r, byteOrder, &invoice.FinalCltvDelta); err != nil {
+		return invoice, err
+	}
+
+	var expiry int64
+	if err := binary.Read(r, byteOrder, &expiry); err != nil {
+		return invoice, err
+	}
+	invoice.Expiry = time.Duration(expiry)
 
 	birthBytes, err := wire.ReadVarBytes(r, 0, 300, "birth")
 	if err != nil {
@@ -990,7 +1091,48 @@ func deserializeInvoice(r io.Reader) (Invoice, error) {
 		return invoice, err
 	}
 
+	invoice.Htlcs, err = deserializeHtlcs(r)
+	if err != nil {
+		return Invoice{}, err
+	}
+
 	return invoice, nil
+}
+
+// deserializeHtlcs reads a list of invoice htlcs from a reader and returns it
+// as a map.
+func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
+	var htlcCount int64
+	if err := binary.Read(r, byteOrder, &htlcCount); err != nil {
+		return nil, err
+	}
+	htlcs := make(map[CircuitKey]*InvoiceHTLC, int(htlcCount))
+	for i := 0; i < int(htlcCount); i++ {
+		var (
+			htlc                    InvoiceHTLC
+			key                     CircuitKey
+			chanID                  uint64
+			state                   uint8
+			acceptTime, resolveTime int64
+		)
+		err := ReadElements(
+			r, &chanID, &key.HtlcID, &htlc.Amt,
+			&htlc.AcceptHeight, &acceptTime,
+			&resolveTime, &htlc.Expiry, &state,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		key.ChanID = lnwire.NewShortChanIDFromInt(chanID)
+		htlc.AcceptTime = time.Unix(0, acceptTime)
+		htlc.ResolveTime = time.Unix(0, resolveTime)
+		htlc.State = HtlcState(state)
+
+		htlcs[key] = &htlc
+	}
+
+	return htlcs, nil
 }
 
 func acceptOrSettleInvoice(invoices, settleIndex *bbolt.Bucket,
