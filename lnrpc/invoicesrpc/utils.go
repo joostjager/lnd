@@ -60,6 +60,27 @@ func CreateRPCInvoice(invoice *channeldb.Invoice,
 			invoice.Terms.State)
 	}
 
+	rpcHtlcs := make([]*lnrpc.InvoiceHTLC, 0, len(invoice.Htlcs))
+	for key, htlc := range invoice.Htlcs {
+		// Don't report cancelled htlcs because the list of cancelled
+		// htlcs may be incomplete. Some htlcs are cancelled directly
+		// and not recorded in the invoice database.
+		if htlc.Cancelled {
+			continue
+		}
+
+		rpcHtlc := lnrpc.InvoiceHTLC{
+			ChanId:       key.ChanID.ToUint64(),
+			HtlcIndex:    key.HtlcID,
+			AcceptHeight: int32(htlc.AcceptedHeight),
+			AcceptTime:   htlc.AcceptedTime.Unix(),
+			ExpiryHeight: int32(htlc.Expiry),
+			AmtMsat:      uint64(htlc.Amt),
+		}
+
+		rpcHtlcs = append(rpcHtlcs, &rpcHtlc)
+	}
+
 	rpcInvoice := &lnrpc.Invoice{
 		Memo:            string(invoice.Memo[:]),
 		Receipt:         invoice.Receipt[:],
@@ -81,6 +102,7 @@ func CreateRPCInvoice(invoice *channeldb.Invoice,
 		AmtPaidMsat:     int64(invoice.AmtPaid),
 		AmtPaid:         int64(invoice.AmtPaid),
 		State:           state,
+		Htlcs:           rpcHtlcs,
 	}
 
 	if preimage != channeldb.UnknownPreimage {
