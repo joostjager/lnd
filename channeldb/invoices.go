@@ -252,8 +252,10 @@ type InvoiceUpdateDesc struct {
 	// State is the new state that this invoice should progress to.
 	State ContractState
 
-	// AmtPaid is the updated amount that has been paid to this invoice.
-	AmtPaid lnwire.MilliSatoshi
+	// Htlcs describes the changes that need to be made to the invoice htlcs
+	// in the database. Htlc map entries with their value set should be
+	// added. If the map value is nil, the htlc should be cancelled.
+	Htlcs map[CircuitKey]*InvoiceHTLC
 
 	// Preimage must be set to the preimage when state is settled.
 	Preimage lntypes.Preimage
@@ -1109,9 +1111,30 @@ func updateInvoice(hash lntypes.Hash, invoices, settleIndex *bbolt.Bucket,
 		return &invoice, err
 	}
 
-	// Update invoice state and amount.
+	// Update invoice state.
 	invoice.Terms.State = update.State
-	invoice.AmtPaid = update.AmtPaid
+
+	// Update htlc set.
+	for key, htlc := range update.Htlcs {
+		h, ok := invoice.Htlcs[key]
+
+		if htlc == nil {
+			if !ok {
+				return nil, fmt.Errorf("unknown htlc %v", key)
+			}
+
+			h.Cancelled = true
+			invoice.AmtPaid -= h.Amt
+
+			continue
+		}
+
+		if ok {
+			return nil, fmt.Errorf("htlc %v already exists", key)
+		}
+		invoice.Htlcs[key] = htlc
+		invoice.AmtPaid += htlc.Amt
+	}
 
 	// If invoice moved to the settled state, update settle index and settle
 	// time.
