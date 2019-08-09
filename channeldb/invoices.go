@@ -243,9 +243,19 @@ type InvoiceHTLC struct {
 	Cancelled bool
 }
 
+// InvoiceUpdateDesc describes the changes that should be applied to the
+// invoice.
+type InvoiceUpdateDesc struct {
+	// State is the new state that this invoice should progress to.
+	State ContractState
+
+	// AmtPaid is the updated amount that has been paid to this invoice.
+	AmtPaid lnwire.MilliSatoshi
+}
+
 // InvoiceUpdateCallback is a callback used in the db transaction to update the
 // invoice.
-type InvoiceUpdateCallback = func(invoice *Invoice) error
+type InvoiceUpdateCallback = func(invoice *Invoice) (*InvoiceUpdateDesc, error)
 
 func validateInvoice(i *Invoice) error {
 	if len(i.Memo) > MaxMemoSize {
@@ -660,19 +670,15 @@ func (d *DB) QueryInvoices(q InvoiceQuery) (InvoiceSlice, error) {
 	return resp, nil
 }
 
-// AcceptOrSettleInvoice attempts to mark an invoice corresponding to the passed
-// payment hash as settled. If an invoice matching the passed payment hash
-// doesn't existing within the database, then the action will fail with a "not
-// found" error.
+// UpdateInvoice attempts to update an invoice corresponding to the passed
+// payment hash. If an invoice matching the passed payment hash doesn't exist
+// within the database, then the action will fail with a "not found" error.
 //
-// When the preimage for the invoice is unknown (hold invoice), the invoice is
-// marked as accepted.
-//
-// TODO: Store invoice cltv as separate field in database so that it doesn't
-// need to be decoded from the payment request.
-func (d *DB) AcceptOrSettleInvoice(paymentHash [32]byte,
-	amtPaid lnwire.MilliSatoshi, updateInvoice InvoiceUpdateCallback) (
-	*Invoice, error) {
+// The update is performed inside the same database transaction that fetches the
+// invoice and is therefore atomic. The fields to update are controlled by the
+// supplied callback.
+func (d *DB) UpdateInvoice(paymentHash lntypes.Hash,
+	updateInvoice InvoiceUpdateCallback) (*Invoice, error) {
 
 	var settledInvoice *Invoice
 	err := d.Update(func(tx *bbolt.Tx) error {
@@ -701,8 +707,7 @@ func (d *DB) AcceptOrSettleInvoice(paymentHash [32]byte,
 		}
 
 		settledInvoice, err = acceptOrSettleInvoice(
-			invoices, settleIndex, invoiceNum, amtPaid,
-			updateInvoice,
+			invoices, settleIndex, invoiceNum, updateInvoice,
 		)
 
 		return err
@@ -1105,32 +1110,41 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 }
 
 func acceptOrSettleInvoice(invoices, settleIndex *bbolt.Bucket,
-	invoiceNum []byte, amtPaid lnwire.MilliSatoshi,
-	updateInvoice InvoiceUpdateCallback) (*Invoice, error) {
+	invoiceNum []byte, updateInvoice InvoiceUpdateCallback) (
+	*Invoice, error) {
 
 	invoice, err := fetchInvoice(invoiceNum, invoices)
 	if err != nil {
 		return nil, err
 	}
 
-	// If the invoice is still open, check the htlc parameters.
-	if err := updateInvoice(&invoice); err != nil {
+	preUpdateState := invoice.Terms.State
+
+	// Create deep copy to prevent any accidental modification in the
+	// callback.
+	//
+	// TODO(joostjager): Make it really a deep copy including slices and
+	// maps.
+	copy := invoice
+	update, err := updateInvoice(&copy)
+	if err != nil {
 		return &invoice, err
 	}
 
-	// Check to see if we can settle or this is an hold invoice and we need
-	// to wait for the preimage.
-	holdInvoice := invoice.Terms.PaymentPreimage == UnknownPreimage
-	if holdInvoice {
-		invoice.Terms.State = ContractAccepted
-	} else {
+	// Update invoice state and amount.
+	invoice.Terms.State = update.State
+	invoice.AmtPaid = update.AmtPaid
+
+	// If invoice moved to the settled state, update settle index and settle
+	// time.
+	if preUpdateState != invoice.Terms.State &&
+		invoice.Terms.State == ContractSettled {
+
 		err := setSettleFields(settleIndex, invoiceNum, &invoice)
 		if err != nil {
 			return nil, err
 		}
 	}
-
-	invoice.AmtPaid = amtPaid
 
 	var buf bytes.Buffer
 	if err := serializeInvoice(&buf, &invoice); err != nil {
