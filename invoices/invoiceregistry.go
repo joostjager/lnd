@@ -409,9 +409,9 @@ func (i *InvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (channeldb.Invoice,
 	return i.cdb.LookupInvoice(rHash)
 }
 
-// checkHtlcParameters is a callback used inside invoice db transactions to
+// updateInvoice is a callback used inside invoice db transactions to
 // atomically check-and-update an invoice.
-func (i *InvoiceRegistry) checkHtlcParameters(invoice *channeldb.Invoice,
+func (i *InvoiceRegistry) updateInvoice(invoice *channeldb.Invoice,
 	amtPaid lnwire.MilliSatoshi, htlcExpiry uint32, currentHeight int32) error {
 
 	// If the invoice is already canceled, there is no further checking to
@@ -477,7 +477,7 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 	invoice, err := i.cdb.AcceptOrSettleInvoice(
 		rHash, amtPaid,
 		func(inv *channeldb.Invoice) error {
-			return i.checkHtlcParameters(
+			return i.updateInvoice(
 				inv, amtPaid, expiry, currentHeight,
 			)
 		},

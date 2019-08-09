@@ -243,6 +243,10 @@ type InvoiceHTLC struct {
 	Cancelled bool
 }
 
+// InvoiceUpdateCallback is a callback used in the db transaction to update the
+// invoice.
+type InvoiceUpdateCallback = func(invoice *Invoice) error
+
 func validateInvoice(i *Invoice) error {
 	if len(i.Memo) > MaxMemoSize {
 		return fmt.Errorf("max length a memo is %v, and invoice "+
@@ -667,8 +671,8 @@ func (d *DB) QueryInvoices(q InvoiceQuery) (InvoiceSlice, error) {
 // TODO: Store invoice cltv as separate field in database so that it doesn't
 // need to be decoded from the payment request.
 func (d *DB) AcceptOrSettleInvoice(paymentHash [32]byte,
-	amtPaid lnwire.MilliSatoshi,
-	checkHtlcParameters func(invoice *Invoice) error) (*Invoice, error) {
+	amtPaid lnwire.MilliSatoshi, updateInvoice InvoiceUpdateCallback) (
+	*Invoice, error) {
 
 	var settledInvoice *Invoice
 	err := d.Update(func(tx *bbolt.Tx) error {
@@ -698,7 +702,7 @@ func (d *DB) AcceptOrSettleInvoice(paymentHash [32]byte,
 
 		settledInvoice, err = acceptOrSettleInvoice(
 			invoices, settleIndex, invoiceNum, amtPaid,
-			checkHtlcParameters,
+			updateInvoice,
 		)
 
 		return err
@@ -1102,8 +1106,7 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 
 func acceptOrSettleInvoice(invoices, settleIndex *bbolt.Bucket,
 	invoiceNum []byte, amtPaid lnwire.MilliSatoshi,
-	checkHtlcParameters func(invoice *Invoice) error) (
-	*Invoice, error) {
+	updateInvoice InvoiceUpdateCallback) (*Invoice, error) {
 
 	invoice, err := fetchInvoice(invoiceNum, invoices)
 	if err != nil {
@@ -1111,7 +1114,7 @@ func acceptOrSettleInvoice(invoices, settleIndex *bbolt.Bucket,
 	}
 
 	// If the invoice is still open, check the htlc parameters.
-	if err := checkHtlcParameters(&invoice); err != nil {
+	if err := updateInvoice(&invoice); err != nil {
 		return &invoice, err
 	}
 
