@@ -476,14 +476,6 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 			return nil, errNoUpdate
 		}
 
-		// If an invoice amount is specified, check that enough
-		// is paid. Also check this for duplicate payments if
-		// the invoice is already settled or accepted.
-		if inv.Terms.Value > 0 && amtPaid < inv.Terms.Value {
-			debugLog("amount too low")
-			return nil, errNoUpdate
-		}
-
 		// The invoice is still open. Check the expiry.
 		if expiry < uint32(currentHeight+i.finalCltvRejectDelta) {
 			debugLog("expiry too soon")
@@ -520,6 +512,15 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 			debugLog("accepting duplicate payment to settled invoice")
 			update.State = channeldb.ContractSettled
 			return &update, nil
+
+		case channeldb.ContractOpen:
+			// If an invoice amount is specified, check whether enough is
+			// paid.
+			if inv.Terms.Value > 0 && inv.AmtPaid+amtPaid < inv.Terms.Value {
+				debugLog("partial payment accepted")
+				update.State = channeldb.ContractOpen
+				return &update, nil
+			}
 		}
 
 		// Check to see if we can settle or this is an hold invoice and
@@ -578,6 +579,19 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 		}, nil
 
 	case channeldb.HtlcStateSettled:
+		// Also settle any previously accepted htlcs.
+		for key, htlc := range invoice.Htlcs {
+			if htlc.State == channeldb.HtlcStateCancelled {
+				continue
+			}
+
+			i.notifyHodlSubscribers(HodlEvent{
+				CircuitKey:     key,
+				Preimage:       &invoice.Terms.PaymentPreimage,
+				AcceptedHeight: int32(htlc.AcceptHeight),
+			})
+		}
+
 		return &HodlEvent{
 			CircuitKey:     circuitKey,
 			Preimage:       &invoice.Terms.PaymentPreimage,
