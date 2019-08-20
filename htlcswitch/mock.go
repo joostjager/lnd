@@ -764,13 +764,9 @@ func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
 		panic(err)
 	}
 
-	decodeExpiry := func(invoice string) (uint32, error) {
-		return testInvoiceCltvExpiry, nil
-	}
-
 	finalCltvRejectDelta := int32(5)
 
-	registry := invoices.NewRegistry(cdb, decodeExpiry, finalCltvRejectDelta)
+	registry := invoices.NewRegistry(cdb, finalCltvRejectDelta)
 	registry.Start()
 
 	return &mockInvoiceRegistry{
@@ -779,7 +775,9 @@ func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
 	}
 }
 
-func (i *mockInvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (channeldb.Invoice, uint32, error) {
+func (i *mockInvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (
+	channeldb.Invoice, error) {
+
 	return i.registry.LookupInvoice(rHash)
 }
 
