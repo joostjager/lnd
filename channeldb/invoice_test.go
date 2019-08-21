@@ -691,8 +691,9 @@ func getUpdateInvoice(amt lnwire.MilliSatoshi) InvoiceUpdateCallback {
 		}
 
 		update := &InvoiceUpdateDesc{
-			State:   ContractSettled,
-			AmtPaid: amt,
+			Preimage: invoice.Terms.PaymentPreimage,
+			State:    ContractSettled,
+			AmtPaid:  amt,
 		}
 
 		return update, nil
