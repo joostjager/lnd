@@ -77,6 +77,10 @@ type Hop struct {
 	// carries as a fee will be subtracted by the hop.
 	AmtToForward lnwire.MilliSatoshi
 
+	// MPP encapsulates the data required for option_mpp. This field should
+	// only be set for the final hop.
+	MPP *record.MPP
+
 	// TLVRecords if non-nil are a set of additional TLV records that
 	// should be included in the forwarding instructions for this node.
 	TLVRecords []tlv.Record
@@ -110,6 +114,10 @@ func (h *Hop) PackHopPayload(w io.Writer, nextChanID uint64) error {
 		record.NewLockTimeRecord(&h.OutgoingTimeLock),
 		record.NewNextHopIDRecord(&nextChanID),
 	)
+
+	if h.MPP != nil {
+		combinedRecords = append(combinedRecords, h.MPP.TLV())
+	}
 
 	// To ensure we produce a canonical stream, we'll sort the records
 	// before encoding them as a stream in the hop payload.
@@ -152,6 +160,16 @@ type Route struct {
 	// Hops contains details concerning the specific forwarding details at
 	// each hop.
 	Hops []*Hop
+}
+
+// AddMPP extends existing tlv records destined for the final hop
+// with an option_mpp record use to construct base AMP payments.
+func (r *Route) AddMPP(total lnwire.MilliSatoshi, addr [32]byte) {
+	if len(r.Hops) == 0 {
+		return
+	}
+
+	r.Hops[len(r.Hops)-1].MPP = record.NewMPP(uint64(total), addr)
 }
 
 // HopFee returns the fee charged by the route hop indicated by hopIndex.
