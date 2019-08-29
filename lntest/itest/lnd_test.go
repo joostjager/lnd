@@ -29,6 +29,8 @@ import (
 	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
+	"github.com/golang/protobuf/jsonpb"
+	"github.com/golang/protobuf/proto"
 	"github.com/lightningnetwork/lnd"
 	"github.com/lightningnetwork/lnd/chanbackup"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -4258,6 +4260,222 @@ func testMultiHopPayments(net *lntest.NetworkHarness, t *harnessTest) {
 	closeChannelAndAssert(ctxt, t, net, dave, chanPointDave, false)
 	ctxt, _ = context.WithTimeout(ctxb, channelCloseTimeout)
 	closeChannelAndAssert(ctxt, t, net, carol, chanPointCarol, false)
+}
+
+// testMPP tests that payments are properly processed
+// through a provided route with a single hop. We'll create the
+// following network topology:
+//      Alice --100k--> Bob
+// We'll query the daemon for routes from Alice to Bob and then
+// send payments through the route.
+func testMPP(net *lntest.NetworkHarness, t *harnessTest) {
+	ctxb := context.Background()
+
+	const chanAmt = btcutil.Amount(100000)
+	var networkChans []*lnrpc.ChannelPoint
+
+	// Open a channel with 100k satoshis between Alice and Bob with Alice
+	// being the sole funder of the channel.
+	ctxt, _ := context.WithTimeout(ctxb, channelOpenTimeout)
+	chanPointAlice := openChannelAndAssert(
+		ctxt, t, net, net.Alice, net.Bob,
+		lntest.OpenChannelParams{
+			Amt: chanAmt,
+		},
+	)
+	networkChans = append(networkChans, chanPointAlice)
+
+	aliceChanTXID, err := lnd.GetChanPointFundingTxid(chanPointAlice)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	aliceFundPoint := wire.OutPoint{
+		Hash:  *aliceChanTXID,
+		Index: chanPointAlice.OutputIndex,
+	}
+
+	// Next, we'll create Carol and establish a channel to from her to
+	// Dave.
+	carol, err := net.NewNode("Carol", nil)
+	if err != nil {
+		t.Fatalf("unable to create new nodes: %v", err)
+	}
+	defer shutdownAndAssert(net, t, carol)
+
+	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+	if err := net.ConnectNodes(ctxt, carol, net.Bob); err != nil {
+		t.Fatalf("unable to connect carol to bob: %v", err)
+	}
+	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+	err = net.SendCoins(ctxt, btcutil.SatoshiPerBitcoin, carol)
+	if err != nil {
+		t.Fatalf("unable to send coins to carol: %v", err)
+	}
+	ctxt, _ = context.WithTimeout(ctxb, channelOpenTimeout)
+	chanPointCarol := openChannelAndAssert(
+		ctxt, t, net, carol, net.Bob,
+		lntest.OpenChannelParams{
+			Amt: chanAmt,
+		},
+	)
+	networkChans = append(networkChans, chanPointCarol)
+
+	carolChanTxID, err := lnd.GetChanPointFundingTxid(chanPointCarol)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	carolFundPoint := wire.OutPoint{
+		Hash:  *carolChanTxID,
+		Index: chanPointCarol.OutputIndex,
+	}
+
+	// Wait for all nodes to have seen all channels.
+	nodes := []*lntest.HarnessNode{net.Alice, net.Bob, carol}
+	nodeNames := []string{"Alice", "Bob", "Carol"}
+	for _, chanPoint := range networkChans {
+		for i, node := range nodes {
+			txid, err := lnd.GetChanPointFundingTxid(chanPoint)
+			if err != nil {
+				t.Fatalf("unable to get txid: %v", err)
+			}
+			point := wire.OutPoint{
+				Hash:  *txid,
+				Index: chanPoint.OutputIndex,
+			}
+
+			ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+			err = node.WaitForNetworkChannelOpen(ctxt, chanPoint)
+			if err != nil {
+				t.Fatalf("%s(%d): timeout waiting for "+
+					"channel(%s) open: %v", nodeNames[i],
+					node.NodeID, point, err)
+			}
+		}
+	}
+
+	// Create 1 invoice for Bob, which expect a payment from Alice for 1k
+	// satoshis and another of 1k from Carol.
+	const numPayments = 1
+	const paymentAmtSat = 1000
+	_, rHashes, _, err := createPayReqs(
+		net.Bob, 2*paymentAmtSat, numPayments,
+	)
+	if err != nil {
+		t.Fatalf("unable to create pay reqs: %v", err)
+	}
+
+	// Query for routes to pay from Alice to Bob.
+	// We set FinalCltvDelta to 40 since by default QueryRoutes returns
+	// the last hop with a final cltv delta of 9 where as the default in
+	// htlcswitch is 40.
+	payMPP := func(node *lntest.HarnessNode) {
+		routesReq := &lnrpc.QueryRoutesRequest{
+			PubKey:         net.Bob.PubKeyStr,
+			Amt:            paymentAmtSat,
+			FinalCltvDelta: lnd.DefaultBitcoinTimeLockDelta,
+		}
+		ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+		routes, err := node.QueryRoutes(ctxt, routesReq)
+		if err != nil {
+			t.Fatalf("unable to get route from %s: %v",
+				node.Name(), err)
+		}
+
+		addr := [32]byte{1}
+		// Using the node as the source, pay to the invoice from
+		// Bob created above.
+		for _, rHash := range rHashes {
+			sendReq := &routerrpc.SendToRouteRequest{
+				PaymentHash:  rHash,
+				Route:        routes.Routes[0],
+				TotalAmtMsat: 2 * paymentAmtSat * 1000,
+				PaymentAddr:  addr[:],
+			}
+			ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+			resp, err := node.RouterClient.SendToRoute(ctxt, sendReq)
+			if err != nil {
+				t.Fatalf("unable to create payment stream for "+
+					"%s: %v", node.Name(), err)
+			}
+			if resp.Failure != nil {
+				t.Fatalf("received payment error from %s: %v",
+					node.Name(), resp.Failure)
+			}
+		}
+	}
+
+	go payMPP(net.Alice)
+	payMPP(carol)
+
+	printRespJSON := func(resp proto.Message) {
+		jsonMarshaler := &jsonpb.Marshaler{
+			EmitDefaults: true,
+			Indent:       "    ",
+		}
+
+		jsonStr, err := jsonMarshaler.MarshalToString(resp)
+		if err != nil {
+			fmt.Println("unable to decode response: ", err)
+			return
+		}
+
+		fmt.Println(jsonStr)
+	}
+
+	checkPayments := func(node *lntest.HarnessNode) {
+		req := &lnrpc.ListPaymentsRequest{}
+		ctxt, _ = context.WithTimeout(ctxt, defaultTimeout)
+		paymentsResp, err := node.ListPayments(ctxt, req)
+		if err != nil {
+			t.Fatalf("error when obtaining %s payments: %v",
+				node.Name(), err)
+		}
+		if len(paymentsResp.Payments) != numPayments {
+			t.Fatalf("incorrect number of payments, got %v, want %v",
+				len(paymentsResp.Payments), numPayments)
+		}
+
+		printRespJSON(paymentsResp)
+	}
+
+	checkPayments(net.Alice)
+	checkPayments(carol)
+
+	checkInvoices := func(node *lntest.HarnessNode) {
+		req := &lnrpc.ListInvoiceRequest{}
+		ctxt, _ = context.WithTimeout(ctxt, defaultTimeout)
+		invoicesResp, err := node.ListInvoices(ctxt, req)
+		if err != nil {
+			t.Fatalf("error when obtaining %s payments: %v",
+				node.Name(), err)
+		}
+		if len(invoicesResp.Invoices) != numPayments {
+			t.Fatalf("incorrect number of invoices, got %v, want %v",
+				len(invoicesResp.Invoices), numPayments)
+		}
+
+		printRespJSON(invoicesResp)
+	}
+
+	checkInvoices(net.Bob)
+
+	// At this point all the channels within our proto network should be
+	// shifted by 5k satoshis in the direction of Bob, the sink within the
+	// payment flow generated above. The order of asserts corresponds to
+	// increasing of time is needed to embed the HTLC in commitment
+	// transaction, in channel Alice->Bob, order is Bob and then Alice.
+	const amountPaid = int64(1000)
+	assertAmountPaid(t, "Alice(local) => Bob(remote)", net.Bob,
+		aliceFundPoint, int64(0), amountPaid)
+	assertAmountPaid(t, "Alice(local) => Bob(remote)", net.Alice,
+		aliceFundPoint, amountPaid, int64(0))
+	assertAmountPaid(t, "Carol(local) => Bob(remote)", net.Bob,
+		carolFundPoint, int64(0), amountPaid)
+	assertAmountPaid(t, "Carol(local) => Bob(remote)", carol,
+		carolFundPoint, amountPaid, int64(0))
+
+	ctxt, _ = context.WithTimeout(ctxb, channelCloseTimeout)
+	closeChannelAndAssert(ctxt, t, net, net.Alice, chanPointAlice, false)
 }
 
 // testSingleHopSendToRoute tests that payments are properly processed
@@ -14172,6 +14390,10 @@ var testsCases = []*testCase{
 	{
 		name: "single-hop send to route",
 		test: testSingleHopSendToRoute,
+	},
+	{
+		name: "mpp",
+		test: testMPP,
 	},
 	{
 		name: "multi-hop send to route",
