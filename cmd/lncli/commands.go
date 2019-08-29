@@ -21,6 +21,7 @@ import (
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/walletunlocker"
 	"github.com/urfave/cli"
 	"golang.org/x/crypto/ssh/terminal"
@@ -2474,25 +2475,37 @@ func sendToRoute(ctx *cli.Context) error {
 		jsonRoutes = string(b)
 	}
 
+	// Try to parse the provided json both in the legacy QueryRoutes format
+	// that contains a list of routes and the single route BuildRoute
+	// format.
+	var route *lnrpc.Route
 	routes := &lnrpc.QueryRoutesResponse{}
 	err = jsonpb.UnmarshalString(jsonRoutes, routes)
-	if err != nil {
-		return fmt.Errorf("unable to unmarshal json string "+
-			"from incoming array of routes: %v", err)
-	}
+	if err == nil {
+		if len(routes.Routes) == 0 {
+			return fmt.Errorf("no routes provided")
+		}
 
-	if len(routes.Routes) == 0 {
-		return fmt.Errorf("no routes provided")
-	}
+		if len(routes.Routes) != 1 {
+			return fmt.Errorf("expected a single route, but got %v",
+				len(routes.Routes))
+		}
 
-	if len(routes.Routes) != 1 {
-		return fmt.Errorf("expected a single route, but got %v",
-			len(routes.Routes))
+		route = routes.Routes[0]
+	} else {
+		routes := &routerrpc.BuildRouteResponse{}
+		err = jsonpb.UnmarshalString(jsonRoutes, routes)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal json string "+
+				"from incoming array of routes: %v", err)
+		}
+
+		route = routes.Route
 	}
 
 	req := &lnrpc.SendToRouteRequest{
 		PaymentHash: rHash,
-		Route:       routes.Routes[0],
+		Route:       route,
 	}
 
 	return sendToRouteRequest(ctx, req)
