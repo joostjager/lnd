@@ -2293,3 +2293,265 @@ func generateBandwidthHints(sourceNode *channeldb.LightningNode,
 
 	return bandwidthHints, nil
 }
+
+var (
+	errDisconnectedSequence = errors.New("disconnected channel sequence")
+
+	errUnknownPolicy = errors.New("unknown channel policy")
+
+	errIncompatiblePolicies = errors.New("incompatible channel policies")
+)
+
+// BuildRoute returns a fully specified route based on a list of channels.
+func (r *ChannelRouter) BuildRoute(source route.Vertex, amt *lnwire.MilliSatoshi,
+	addresses []interface{}, finalCltvDelta int32, useMinAmt bool) (
+	*route.Route, error) {
+
+	log.Debugf("BuildRoute called: hopsCount=%v, amt=%v, useMinAmt=%v",
+		len(addresses), amt, useMinAmt)
+
+	// In the first pass, build a complete list of route pubkeys and fetch
+	// policies for hops that are specified by channel id.
+
+	// Initialize the route pubkeys list with the source node.
+	pubkeys := []route.Vertex{source}
+
+	// The channelAddress struct contains edge information that we need to
+	// verify channel constraints in the second pass.
+	type channelAddress struct {
+		policy   *channeldb.ChannelEdgePolicy
+		capacity btcutil.Amount
+	}
+
+	chanAddrs := []*channelAddress{}
+	for i, addr := range addresses {
+		var pubkey route.Vertex
+		var channelAddr *channelAddress
+		switch a := addr.(type) {
+
+		// If a channel id is specified, fetch the channel policy and
+		// endpoints. Use the endpoints to determine the next hop
+		// pubkey.
+		case uint64:
+			info, policy1, policy2, err := r.cfg.Graph.FetchChannelEdgesByID(a)
+			if err != nil {
+				return nil, fmt.Errorf("unknown channel %v: %v", a, err)
+			}
+			from := pubkeys[i]
+			var policy *channeldb.ChannelEdgePolicy
+			switch {
+			case info.NodeKey1Bytes == from:
+				policy = policy1
+				pubkey = info.NodeKey2Bytes
+			case info.NodeKey2Bytes == from:
+				policy = policy2
+				pubkey = info.NodeKey1Bytes
+			default:
+				return nil, errDisconnectedSequence
+			}
+
+			if policy == nil {
+				return nil, errUnknownPolicy
+			}
+			channelAddr = &channelAddress{
+				policy:   policy,
+				capacity: info.Capacity,
+			}
+
+		// If a pubkey is specified, just store that pubkey. Selecting a
+		// matching channel is done in the second pass.
+		case route.Vertex:
+			pubkey = a
+		default:
+			return nil, fmt.Errorf("unknown hop address type %T",
+				addr)
+		}
+
+		pubkeys = append(pubkeys, pubkey)
+		chanAddrs = append(chanAddrs, channelAddr)
+	}
+
+	// In the second pass, select channels for hops that are specified by
+	// pubkey and verify channel policies.
+	edges := make([]*channeldb.ChannelEdgePolicy, len(addresses))
+
+	// Keep running amounts for the payment amount and the min and max for
+	// this route.
+	var (
+		amtToSend    = amt
+		minAmtToSend = lnwire.MilliSatoshi(0)
+		maxAmtToSend = lnwire.MilliSatoshi(^uint64(0))
+	)
+
+	// checkOrUpdateAmt checks or updates the running amounts while
+	// traversing the channels.
+	checkOrUpdateAmt := func(addr *channelAddress) error {
+		// If the amount to send is set, check channel constraints.
+		if amtToSend != nil {
+			// Check channel capacity.
+			capSat := lnwire.NewMSatFromSatoshis(addr.capacity)
+			if *amtToSend > capSat {
+				return fmt.Errorf("channel capacity %v "+
+					" exceeded with amt %v",
+					addr.capacity, *amtToSend)
+			}
+
+			// Check HTLC value limits.
+			if *amtToSend < addr.policy.MinHTLC ||
+				*amtToSend > addr.policy.MaxHTLC {
+
+				return errors.New("channel htlc size " +
+					"constraints violated")
+			}
+		}
+
+		// Adapt the minimum and maximum amount to send to what this
+		// channel allows.
+		//
+		// TODO(joostager): can MaxHTLC be zero?
+		if addr.policy.MinHTLC > minAmtToSend {
+			minAmtToSend = addr.policy.MinHTLC
+		}
+		if addr.policy.MaxHTLC < maxAmtToSend {
+			maxAmtToSend = addr.policy.MaxHTLC
+		}
+
+		// If we get in the situation that the minimum amount exceeds
+		// the maximum amount (enforced further down stream), we have
+		// incompatible channel policies.
+		//
+		// There is possibility with pubkey addressing that we should
+		// have selected a different channel downstream, but we don't
+		// backtrack to try to fix that.
+		if minAmtToSend > maxAmtToSend {
+			return errIncompatiblePolicies
+		}
+
+		return nil
+	}
+
+	// Traverse hops backwards to accumulate fees in the running amounts.
+	for i := len(addresses) - 1; i >= 0; i-- {
+		chanAddr := chanAddrs[i]
+		if chanAddr == nil {
+			destKey, err := btcec.ParsePubKey(
+				pubkeys[i+1][:], btcec.S256(),
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			// Iterate over candidate channels to select the channel
+			// to use for the final route.
+			fromNode := pubkeys[i]
+			toNode, err := r.cfg.Graph.FetchLightningNode(destKey)
+			if err != nil {
+				return nil, err
+			}
+
+			cb := func(tx *bbolt.Tx,
+				edgeInfo *channeldb.ChannelEdgeInfo,
+				_, inEdge *channeldb.ChannelEdgePolicy) error {
+
+				// Skip rest if found.
+				if chanAddr != nil {
+					return nil
+				}
+
+				// No unknown policy channels
+				if inEdge == nil {
+					return nil
+				}
+
+				// Before we can process the edge, we'll need to
+				// fetch the node on the _other_ end of this
+				// channel as we may later need to iterate over
+				// the incoming edges of this node if we explore
+				// it further.
+				chanFromNode, err := edgeInfo.FetchOtherNode(
+					tx, toNode.PubKeyBytes[:],
+				)
+				if err != nil {
+					return err
+				}
+
+				// Continue searching if this channel doesn't
+				// connect with the previous hop.
+				if chanFromNode.PubKeyBytes != fromNode {
+					return nil
+				}
+
+				// Validate whether this channel's policy is
+				// satisfied.
+				ca := &channelAddress{
+					policy:   inEdge,
+					capacity: edgeInfo.Capacity,
+				}
+
+				err = checkOrUpdateAmt(ca)
+				if err == nil {
+					chanAddr = ca
+				} else {
+					log.Debugf("Skipping chan %v: %v",
+						inEdge.ChannelID, err)
+				}
+
+				return nil
+			}
+
+			if err := toNode.ForEachChannel(nil, cb); err != nil {
+				return nil, err
+			}
+
+			if chanAddr == nil {
+				return nil, errors.New("no channels available")
+			}
+		} else {
+			err := checkOrUpdateAmt(chanAddr)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		edges[i] = chanAddr.policy
+
+		// Add fees to the running amounts. Skip the source node fees as
+		// those do not need to be paid.
+		if i > 0 {
+			if amtToSend != nil {
+				fee := chanAddr.policy.ComputeFee(*amtToSend)
+				*amtToSend += fee
+			}
+			minAmtToSend += chanAddr.policy.ComputeFee(minAmtToSend)
+			maxAmtToSend += chanAddr.policy.ComputeFee(maxAmtToSend)
+		}
+
+	}
+
+	_, height, err := r.cfg.Chain.GetBestBlock()
+	if err != nil {
+		return nil, err
+	}
+
+	// If no amount is specified, use the minimum routable amount.
+	var receiverAmt lnwire.MilliSatoshi
+	if !useMinAmt {
+		receiverAmt = *amt
+	} else {
+		// We've calculated the minimum amount for the htlc that the
+		// source node hands out. The newRoute call below expects the
+		// amount that must reach the receiver after subtraction of fees
+		// along the way. Iterate over all edges to calculate the
+		// receiver amount.
+		receiverAmt = minAmtToSend
+		for _, edge := range edges[1:] {
+			receiverAmt -= edge.ComputeFeeFromIncoming(receiverAmt)
+		}
+	}
+
+	// Build and return the final route.
+	return newRoute(
+		receiverAmt, source, edges, uint32(height),
+		uint16(finalCltvDelta), nil,
+	)
+}

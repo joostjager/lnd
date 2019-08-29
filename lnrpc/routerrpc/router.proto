@@ -377,6 +377,73 @@ message PairHistory {
     bool last_attempt_successful = 6 [json_name = "last_attempt_successful"];
 }
 
+
+/// HopAddress contains either a channel or a pubkey to address the next hop.
+message HopAddress {
+    oneof type {
+        /// Short channel id.
+        uint64 channel = 1;
+
+        /// 33-byte node pubkey.
+        bytes pubkey = 2;
+    }
+}
+
+/// Defines the various modes BuildRoute can operate in.
+enum BuildRouteMode {
+    /**
+    Build the route for the given amount.
+    */
+    AMT = 0;
+
+    /**
+    Build the route for the minimum amount that the route can carry. Ignore the
+    amt parameter
+    */
+    MIN_AMT = 1;
+
+    /**
+    Select and verify channels for the given amount, but build the final route
+    for the minimum amount that it can carry.
+    */
+    SUBSTITUTE_MIN_AMT = 2;
+}
+
+message BuildRouteRequest {
+    /**
+    The amount to send expressed in satoshis
+    */
+    int64 amt_msat = 1;
+
+    /**
+    CLTV delta from the current height that should be used for the timelock
+    of the final hop
+    */
+    int32 final_cltv_delta = 2;
+
+    /**
+    The source node pubkey. If left empty, self is used.
+    */
+    bytes source = 3;
+
+    /**
+    A list of hops that defines the route.
+    */
+    repeated HopAddress hops = 4;
+
+    /**
+    Mode of operation for build route. See BuildRouteMode enum.
+    */
+    BuildRouteMode mode = 5;
+}
+
+message BuildRouteResponse {
+    /**
+    Fully specified route that can be used to execute the payment.
+    */
+    lnrpc.Route route = 1;
+}
+
 service Router {
     /**
     SendPayment attempts to route a payment described by the passed
@@ -416,4 +483,11 @@ service Router {
     It is a development feature.
     */
     rpc QueryMissionControl(QueryMissionControlRequest) returns (QueryMissionControlResponse);
+
+    /**
+    BuildRoute builds a fully specified route based on a list of hop addresses.
+    It retrieves the relevant channel policies from the graph in order to
+    calculate the correct fees and time locks.
+    */
+    rpc BuildRoute(BuildRouteRequest) returns (BuildRouteResponse);
 }

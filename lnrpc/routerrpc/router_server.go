@@ -72,6 +72,10 @@ var (
 			Entity: "offchain",
 			Action: "write",
 		}},
+		"/routerrpc.Router/BuildRoute": {{
+			Entity: "offchain",
+			Action: "read",
+		}},
 	}
 
 	// DefaultRouterMacFilename is the default name of the router macaroon
@@ -610,4 +614,73 @@ func marshallFailureReason(reason channeldb.FailureReason) (
 	}
 
 	return 0, errors.New("unknown failure reason")
+}
+
+// BuildRoute builds a route from a list of hop addresses.
+func (s *Server) BuildRoute(ctx context.Context,
+	req *BuildRouteRequest) (*BuildRouteResponse, error) {
+
+	// Unmarshall hop list.
+	hops := make([]interface{}, len(req.Hops))
+	for i, hop := range req.Hops {
+		var addr interface{}
+		switch h := hop.Type.(type) {
+		case *HopAddress_Channel:
+			addr = h.Channel
+		case *HopAddress_Pubkey:
+			var err error
+			addr, err = route.NewVertexFromBytes(h.Pubkey)
+			if err != nil {
+				return nil, err
+			}
+		}
+		hops[i] = addr
+	}
+
+	// Set source node. If no source is given, default to self.
+	source := s.cfg.RouterBackend.SelfNode
+	if req.Source != nil {
+		var err error
+		source, err = route.NewVertexFromBytes(req.Source)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Prepare BuildRoute parameters based on the specified mode of
+	// operation.
+	var (
+		amt       *lnwire.MilliSatoshi
+		useMinAmt bool
+		rpcAmt    = lnwire.MilliSatoshi(req.AmtMsat)
+	)
+
+	switch req.Mode {
+	case BuildRouteMode_AMT:
+		amt = &rpcAmt
+	case BuildRouteMode_MIN_AMT:
+		useMinAmt = true
+	case BuildRouteMode_SUBSTITUTE_MIN_AMT:
+		amt = &rpcAmt
+		useMinAmt = true
+	}
+
+	// Build the route and return it to the caller.
+	route, err := s.cfg.Router.BuildRoute(
+		source, amt, hops, int32(req.FinalCltvDelta), useMinAmt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rpcRoute, err := s.cfg.RouterBackend.MarshallRoute(route)
+	if err != nil {
+		return nil, err
+	}
+
+	routeResp := &BuildRouteResponse{
+		Route: rpcRoute,
+	}
+
+	return routeResp, nil
 }

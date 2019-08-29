@@ -3335,3 +3335,108 @@ func TestSendToRouteStructuredError(t *testing.T) {
 		t.Fatalf("initPayment not called")
 	}
 }
+
+// TestBuildRoute tests whether correct routes are built.
+func TestBuildRoute(t *testing.T) {
+	// Setup a three node network.
+	chanCapSat := btcutil.Amount(100000)
+	testChannels := []*testChannel{
+		symmetricTestChannel("a", "b", chanCapSat, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 20000,
+			MinHTLC: lnwire.NewMSatFromSatoshis(5),
+			MaxHTLC: lnwire.NewMSatFromSatoshis(chanCapSat),
+		}, 1),
+		symmetricTestChannel("a", "b", chanCapSat, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 80000,
+			MinHTLC: lnwire.NewMSatFromSatoshis(5),
+			MaxHTLC: lnwire.NewMSatFromSatoshis(10),
+		}, 5),
+		symmetricTestChannel("b", "c", chanCapSat, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 50000,
+			MinHTLC: lnwire.NewMSatFromSatoshis(20),
+			MaxHTLC: lnwire.NewMSatFromSatoshis(100),
+		}, 2),
+		symmetricTestChannel("b", "c", chanCapSat, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 100000,
+			MinHTLC: lnwire.NewMSatFromSatoshis(20),
+			MaxHTLC: lnwire.NewMSatFromSatoshis(chanCapSat),
+		}, 4),
+		symmetricTestChannel("c", "d", chanCapSat, &testChannelPolicy{
+			Expiry:  144,
+			FeeRate: 1000,
+			MinHTLC: lnwire.NewMSatFromSatoshis(10),
+			MaxHTLC: lnwire.NewMSatFromSatoshis(chanCapSat),
+		}, 3),
+	}
+
+	testGraph, err := createTestGraphFromChannels(testChannels, "a")
+	if err != nil {
+		t.Fatalf("unable to create graph: %v", err)
+	}
+	defer testGraph.cleanUp()
+
+	const startingBlockHeight = 101
+
+	ctx, cleanUp, err := createTestCtxFromGraphInstance(
+		startingBlockHeight, testGraph,
+	)
+	if err != nil {
+		t.Fatalf("unable to create router: %v", err)
+	}
+	defer cleanUp()
+
+	// Create hop list containing a channel id and a pubkey.
+	hops := []interface{}{uint64(1), ctx.aliases["c"], uint64(3)}
+	amt := lnwire.NewMSatFromSatoshis(100)
+
+	// Build the route for the given amount.
+	rt, err := ctx.router.BuildRoute(
+		ctx.aliases["a"], &amt, hops, 40, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rt.Hops) != 3 {
+		t.Fatalf("expected two hop route")
+	}
+
+	// Build the route for the minimum amount, but validate channels for the
+	// given amt. This should force the route to use the higher fee channel
+	// 4.
+	rt, err = ctx.router.BuildRoute(
+		ctx.aliases["a"], &amt, hops, 40, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.TotalAmount != 22000 {
+		t.Fatalf("unexpected total amount %v", rt.TotalAmount)
+	}
+
+	// Build the route for the minimum amount. This should pick channel 3.
+	rt, err = ctx.router.BuildRoute(
+		ctx.aliases["a"], nil, hops, 40, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.TotalAmount != 21000 {
+		t.Fatalf("unexpected total amount %v", rt.TotalAmount)
+	}
+
+	// Test a route that contains incompatible channel htlc constraints.
+	// There is no amount that can pass through both channel 5 and 4.
+	hops = []interface{}{uint64(5), uint64(4)}
+	rt, err = ctx.router.BuildRoute(
+		ctx.aliases["a"], nil, hops, 40, true,
+	)
+	if err != errIncompatiblePolicies {
+		t.Fatalf("expected incompatible policies error, but got %v",
+			err)
+	}
+}
