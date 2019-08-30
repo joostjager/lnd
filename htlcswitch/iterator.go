@@ -6,7 +6,6 @@ import (
 	"io"
 
 	"github.com/btcsuite/btcd/btcec"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/htlcswitch/hop"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -18,12 +17,13 @@ import (
 // interpret the forwarding information encoded within the HTLC packet, and hop
 // to encode the forwarding information for the _next_ hop.
 type HopIterator interface {
-	// ForwardingInstructions returns the set of fields that detail exactly
-	// _how_ this hop should forward the HTLC to the next hop.
-	// Additionally, the information encoded within the returned
-	// ForwardingInfo is to be used by each hop to authenticate the
-	// information given to it by the prior hop.
-	ForwardingInstructions() (hop.ForwardingInfo, error)
+	// HopPayload returns the set of fields that detail exactly _how_ this
+	// hop should forward the HTLC to the next hop.  Additionally, the
+	// information encoded within the returned ForwardingInfo is to be used
+	// by each hop to authenticate the information given to it by the prior
+	// hop. The payload will also contain any additional TLV fields provided
+	// by the sender.
+	HopPayload() (*hop.Payload, error)
 
 	// ExtraOnionBlob returns the additional EOB data (if available).
 	ExtraOnionBlob() []byte
@@ -74,41 +74,31 @@ func (r *sphinxHopIterator) EncodeNextHop(w io.Writer) error {
 	return r.processedPacket.NextPacket.Encode(w)
 }
 
-// ForwardingInstructions returns the set of fields that detail exactly _how_
-// this hop should forward the HTLC to the next hop.  Additionally, the
-// information encoded within the returned ForwardingInfo is to be used by each
-// hop to authenticate the information given to it by the prior hop.
+// HopPayload returns the set of fields that detail exactly _how_ this hop
+// should forward the HTLC to the next hop.  Additionally, the information
+// encoded within the returned ForwardingInfo is to be used by each hop to
+// authenticate the information given to it by the prior hop. The payload will
+// also contain any additional TLV fields provided by the sender.
 //
 // NOTE: Part of the HopIterator interface.
-func (r *sphinxHopIterator) ForwardingInstructions() (
-	hop.ForwardingInfo, error) {
-
+func (r *sphinxHopIterator) HopPayload() (*hop.Payload, error) {
 	switch r.processedPacket.Payload.Type {
+
 	// If this is the legacy payload, then we'll extract the information
 	// directly from the pre-populated ForwardingInstructions field.
 	case sphinx.PayloadLegacy:
 		fwdInst := r.processedPacket.ForwardingInstructions
-		p := hop.NewLegacyPayload(fwdInst)
-
-		return p.ForwardingInfo(), nil
+		return hop.NewLegacyPayload(fwdInst), nil
 
 	// Otherwise, if this is the TLV payload, then we'll make a new stream
 	// to decode only what we need to make routing decisions.
 	case sphinx.PayloadTLV:
-		p, err := hop.NewPayloadFromReader(bytes.NewReader(
+		return hop.NewPayloadFromReader(bytes.NewReader(
 			r.processedPacket.Payload.Payload,
 		))
-		if err != nil {
-			return p.ForwardingInfo(), err
-		}
-
-		log.Infof("mpp: %v", spew.Sdump(p.MultiPath()))
-
-		return p.ForwardingInfo(), nil
 
 	default:
-		return hop.ForwardingInfo{}, fmt.Errorf("unknown "+
-			"sphinx payload type: %v",
+		return nil, fmt.Errorf("unknown sphinx payload type: %v",
 			r.processedPacket.Payload.Type)
 	}
 }
