@@ -426,8 +426,8 @@ func (l *channelLink) Start() error {
 	// off point, since all indexes below that are committed. This action
 	// is only performed if the link's final short channel ID has been
 	// assigned, otherwise we would try to trim the htlcs belonging to the
-	// all-zero, sourceHop ID.
-	if l.ShortChanID() != sourceHop {
+	// all-zero, hop.Source ID.
+	if l.ShortChanID() != hop.Source {
 		localHtlcIndex, err := l.channel.NextLocalHtlcIndex()
 		if err != nil {
 			return fmt.Errorf("unable to retrieve next local "+
@@ -525,7 +525,7 @@ func (l *channelLink) WaitForShutdown() {
 // the all-zero source ID, meaning that the channel has had its ID finalized.
 func (l *channelLink) EligibleToForward() bool {
 	return l.channel.RemoteNextRevocation() != nil &&
-		l.ShortChanID() != sourceHop
+		l.ShortChanID() != hop.Source
 }
 
 // sampleNetworkFee samples the current fee rate on the network to get into the
@@ -951,7 +951,7 @@ func (l *channelLink) htlcManager() {
 	// only attempt to resolve packages if our short chan id indicates that
 	// the channel is not pending, otherwise we should have no htlcs to
 	// reforward.
-	if l.ShortChanID() != sourceHop {
+	if l.ShortChanID() != hop.Source {
 		if err := l.resolveFwdPkgs(); err != nil {
 			l.fail(LinkFailureError{code: ErrInternalError},
 				"unable to resolve fwd pkgs: %v", err)
@@ -2035,7 +2035,7 @@ func (l *channelLink) UpdateShortChanID() (lnwire.ShortChannelID, error) {
 	if err != nil {
 		l.errorf("unable to refresh short_chan_id for chan_id=%v: %v",
 			chanID, err)
-		return sourceHop, err
+		return hop.Source, err
 	}
 
 	sid := l.channel.ShortChanID()
@@ -2634,7 +2634,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 		}
 
 		switch fwdInfo.NextHop {
-		case exitHop:
+		case hop.Exit:
 			updated, err := l.processExitHop(
 				pd, obfuscator, fwdInfo, heightNow,
 				chanIterator.ExtraOnionBlob(),
