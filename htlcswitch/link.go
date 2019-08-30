@@ -2638,8 +2638,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 		switch fwdInfo.NextHop {
 		case hop.Exit:
 			updated, err := l.processExitHop(
-				pd, obfuscator, fwdInfo, heightNow,
-				chanIterator.ExtraOnionBlob(),
+				pd, obfuscator, fwdInfo, heightNow, pld,
 			)
 			if err != nil {
 				l.fail(LinkFailureError{code: ErrInternalError},
@@ -2812,7 +2811,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 // returns a boolean indicating whether the commitment tx needs an update.
 func (l *channelLink) processExitHop(pd *lnwallet.PaymentDescriptor,
 	obfuscator ErrorEncrypter, fwdInfo hop.ForwardingInfo,
-	heightNow uint32, eob []byte) (bool, error) {
+	heightNow uint32, payload *hop.Payload) (bool, error) {
 
 	// If hodl.ExitSettle is requested, we will not validate the final hop's
 	// ADD, nor will we settle the corresponding invoice or respond with the
@@ -2863,7 +2862,7 @@ func (l *channelLink) processExitHop(pd *lnwallet.PaymentDescriptor,
 
 	event, err := l.cfg.Registry.NotifyExitHopHtlc(
 		invoiceHash, pd.Amount, pd.Timeout, int32(heightNow),
-		circuitKey, l.hodlQueue.ChanIn(), eob,
+		circuitKey, l.hodlQueue.ChanIn(), payload,
 	)
 
 	switch err {
