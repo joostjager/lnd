@@ -25,9 +25,6 @@ type HopIterator interface {
 	// by the sender.
 	HopPayload() (*hop.Payload, error)
 
-	// ExtraOnionBlob returns the additional EOB data (if available).
-	ExtraOnionBlob() []byte
-
 	// EncodeNextHop encodes the onion packet destined for the next hop
 	// into the passed io.Writer.
 	EncodeNextHop(w io.Writer) error
@@ -101,15 +98,6 @@ func (r *sphinxHopIterator) HopPayload() (*hop.Payload, error) {
 		return nil, fmt.Errorf("unknown sphinx payload type: %v",
 			r.processedPacket.Payload.Type)
 	}
-}
-
-// ExtraOnionBlob returns the additional EOB data (if available).
-func (r *sphinxHopIterator) ExtraOnionBlob() []byte {
-	if r.processedPacket.Payload.Type == sphinx.PayloadLegacy {
-		return nil
-	}
-
-	return r.processedPacket.Payload.Payload
 }
 
 // ExtractErrorEncrypter decodes and returns the ErrorEncrypter for this hop,
