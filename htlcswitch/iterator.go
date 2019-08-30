@@ -2,7 +2,6 @@ package htlcswitch
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -11,8 +10,6 @@ import (
 	"github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/htlcswitch/hop"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/record"
-	"github.com/lightningnetwork/lnd/tlv"
 )
 
 // HopIterator is an interface that abstracts away the routing information
@@ -86,71 +83,34 @@ func (r *sphinxHopIterator) EncodeNextHop(w io.Writer) error {
 func (r *sphinxHopIterator) ForwardingInstructions() (
 	hop.ForwardingInfo, error) {
 
-	var (
-		nextHop lnwire.ShortChannelID
-		amt     uint64
-		cltv    uint32
-		mpp     *record.MPP
-	)
-
 	switch r.processedPacket.Payload.Type {
 	// If this is the legacy payload, then we'll extract the information
 	// directly from the pre-populated ForwardingInstructions field.
 	case sphinx.PayloadLegacy:
 		fwdInst := r.processedPacket.ForwardingInstructions
+		p := hop.NewLegacyPayload(fwdInst)
 
-		switch r.processedPacket.Action {
-		case sphinx.ExitNode:
-			nextHop = hop.Exit
-		case sphinx.MoreHops:
-			s := binary.BigEndian.Uint64(fwdInst.NextAddress[:])
-			nextHop = lnwire.NewShortChanIDFromInt(s)
-		}
-
-		amt = fwdInst.ForwardAmount
-		cltv = fwdInst.OutgoingCltv
+		return p.ForwardingInfo(), nil
 
 	// Otherwise, if this is the TLV payload, then we'll make a new stream
 	// to decode only what we need to make routing decisions.
 	case sphinx.PayloadTLV:
-		var cid uint64
-
-		mpp = new(record.MPP)
-
-		tlvStream, err := tlv.NewStream(
-			record.NewAmtToFwdRecord(&amt),
-			record.NewLockTimeRecord(&cltv),
-			record.NewNextHopIDRecord(&cid),
-			mpp.TLV(),
-		)
-		if err != nil {
-			return hop.ForwardingInfo{}, err
-		}
-
-		err = tlvStream.Decode(bytes.NewReader(
+		p, err := hop.NewPayloadFromReader(bytes.NewReader(
 			r.processedPacket.Payload.Payload,
 		))
 		if err != nil {
-			return hop.ForwardingInfo{}, err
+			return p.ForwardingInfo(), err
 		}
 
-		nextHop = lnwire.NewShortChanIDFromInt(cid)
+		log.Infof("mpp: %v", spew.Sdump(p.MultiPath()))
 
-		log.Infof("mpp: %v", spew.Sdump(mpp))
+		return p.ForwardingInfo(), nil
 
 	default:
 		return hop.ForwardingInfo{}, fmt.Errorf("unknown "+
 			"sphinx payload type: %v",
 			r.processedPacket.Payload.Type)
 	}
-
-	return hop.ForwardingInfo{
-		Network:         hop.BitcoinNetwork,
-		NextHop:         nextHop,
-		AmountToForward: lnwire.MilliSatoshi(amt),
-		OutgoingCTLV:    cltv,
-		MPP:             mpp,
-	}, nil
 }
 
 // ExtraOnionBlob returns the additional EOB data (if available).
