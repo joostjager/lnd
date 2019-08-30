@@ -43,5 +43,8 @@ func NewLockTimeRecord(lockTime *uint32) tlv.Record {
 // NewNextHopIDRecord creates a tlv.Record that encodes the short_channel_id
 // (type 6) for an onion payload.
 func NewNextHopIDRecord(cid *uint64) tlv.Record {
-	return tlv.MakePrimitiveRecord(NextHopOnionType, cid)
+	return tlv.MakeDynamicRecord(
+		NextHopOnionType, cid, nil,
+		tlv.ETUint64, tlv.DTUint64,
+	)
 }
