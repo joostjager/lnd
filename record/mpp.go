@@ -1,6 +1,7 @@
 package record
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/lightningnetwork/lnd/tlv"
@@ -40,4 +41,8 @@ func MPPDecoder(r io.Reader, val interface{}, buf *[8]byte, l uint64) error {
 
 func (r *MPP) TLV() tlv.Record {
 	return tlv.MakeStaticRecord(10, r, 40, MPPEncoder, MPPDecoder)
+}
+
+func (r *MPP) String() string {
+	return fmt.Sprintf("total=%v, addr=%x", r.TotalMsat, r.PaymentAddr)
 }
