@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/lightningnetwork/lnd/lntypes"
+
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -2414,6 +2416,10 @@ var sendToRouteCommand = cli.Command{
 			Usage: "a json array string in the format of the response " +
 				"of queryroutes that denotes which routes to use",
 		},
+		cli.Int64Flag{
+			Name:  "totalamt",
+			Usage: "total satoshis for mpp payments",
+		},
 	},
 	Action: sendToRoute,
 }
@@ -2492,9 +2498,13 @@ func sendToRoute(ctx *cli.Context) error {
 			len(routes.Routes))
 	}
 
+	paymentAddr := lntypes.Hash{1, 2, 3}
+
 	req := &routerrpc.SendToRouteRequest{
-		PaymentHash: rHash,
-		Route:       routes.Routes[0],
+		PaymentHash:  rHash,
+		Route:        routes.Routes[0],
+		TotalAmtMsat: ctx.Int64("totalamt") * 1000,
+		PaymentAddr:  paymentAddr[:],
 	}
 
 	return sendToRouteRequest(ctx, req)
