@@ -82,6 +82,7 @@ func CreateRPCInvoice(invoice *channeldb.Invoice,
 			ExpiryHeight: int32(htlc.Expiry),
 			AmtMsat:      uint64(htlc.Amt),
 			State:        state,
+			TotalAmtMsat: uint64(htlc.TotalAmt),
 		}
 
 		// Only report resolved times if htlc is resolved.

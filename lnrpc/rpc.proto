@@ -2153,6 +2153,9 @@ message InvoiceHTLC {
 
     /// Current state the htlc is in.
     InvoiceHTLCState state = 8 [json_name = "state"];
+
+    /// The total amount of the mpp payment in msat.
+    uint64 total_amt_msat = 9 [json_name = "total_amt_msat"];
 }
 
 message AddInvoiceResponse {

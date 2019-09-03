@@ -2,6 +2,7 @@ package invoices
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -438,6 +439,9 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 	i.Lock()
 	defer i.Unlock()
 
+	mpp := payload.MultiPath()
+	log.Debugf("Invoice(%x): mpp struct=%v", rHash[:], mpp)
+
 	debugLog := func(s string) {
 		log.Debugf("Invoice(%x): %v, amt=%v, expiry=%v, circuit=%v",
 			rHash[:], s, amtPaid, expiry, circuitKey)
@@ -469,11 +473,73 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 			return nil, errNoUpdate
 		}
 
-		// If the invoice is already canceled, there is no further
-		// checking to do.
-		if inv.Terms.State == channeldb.ContractCanceled {
-			debugLog("invoice already canceled")
+		// Only accept payments to open invoices.
+		if inv.Terms.State != channeldb.ContractOpen {
+			debugLog(fmt.Sprintf(
+				"invoice in state %v and no longer open",
+				inv.Terms.State))
 			return nil, errNoUpdate
+		}
+
+		// Start building the accept descriptor.
+		acceptDesc := &channeldb.HtlcAcceptDesc{
+			Amt:          amtPaid,
+			Expiry:       expiry,
+			AcceptHeight: currentHeight,
+		}
+
+		// If an invoice amount is specified and this is not an mpp,
+		// check that the exact amount is paid.
+		var canSettle bool
+		if mpp == nil {
+			if inv.Terms.Value > 0 && amtPaid != inv.Terms.Value {
+				debugLog("amount incorrect and no mpp")
+				return nil, errNoUpdate
+			}
+			canSettle = true
+		} else {
+			// Check whether total amt matches other htlcs in the
+			// set.
+			for _, htlc := range inv.Htlcs {
+				// Only consider accepted mpp htlcs.
+				if htlc.State != channeldb.HtlcStateAccepted {
+					continue
+				}
+
+				if htlc.TotalAmt == 0 {
+					continue
+				}
+
+				if mpp.TotalMsat != uint64(htlc.TotalAmt) {
+					debugLog("htlc total amt doesn't " +
+						"match set total")
+					return nil, errNoUpdate
+				}
+			}
+
+			// If there is a set invoice amount, check that the
+			// total amt of the htlc set matches it and that a
+			// partial set doesn't exceed it.
+			if inv.Terms.Value > 0 {
+				if mpp.TotalMsat != uint64(inv.Terms.Value) {
+					debugLog("set total doesn't match " +
+						"invoice")
+					return nil, errNoUpdate
+				}
+
+				if inv.AmtPaid+amtPaid > inv.Terms.Value {
+					debugLog("mpp is overpaying invoice")
+					return nil, errNoUpdate
+				}
+			} else {
+				if uint64(inv.AmtPaid+amtPaid) > mpp.TotalMsat {
+					debugLog("mpp is overpaying set total")
+					return nil, errNoUpdate
+				}
+			}
+
+			canSettle = uint64(inv.AmtPaid+amtPaid) == mpp.TotalMsat
+			acceptDesc.TotalAmt = lnwire.MilliSatoshi(mpp.TotalMsat)
 		}
 
 		// The invoice is still open. Check the expiry.
@@ -489,38 +555,18 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 
 		// Record HTLC in the invoice database.
 		newHtlcs := map[channeldb.CircuitKey]*channeldb.HtlcAcceptDesc{
-			circuitKey: {
-				Amt:          amtPaid,
-				Expiry:       expiry,
-				AcceptHeight: currentHeight,
-			},
+			circuitKey: acceptDesc,
 		}
 
 		update := channeldb.InvoiceUpdateDesc{
 			Htlcs: newHtlcs,
 		}
 
-		// Don't update invoice state if we are accepting a duplicate
-		// payment. We do accept or settle the HTLC.
-		switch inv.Terms.State {
-		case channeldb.ContractAccepted:
-			debugLog("accepting duplicate payment to accepted invoice")
-			update.State = channeldb.ContractAccepted
+		// If the invoice cannot be settled yet, only record the htlc.
+		if !canSettle {
+			debugLog("partial payment accepted")
+			update.State = channeldb.ContractOpen
 			return &update, nil
-
-		case channeldb.ContractSettled:
-			debugLog("accepting duplicate payment to settled invoice")
-			update.State = channeldb.ContractSettled
-			return &update, nil
-
-		case channeldb.ContractOpen:
-			// If an invoice amount is specified, check whether enough is
-			// paid.
-			if inv.Terms.Value > 0 && inv.AmtPaid+amtPaid < inv.Terms.Value {
-				debugLog("partial payment accepted")
-				update.State = channeldb.ContractOpen
-				return &update, nil
-			}
 		}
 
 		// Check to see if we can settle or this is an hold invoice and

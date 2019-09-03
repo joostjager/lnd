@@ -243,6 +243,9 @@ type InvoiceHTLC struct {
 	// Amt is the amount that is carried by this htlc.
 	Amt lnwire.MilliSatoshi
 
+	// TotalAmt is a field for mpp that indicates the expected total amount.
+	TotalAmt lnwire.MilliSatoshi
+
 	// AcceptHeight is the block height at which the invoice registry
 	// decided to accept this htlc as a payment to the invoice. At this
 	// height, the invoice cltv delay must have been met.
@@ -272,6 +275,9 @@ type HtlcAcceptDesc struct {
 
 	// Amt is the amount that is carried by this htlc.
 	Amt lnwire.MilliSatoshi
+
+	// TotalAmt is a field for mpp that indicates the expected total amount.
+	TotalAmt lnwire.MilliSatoshi
 
 	// Expiry is the expiry height of this htlc.
 	Expiry uint32
@@ -955,6 +961,7 @@ func serializeHtlcs(w io.Writer, htlcs map[CircuitKey]*InvoiceHTLC) error {
 		// Encode the htlc in a tlv stream.
 		chanID := key.ChanID.ToUint64()
 		amt := uint64(htlc.Amt)
+		totalAmt := uint64(htlc.TotalAmt)
 		acceptTime := uint64(htlc.AcceptTime.UnixNano())
 		resolveTime := uint64(htlc.ResolveTime.UnixNano())
 		state := uint8(htlc.State)
@@ -968,6 +975,7 @@ func serializeHtlcs(w io.Writer, htlcs map[CircuitKey]*InvoiceHTLC) error {
 			tlv.MakePrimitiveRecord(6, &resolveTime),
 			tlv.MakePrimitiveRecord(7, &htlc.Expiry),
 			tlv.MakePrimitiveRecord(8, &state),
+			tlv.MakePrimitiveRecord(9, &totalAmt),
 		)
 		if err != nil {
 			return err
@@ -1109,7 +1117,7 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 			chanID                  uint64
 			state                   uint8
 			acceptTime, resolveTime uint64
-			amt                     uint64
+			amt, totalAmt           uint64
 		)
 		tlvStream, err := tlv.NewStream(
 			tlv.MakePrimitiveRecord(1, &chanID),
@@ -1120,7 +1128,9 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 			tlv.MakePrimitiveRecord(6, &resolveTime),
 			tlv.MakePrimitiveRecord(7, &htlc.Expiry),
 			tlv.MakePrimitiveRecord(8, &state),
+			tlv.MakePrimitiveRecord(9, &totalAmt),
 		)
+
 		if err != nil {
 			return nil, err
 		}
@@ -1134,6 +1144,7 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 		htlc.ResolveTime = time.Unix(0, int64(resolveTime))
 		htlc.State = HtlcState(state)
 		htlc.Amt = lnwire.MilliSatoshi(amt)
+		htlc.TotalAmt = lnwire.MilliSatoshi(totalAmt)
 
 		htlcs[key] = &htlc
 	}
@@ -1227,6 +1238,7 @@ func (d *DB) updateInvoice(hash lntypes.Hash, invoices, settleIndex *bbolt.Bucke
 		}
 		htlc = &InvoiceHTLC{
 			Amt:          htlcUpdate.Amt,
+			TotalAmt:     htlcUpdate.TotalAmt,
 			Expiry:       htlcUpdate.Expiry,
 			AcceptHeight: uint32(htlcUpdate.AcceptHeight),
 			AcceptTime:   now,
