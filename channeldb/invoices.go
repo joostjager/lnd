@@ -12,6 +12,7 @@ import (
 	"github.com/coreos/bbolt"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/lightningnetwork/lnd/tlv"
 )
 
 var (
@@ -950,17 +951,41 @@ func serializeInvoice(w io.Writer, i *Invoice) error {
 // serializeHtlcs serializes a map containing circuit keys and invoice htlcs to
 // a writer.
 func serializeHtlcs(w io.Writer, htlcs map[CircuitKey]*InvoiceHTLC) error {
-	if err := binary.Write(w, byteOrder, int64(len(htlcs))); err != nil {
-		return err
-	}
 	for key, htlc := range htlcs {
-		err := WriteElements(
-			w, key.ChanID.ToUint64(), key.HtlcID, htlc.Amt,
-			htlc.AcceptHeight, htlc.AcceptTime.UnixNano(),
-			htlc.ResolveTime.UnixNano(),
-			htlc.Expiry, uint8(htlc.State),
+		// Encode the htlc in a tlv stream.
+		chanID := key.ChanID.ToUint64()
+		amt := uint64(htlc.Amt)
+		acceptTime := uint64(htlc.AcceptTime.UnixNano())
+		resolveTime := uint64(htlc.ResolveTime.UnixNano())
+		state := uint8(htlc.State)
+
+		tlvStream, err := tlv.NewStream(
+			tlv.MakePrimitiveRecord(1, &chanID),
+			tlv.MakePrimitiveRecord(2, &key.HtlcID),
+			tlv.MakePrimitiveRecord(3, &amt),
+			tlv.MakePrimitiveRecord(4, &htlc.AcceptHeight),
+			tlv.MakePrimitiveRecord(5, &acceptTime),
+			tlv.MakePrimitiveRecord(6, &resolveTime),
+			tlv.MakePrimitiveRecord(7, &htlc.Expiry),
+			tlv.MakePrimitiveRecord(8, &state),
 		)
 		if err != nil {
+			return err
+		}
+
+		var b bytes.Buffer
+		if err := tlvStream.Encode(&b); err != nil {
+			return err
+		}
+
+		// Write the length of the tlv stream followed by the stream
+		// bytes.
+		err = binary.Write(w, byteOrder, uint64(b.Len()))
+		if err != nil {
+			return err
+		}
+
+		if _, err := w.Write(b.Bytes()); err != nil {
 			return err
 		}
 	}
@@ -1058,32 +1083,57 @@ func deserializeInvoice(r io.Reader) (Invoice, error) {
 // deserializeHtlcs reads a list of invoice htlcs from a reader and returns it
 // as a map.
 func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
-	var htlcCount int64
-	if err := binary.Read(r, byteOrder, &htlcCount); err != nil {
-		return nil, err
-	}
-	htlcs := make(map[CircuitKey]*InvoiceHTLC, int(htlcCount))
-	for i := 0; i < int(htlcCount); i++ {
+	htlcs := make(map[CircuitKey]*InvoiceHTLC, 0)
+
+	for {
+		// Read the length of the tlv stream for this htlc.
+		var streamLen uint64
+		if err := binary.Read(r, byteOrder, &streamLen); err != nil {
+			if err == io.EOF {
+				break
+			}
+
+			return nil, err
+		}
+
+		streamBytes := make([]byte, streamLen)
+		if _, err := r.Read(streamBytes); err != nil {
+			return nil, err
+		}
+		streamReader := bytes.NewReader(streamBytes)
+
+		// Decode the contents into the htlc fields.
 		var (
 			htlc                    InvoiceHTLC
 			key                     CircuitKey
 			chanID                  uint64
 			state                   uint8
-			acceptTime, resolveTime int64
+			acceptTime, resolveTime uint64
+			amt                     uint64
 		)
-		err := ReadElements(
-			r, &chanID, &key.HtlcID, &htlc.Amt,
-			&htlc.AcceptHeight, &acceptTime,
-			&resolveTime, &htlc.Expiry, &state,
+		tlvStream, err := tlv.NewStream(
+			tlv.MakePrimitiveRecord(1, &chanID),
+			tlv.MakePrimitiveRecord(2, &key.HtlcID),
+			tlv.MakePrimitiveRecord(3, &amt),
+			tlv.MakePrimitiveRecord(4, &htlc.AcceptHeight),
+			tlv.MakePrimitiveRecord(5, &acceptTime),
+			tlv.MakePrimitiveRecord(6, &resolveTime),
+			tlv.MakePrimitiveRecord(7, &htlc.Expiry),
+			tlv.MakePrimitiveRecord(8, &state),
 		)
 		if err != nil {
 			return nil, err
 		}
 
+		if err := tlvStream.Decode(streamReader); err != nil {
+			return nil, err
+		}
+
 		key.ChanID = lnwire.NewShortChanIDFromInt(chanID)
-		htlc.AcceptTime = time.Unix(0, acceptTime)
-		htlc.ResolveTime = time.Unix(0, resolveTime)
+		htlc.AcceptTime = time.Unix(0, int64(acceptTime))
+		htlc.ResolveTime = time.Unix(0, int64(resolveTime))
 		htlc.State = HtlcState(state)
+		htlc.Amt = lnwire.MilliSatoshi(amt)
 
 		htlcs[key] = &htlc
 	}
