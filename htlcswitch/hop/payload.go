@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/lightningnetwork/lightning-onion"
+	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/record"
 	"github.com/lightningnetwork/lnd/tlv"
@@ -62,6 +62,11 @@ func NewPayloadFromReader(r io.Reader) (*Payload, error) {
 	err = tlvStream.Decode(r)
 	if err != nil {
 		return nil, err
+	}
+
+	// Simulate absent mpp record.
+	if mpp.TotalMsat == 0 {
+		mpp = nil
 	}
 
 	return &Payload{
