@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -32,6 +33,12 @@ var (
 	// errReplayedHtlc is returned if the htlc is already recorded on the
 	// invoice.
 	errReplayedHtlc = errors.New("replayed htlc")
+)
+
+const (
+	// htlcHoldDuration defines how long mpp htlcs are held while waiting
+	// for the other set members to arrive.
+	htlcHoldDuration = 30 * time.Second
 )
 
 // HodlEvent describes how an htlc should be resolved. If HodlEvent.Preimage is
@@ -84,6 +91,9 @@ type InvoiceRegistry struct {
 	// not be hit.
 	finalCltvRejectDelta int32
 
+	// now returns the current time.
+	now func() time.Time
+
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
@@ -104,6 +114,7 @@ func NewRegistry(cdb *channeldb.DB, finalCltvRejectDelta int32) *InvoiceRegistry
 		hodlSubscriptions:         make(map[channeldb.CircuitKey]map[chan<- interface{}]struct{}),
 		hodlReverseSubscriptions:  make(map[chan<- interface{}]map[channeldb.CircuitKey]struct{}),
 		finalCltvRejectDelta:      finalCltvRejectDelta,
+		now:                       time.Now,
 		quit:                      make(chan struct{}),
 	}
 }
@@ -420,6 +431,98 @@ func (i *InvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (channeldb.Invoice,
 	return i.cdb.LookupInvoice(rHash)
 }
 
+// startHtlcTimer starts a new goroutine that cancels a single htlc on an
+// invoice when the htlc hold duration has passed.
+func (i *InvoiceRegistry) startHtlcTimer(hash lntypes.Hash,
+	key channeldb.CircuitKey, acceptTime time.Time) bool {
+
+	now := i.now()
+	releaseTime := acceptTime.Add(htlcHoldDuration)
+	if releaseTime.Before(now) {
+		return true
+	}
+
+	i.wg.Add(1)
+	go func() {
+		defer i.wg.Done()
+
+		select {
+		case <-i.quit:
+		case <-time.After(releaseTime.Sub(now)):
+			err := i.cancelSingleHtlc(hash, key)
+			if err != nil {
+				log.Errorf("HTLC timer: %v", err)
+			}
+		}
+	}()
+
+	return false
+}
+
+// cancelSingleHtlc cancels a single accepted htlc on an invoice.
+func (i *InvoiceRegistry) cancelSingleHtlc(hash lntypes.Hash,
+	key channeldb.CircuitKey) error {
+
+	i.Lock()
+	defer i.Unlock()
+
+	updateInvoice := func(invoice *channeldb.Invoice) (
+		*channeldb.InvoiceUpdateDesc, error) {
+
+		if invoice.Terms.State != channeldb.ContractOpen {
+			log.Debugf("cancelSingleHtlc: invoice %v no longer "+
+				"open", hash)
+
+			return nil, errNoUpdate
+		}
+
+		htlc, ok := invoice.Htlcs[key]
+		if !ok {
+			return nil, fmt.Errorf("htlc %v not found", key)
+		}
+
+		if htlc.State != channeldb.HtlcStateAccepted {
+			log.Debugf("cancelSingleHtlc: htlc %v on invoice %v "+
+				"is already resolved", key, hash)
+
+			return nil, errNoUpdate
+		}
+
+		log.Debugf("cancelSingleHtlc: cancelling htlc %v on invoice %v",
+			key, hash)
+
+		canceledHtlcs := map[channeldb.CircuitKey]*channeldb.HtlcAcceptDesc{
+			key: nil,
+		}
+
+		// Cancel htlc and keep invoice open.
+		return &channeldb.InvoiceUpdateDesc{
+			Htlcs: canceledHtlcs,
+			State: channeldb.ContractOpen,
+		}, nil
+	}
+
+	invoice, err := i.cdb.UpdateInvoice(hash, updateInvoice)
+	if err == errNoUpdate {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	htlc, ok := invoice.Htlcs[key]
+	if !ok {
+		return fmt.Errorf("htlc %v not found", key)
+	}
+	if htlc.State == channeldb.HtlcStateCancelled {
+		i.notifyHodlSubscribers(HodlEvent{
+			CircuitKey:     key,
+			AcceptedHeight: int32(htlc.AcceptHeight),
+		})
+	}
+	return nil
+}
+
 // NotifyExitHopHtlc attempts to mark an invoice as settled. If the invoice is a
 // debug invoice, then this method is a noop as debug invoices are never fully
 // settled. The return value describes how the htlc should be resolved.
@@ -645,6 +748,15 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 		}, nil
 
 	case channeldb.HtlcStateAccepted:
+		// (Re)start the htlc timer if the invoice is
+		// still open.
+		if invoice.Terms.State == channeldb.ContractOpen {
+			i.startHtlcTimer(
+				rHash, circuitKey,
+				invoiceHtlc.AcceptTime,
+			)
+		}
+
 		i.hodlSubscribe(hodlChan, circuitKey)
 		return nil, nil
 
