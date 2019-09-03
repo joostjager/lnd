@@ -1,6 +1,7 @@
 package record
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -95,4 +96,8 @@ func (r *MPP) Record() tlv.Record {
 	return tlv.MakeDynamicRecord(
 		MPPOnionType, r, size, MPPEncoder, MPPDecoder,
 	)
+}
+
+func (r *MPP) String() string {
+	return fmt.Sprintf("total=%v, addr=%x", r.totalMsat, r.paymentAddr)
 }
