@@ -18,14 +18,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
-
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/routing/route"
 	"github.com/lightningnetwork/lnd/walletunlocker"
 	"github.com/urfave/cli"
@@ -2507,6 +2506,10 @@ var sendToRouteCommand = cli.Command{
 			Usage: "a json array string in the format of the response " +
 				"of queryroutes that denotes which routes to use",
 		},
+		cli.Int64Flag{
+			Name:  "totalamt",
+			Usage: "total satoshis for mpp payments",
+		},
 	},
 	Action: sendToRoute,
 }
@@ -2595,6 +2598,14 @@ func sendToRoute(ctx *cli.Context) error {
 		}
 
 		route = routes.Route
+	}
+
+	paymentAddr := lntypes.Hash{}
+
+	lastHop := route.Hops[len(route.Hops)-1]
+	lastHop.MppRecord = &lnrpc.MPPRecord{
+		TotalAmtMsat: ctx.Int64("totalamt") * 1000,
+		PaymentAddr:  paymentAddr[:],
 	}
 
 	req := &routerrpc.SendToRouteRequest{
