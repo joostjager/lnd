@@ -479,7 +479,9 @@ func (c *ChannelArbitrator) relaunchResolvers() error {
 		"resolvers", c.cfg.ChanPoint, len(unresolvedContracts))
 
 	for _, resolver := range unresolvedContracts {
-		c.supplementResolver(resolver, htlcMap)
+		if err := c.supplementResolver(resolver, htlcMap); err != nil {
+			return err
+		}
 	}
 
 	c.launchResolvers(unresolvedContracts)
