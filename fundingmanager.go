@@ -508,9 +508,7 @@ func (f *fundingManager) start() error {
 		// already broadcast this transaction. Otherwise, we simply log
 		// the error as there isn't anything we can currently do to
 		// recover.
-		if channel.ChanType == channeldb.SingleFunder &&
-			channel.IsInitiator {
-
+		if channel.ChanType.IsSingleFunder() && channel.IsInitiator {
 			err := f.cfg.PublishTransaction(channel.FundingTxn)
 			if err != nil {
 				fndgLog.Errorf("Unable to rebroadcast funding "+
@@ -1071,6 +1069,18 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 	// reservation attempt may be rejected. Note that since we're on the
 	// responding side of a single funder workflow, we don't commit any
 	// funds to the channel ourselves.
+	//
+	// Before we init the channel, we'll also check to see if we've
+	// negotiated the new tweakless commitment format. This is only the
+	// case if *both* us and the remote peer are signaling the proper
+	// feature bit.
+	localTweakless := fmsg.peer.LocalGlobalFeatures().HasFeature(
+		lnwire.StaticRemoteKeyOptional,
+	)
+	remoteTweakless := fmsg.peer.RemoteGlobalFeatures().HasFeature(
+		lnwire.StaticRemoteKeyOptional,
+	)
+	tweaklessCommitment := localTweakless && remoteTweakless
 	chainHash := chainhash.Hash(msg.ChainHash)
 	req := &lnwallet.InitFundingReserveMsg{
 		ChainHash:        &chainHash,
@@ -1083,6 +1093,7 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 		PushMSat:         msg.PushAmount,
 		Flags:            msg.ChannelFlags,
 		MinConfs:         1,
+		Tweakless:        tweaklessCommitment,
 	}
 
 	reservation, err := f.cfg.Wallet.InitChannelReservation(req)
@@ -1118,8 +1129,9 @@ func (f *fundingManager) handleFundingOpen(fmsg *fundingOpenMsg) {
 	}
 
 	fndgLog.Infof("Requiring %v confirmations for pendingChan(%x): "+
-		"amt=%v, push_amt=%v", numConfsReq, fmsg.msg.PendingChannelID,
-		amt, msg.PushAmount)
+		"amt=%v, push_amt=%v, tweakless=%v", numConfsReq,
+		fmsg.msg.PendingChannelID, amt, msg.PushAmount,
+		tweaklessCommitment)
 
 	// Generate our required constraints for the remote party.
 	remoteCsvDelay := f.cfg.RequiredRemoteDelay(amt)
@@ -2474,7 +2486,7 @@ func (f *fundingManager) handleFundingLocked(fmsg *fundingLockedMsg) {
 	// Launch a defer so we _ensure_ that the channel barrier is properly
 	// closed even if the target peer is no longer online at this point.
 	defer func() {
-		// Close the active channel barrier signalling the readHandler
+		// Close the active channel barrier signaling the readHandler
 		// that commitment related modifications to this channel can
 		// now proceed.
 		f.barrierMtx.Lock()
@@ -2782,6 +2794,18 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 	// Initialize a funding reservation with the local wallet. If the
 	// wallet doesn't have enough funds to commit to this channel, then the
 	// request will fail, and be aborted.
+	//
+	// Before we init the channel, we'll also check to see if we've
+	// negotiated the new tweakless commitment format. This is only the
+	// case if *both* us and the remote peer are signaling the proper
+	// feature bit.
+	localTweakless := msg.peer.LocalGlobalFeatures().HasFeature(
+		lnwire.StaticRemoteKeyOptional,
+	)
+	remoteTweakless := msg.peer.RemoteGlobalFeatures().HasFeature(
+		lnwire.StaticRemoteKeyOptional,
+	)
+	tweaklessCommitment := localTweakless && remoteTweakless
 	req := &lnwallet.InitFundingReserveMsg{
 		ChainHash:        &msg.chainHash,
 		NodeID:           peerKey,
@@ -2794,6 +2818,7 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 		PushMSat:         msg.pushAmt,
 		Flags:            channelFlags,
 		MinConfs:         msg.minConfs,
+		Tweakless:        tweaklessCommitment,
 	}
 
 	reservation, err := f.cfg.Wallet.InitChannelReservation(req)
@@ -2862,8 +2887,8 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 	maxValue := f.cfg.RequiredRemoteMaxValue(capacity)
 	maxHtlcs := f.cfg.RequiredRemoteMaxHTLCs(capacity)
 
-	fndgLog.Infof("Starting funding workflow with %v for pendingID(%x)",
-		msg.peer.Address(), chanID)
+	fndgLog.Infof("Starting funding workflow with %v for pendingID(%x), "+
+		"tweakless=%v", msg.peer.Address(), chanID, tweaklessCommitment)
 
 	fundingOpen := lnwire.OpenChannel{
 		ChainHash:            *f.cfg.Wallet.Cfg.NetParams.GenesisHash,
