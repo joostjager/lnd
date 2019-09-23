@@ -1180,7 +1180,7 @@ func (d *AuthenticatedGossiper) retransmitStaleAnns(now time.Time) error {
 	// within the prune interval or re-broadcast interval.
 	type updateTuple struct {
 		info *channeldb.ChannelEdgeInfo
-		edge *channeldb.ChannelEdgePolicy
+		edge *channeldb.SignedChannelEdgePolicy
 	}
 
 	var (
@@ -1189,7 +1189,7 @@ func (d *AuthenticatedGossiper) retransmitStaleAnns(now time.Time) error {
 	)
 	err := d.cfg.Router.ForAllOutgoingChannels(func(
 		info *channeldb.ChannelEdgeInfo,
-		edge *channeldb.ChannelEdgePolicy) error {
+		edge *channeldb.SignedChannelEdgePolicy) error {
 
 		// If there's no auth proof attached to this edge, it means
 		// that it is a private channel not meant to be announced to
@@ -1242,7 +1242,7 @@ func (d *AuthenticatedGossiper) retransmitStaleAnns(now time.Time) error {
 		// Re-sign and update the channel on disk and retrieve our
 		// ChannelUpdate to broadcast.
 		chanAnn, chanUpdate, err := d.updateChannel(
-			chanToUpdate.info, chanToUpdate.edge,
+			chanToUpdate.info, &chanToUpdate.edge.ChannelEdgePolicy,
 		)
 		if err != nil {
 			return fmt.Errorf("unable to update channel: %v", err)
@@ -1353,7 +1353,7 @@ func (d *AuthenticatedGossiper) processChanPolicyUpdate(
 	// otherwise we'll collect them all.
 	err := d.cfg.Router.ForAllOutgoingChannels(func(
 		info *channeldb.ChannelEdgeInfo,
-		edge *channeldb.ChannelEdgePolicy) error {
+		edge *channeldb.SignedChannelEdgePolicy) error {
 
 		// If we have a channel filter, and this channel isn't a part
 		// of it, then we'll skip it.
@@ -1361,17 +1361,19 @@ func (d *AuthenticatedGossiper) processChanPolicyUpdate(
 			return nil
 		}
 
+		newEdge := edge.ChannelEdgePolicy
+
 		// Now that we know we should update this channel, we'll update
 		// its set of policies.
-		edge.FeeBaseMSat = policyUpdate.newSchema.BaseFee
-		edge.FeeProportionalMillionths = lnwire.MilliSatoshi(
+		newEdge.FeeBaseMSat = policyUpdate.newSchema.BaseFee
+		newEdge.FeeProportionalMillionths = lnwire.MilliSatoshi(
 			policyUpdate.newSchema.FeeRate,
 		)
-		edge.TimeLockDelta = uint16(policyUpdate.newSchema.TimeLockDelta)
+		newEdge.TimeLockDelta = uint16(policyUpdate.newSchema.TimeLockDelta)
 
 		edgesToUpdate = append(edgesToUpdate, edgeWithInfo{
 			info: info,
-			edge: edge,
+			edge: &newEdge,
 		})
 
 		return nil
@@ -2027,18 +2029,20 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 			return nil
 		}
 
-		update := &channeldb.ChannelEdgePolicy{
-			SigBytes:                  msg.Signature.ToSignatureBytes(),
-			ChannelID:                 shortChanID,
-			LastUpdate:                timestamp,
-			MessageFlags:              msg.MessageFlags,
-			ChannelFlags:              msg.ChannelFlags,
-			TimeLockDelta:             msg.TimeLockDelta,
-			MinHTLC:                   msg.HtlcMinimumMsat,
-			MaxHTLC:                   msg.HtlcMaximumMsat,
-			FeeBaseMSat:               lnwire.MilliSatoshi(msg.BaseFee),
-			FeeProportionalMillionths: lnwire.MilliSatoshi(msg.FeeRate),
-			ExtraOpaqueData:           msg.ExtraOpaqueData,
+		update := &channeldb.SignedChannelEdgePolicy{
+			SigBytes: msg.Signature.ToSignatureBytes(),
+			ChannelEdgePolicy: channeldb.ChannelEdgePolicy{
+				ChannelID:                 shortChanID,
+				LastUpdate:                timestamp,
+				MessageFlags:              msg.MessageFlags,
+				ChannelFlags:              msg.ChannelFlags,
+				TimeLockDelta:             msg.TimeLockDelta,
+				MinHTLC:                   msg.HtlcMinimumMsat,
+				MaxHTLC:                   msg.HtlcMaximumMsat,
+				FeeBaseMSat:               lnwire.MilliSatoshi(msg.BaseFee),
+				FeeProportionalMillionths: lnwire.MilliSatoshi(msg.FeeRate),
+				ExtraOpaqueData:           msg.ExtraOpaqueData,
+			},
 		}
 
 		if err := d.cfg.Router.UpdateEdge(update); err != nil {
@@ -2485,7 +2489,7 @@ func (d *AuthenticatedGossiper) isMsgStale(msg lnwire.Message) bool {
 		// Otherwise, we'll retrieve the correct policy that we
 		// currently have stored within our graph to check if this
 		// message is stale by comparing its timestamp.
-		var p *channeldb.ChannelEdgePolicy
+		var p *channeldb.SignedChannelEdgePolicy
 		if msg.ChannelFlags&lnwire.ChanUpdateDirection == 0 {
 			p = p1
 		} else {
@@ -2550,9 +2554,12 @@ func (d *AuthenticatedGossiper) updateChannel(info *channeldb.ChannelEdgeInfo,
 		return nil, nil, err
 	}
 
+	signedEdge := channeldb.SignedChannelEdgePolicy{
+		ChannelEdgePolicy: *edge,
+	}
 	// Next, we'll set the new signature in place, and update the reference
 	// in the backing slice.
-	edge.SigBytes = sig.Serialize()
+	signedEdge.SigBytes = sig.Serialize()
 	chanUpdate.Signature, err = lnwire.NewSigFromSignature(sig)
 	if err != nil {
 		return nil, nil, err
@@ -2567,7 +2574,7 @@ func (d *AuthenticatedGossiper) updateChannel(info *channeldb.ChannelEdgeInfo,
 	}
 
 	// Finally, we'll write the new edge policy to disk.
-	if err := d.cfg.Router.UpdateEdge(edge); err != nil {
+	if err := d.cfg.Router.UpdateEdge(&signedEdge); err != nil {
 		return nil, nil, err
 	}
 

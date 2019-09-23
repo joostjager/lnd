@@ -199,7 +199,7 @@ func (c *ChannelGraph) Database() *DB {
 // NOTE: If an edge can't be found, or wasn't advertised, then a nil pointer
 // for that particular channel edge routing policy will be passed into the
 // callback.
-func (c *ChannelGraph) ForEachChannel(cb func(*ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy) error) error {
+func (c *ChannelGraph) ForEachChannel(cb func(*ChannelEdgeInfo, *SignedChannelEdgePolicy, *SignedChannelEdgePolicy) error) error {
 	// TODO(roasbeef): ptr map to reduce # of allocs? no duplicates
 
 	return c.db.View(func(tx *bbolt.Tx) error {
@@ -262,8 +262,8 @@ func (c *ChannelGraph) ForEachChannel(cb func(*ChannelEdgeInfo, *ChannelEdgePoli
 // be nil and a fresh transaction will be created to execute the graph
 // traversal.
 func (c *ChannelGraph) ForEachNodeChannel(tx *bbolt.Tx, nodePub []byte,
-	cb func(*bbolt.Tx, *ChannelEdgeInfo, *ChannelEdgePolicy,
-		*ChannelEdgePolicy) error) error {
+	cb func(*bbolt.Tx, *ChannelEdgeInfo, *SignedChannelEdgePolicy,
+		*SignedChannelEdgePolicy) error) error {
 
 	db := c.db
 
@@ -1405,11 +1405,11 @@ type ChannelEdge struct {
 
 	// Policy1 points to the "first" edge policy of the channel containing
 	// the dynamic information required to properly route through the edge.
-	Policy1 *ChannelEdgePolicy
+	Policy1 *SignedChannelEdgePolicy
 
 	// Policy2 points to the "second" edge policy of the channel containing
 	// the dynamic information required to properly route through the edge.
-	Policy2 *ChannelEdgePolicy
+	Policy2 *SignedChannelEdgePolicy
 }
 
 // ChanUpdatesInHorizon returns all the known channel edges which have at least
@@ -1793,7 +1793,7 @@ func (c *ChannelGraph) FetchChanInfos(chanIDs []uint64) ([]ChannelEdge, error) {
 }
 
 func delEdgeUpdateIndexEntry(edgesBucket *bbolt.Bucket, chanID uint64,
-	edge1, edge2 *ChannelEdgePolicy) error {
+	edge1, edge2 *SignedChannelEdgePolicy) error {
 
 	// First, we'll fetch the edge update index bucket which currently
 	// stores an entry for the channel we're about to delete.
@@ -1912,7 +1912,7 @@ func delChannelEdge(edges, edgeIndex, chanIndex, zombieIndex,
 // updated, otherwise it's the second node's information. The node ordering is
 // determined by the lexicographical ordering of the identity public keys of
 // the nodes on either side of the channel.
-func (c *ChannelGraph) UpdateEdgePolicy(edge *ChannelEdgePolicy) error {
+func (c *ChannelGraph) UpdateEdgePolicy(edge *SignedChannelEdgePolicy) error {
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
 
@@ -1959,7 +1959,7 @@ func (c *ChannelGraph) UpdateEdgePolicy(edge *ChannelEdgePolicy) error {
 // buckets using an existing database transaction. The returned boolean will be
 // true if the updated policy belongs to node1, and false if the policy belonged
 // to node2.
-func updateEdgePolicy(tx *bbolt.Tx, edge *ChannelEdgePolicy) (bool, error) {
+func updateEdgePolicy(tx *bbolt.Tx, edge *SignedChannelEdgePolicy) (bool, error) {
 	edges := tx.Bucket(edgeBucket)
 	if edges == nil {
 		return false, ErrEdgeNotFound
@@ -2144,7 +2144,7 @@ func (l *LightningNode) isPublic(tx *bbolt.Tx, sourcePubKey []byte) (bool, error
 	nodeIsPublic := false
 	errDone := errors.New("done")
 	err := l.ForEachChannel(tx, func(_ *bbolt.Tx, info *ChannelEdgeInfo,
-		_, _ *ChannelEdgePolicy) error {
+		_, _ *SignedChannelEdgePolicy) error {
 
 		// If this edge doesn't extend to the source node, we'll
 		// terminate our search as we can now conclude that the node is
@@ -2265,7 +2265,7 @@ func (c *ChannelGraph) HasLightningNode(nodePub [33]byte) (time.Time, bool, erro
 // nodeTraversal is used to traverse all channels of a node given by its
 // public key and passes channel information into the specified callback.
 func nodeTraversal(tx *bbolt.Tx, nodePub []byte, db *DB,
-	cb func(*bbolt.Tx, *ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy) error) error {
+	cb func(*bbolt.Tx, *ChannelEdgeInfo, *SignedChannelEdgePolicy, *SignedChannelEdgePolicy) error) error {
 
 	traversal := func(tx *bbolt.Tx) error {
 		nodes := tx.Bucket(nodeBucket)
@@ -2363,7 +2363,7 @@ func nodeTraversal(tx *bbolt.Tx, nodePub []byte, db *DB,
 // be nil and a fresh transaction will be created to execute the graph
 // traversal.
 func (l *LightningNode) ForEachChannel(tx *bbolt.Tx,
-	cb func(*bbolt.Tx, *ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy) error) error {
+	cb func(*bbolt.Tx, *ChannelEdgeInfo, *SignedChannelEdgePolicy, *SignedChannelEdgePolicy) error) error {
 
 	nodePub := l.PubKeyBytes[:]
 	db := l.db
@@ -2733,14 +2733,6 @@ func (c *ChannelAuthProof) IsEmpty() bool {
 // information concerning fees, and minimum time-lock information which is
 // utilized during path finding.
 type ChannelEdgePolicy struct {
-	// SigBytes is the raw bytes of the signature of the channel edge
-	// policy. We'll only parse these if the caller needs to access the
-	// signature for validation purposes.
-	SigBytes []byte
-
-	// sig is a cached fully parsed signature.
-	sig *btcec.Signature
-
 	// ChannelID is the unique channel ID for the channel. The first 3
 	// bytes are the block height, the next 3 the index within the block,
 	// and the last 2 bytes are the output index for the channel.
@@ -2794,12 +2786,24 @@ type ChannelEdgePolicy struct {
 	db *DB
 }
 
+type SignedChannelEdgePolicy struct {
+	ChannelEdgePolicy
+
+	// SigBytes is the raw bytes of the signature of the channel edge
+	// policy. We'll only parse these if the caller needs to access the
+	// signature for validation purposes.
+	SigBytes []byte
+
+	// sig is a cached fully parsed signature.
+	sig *btcec.Signature
+}
+
 // Signature is a channel announcement signature, which is needed for proper
 // edge policy announcement.
 //
 // NOTE: By having this method to access an attribute, we ensure we only need
 // to fully deserialize the signature if absolutely necessary.
-func (c *ChannelEdgePolicy) Signature() (*btcec.Signature, error) {
+func (c *SignedChannelEdgePolicy) Signature() (*btcec.Signature, error) {
 	if c.sig != nil {
 		return c.sig, nil
 	}
@@ -2826,12 +2830,12 @@ func (c *ChannelEdgePolicy) IsDisabled() bool {
 // information for the channel itself is returned as well as two structs that
 // contain the routing policies for the channel in either direction.
 func (c *ChannelGraph) FetchChannelEdgesByOutpoint(op *wire.OutPoint,
-) (*ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy, error) {
+) (*ChannelEdgeInfo, *SignedChannelEdgePolicy, *SignedChannelEdgePolicy, error) {
 
 	var (
 		edgeInfo *ChannelEdgeInfo
-		policy1  *ChannelEdgePolicy
-		policy2  *ChannelEdgePolicy
+		policy1  *SignedChannelEdgePolicy
+		policy2  *SignedChannelEdgePolicy
 	)
 
 	err := c.db.View(func(tx *bbolt.Tx) error {
@@ -2909,12 +2913,12 @@ func (c *ChannelGraph) FetchChannelEdgesByOutpoint(op *wire.OutPoint,
 // within the database. In this case, the ChannelEdgePolicy's will be nil, and
 // the ChannelEdgeInfo will only include the public keys of each node.
 func (c *ChannelGraph) FetchChannelEdgesByID(chanID uint64,
-) (*ChannelEdgeInfo, *ChannelEdgePolicy, *ChannelEdgePolicy, error) {
+) (*ChannelEdgeInfo, *SignedChannelEdgePolicy, *SignedChannelEdgePolicy, error) {
 
 	var (
 		edgeInfo  *ChannelEdgeInfo
-		policy1   *ChannelEdgePolicy
-		policy2   *ChannelEdgePolicy
+		policy1   *SignedChannelEdgePolicy
+		policy2   *SignedChannelEdgePolicy
 		channelID [8]byte
 	)
 
@@ -3667,7 +3671,7 @@ func deserializeChanEdgeInfo(r io.Reader) (ChannelEdgeInfo, error) {
 	return edgeInfo, nil
 }
 
-func putChanEdgePolicy(edges, nodes *bbolt.Bucket, edge *ChannelEdgePolicy,
+func putChanEdgePolicy(edges, nodes *bbolt.Bucket, edge *SignedChannelEdgePolicy,
 	from, to []byte) error {
 
 	var edgeKey [33 + 8]byte
@@ -3788,7 +3792,7 @@ func putChanEdgePolicyUnknown(edges *bbolt.Bucket, channelID uint64,
 }
 
 func fetchChanEdgePolicy(edges *bbolt.Bucket, chanID []byte,
-	nodePub []byte, nodes *bbolt.Bucket) (*ChannelEdgePolicy, error) {
+	nodePub []byte, nodes *bbolt.Bucket) (*SignedChannelEdgePolicy, error) {
 
 	var edgeKey [33 + 8]byte
 	copy(edgeKey[:], nodePub)
@@ -3822,7 +3826,7 @@ func fetchChanEdgePolicy(edges *bbolt.Bucket, chanID []byte,
 
 func fetchChanEdgePolicies(edgeIndex *bbolt.Bucket, edges *bbolt.Bucket,
 	nodes *bbolt.Bucket, chanID []byte,
-	db *DB) (*ChannelEdgePolicy, *ChannelEdgePolicy, error) {
+	db *DB) (*SignedChannelEdgePolicy, *SignedChannelEdgePolicy, error) {
 
 	edgeInfo := edgeIndex.Get(chanID)
 	if edgeInfo == nil {
@@ -3861,7 +3865,7 @@ func fetchChanEdgePolicies(edgeIndex *bbolt.Bucket, edges *bbolt.Bucket,
 	return edge1, edge2, nil
 }
 
-func serializeChanEdgePolicy(w io.Writer, edge *ChannelEdgePolicy,
+func serializeChanEdgePolicy(w io.Writer, edge *SignedChannelEdgePolicy,
 	to []byte) error {
 
 	err := wire.WriteVarBytes(w, 0, edge.SigBytes)
@@ -3929,9 +3933,9 @@ func serializeChanEdgePolicy(w io.Writer, edge *ChannelEdgePolicy,
 }
 
 func deserializeChanEdgePolicy(r io.Reader,
-	nodes *bbolt.Bucket) (*ChannelEdgePolicy, error) {
+	nodes *bbolt.Bucket) (*SignedChannelEdgePolicy, error) {
 
-	edge := &ChannelEdgePolicy{}
+	edge := &SignedChannelEdgePolicy{}
 
 	var err error
 	edge.SigBytes, err = wire.ReadVarBytes(r, 0, 80, "sig")

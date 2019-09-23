@@ -2019,7 +2019,7 @@ func (s *server) establishPersistentConnections() error {
 	err = sourceNode.ForEachChannel(nil, func(
 		tx *bbolt.Tx,
 		chanInfo *channeldb.ChannelEdgeInfo,
-		policy, _ *channeldb.ChannelEdgePolicy) error {
+		policy, _ *channeldb.SignedChannelEdgePolicy) error {
 
 		// If the remote party has announced the channel to us, but we
 		// haven't yet, then we won't have a policy. However, we don't

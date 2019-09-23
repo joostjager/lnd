@@ -73,7 +73,7 @@ type ChannelGraphSource interface {
 
 	// UpdateEdge is used to update edge information, without this message
 	// edge considered as not fully constructed.
-	UpdateEdge(policy *channeldb.ChannelEdgePolicy) error
+	UpdateEdge(policy *channeldb.SignedChannelEdgePolicy) error
 
 	// IsStaleNode returns true if the graph source has a node announcement
 	// for the target node with a more recent timestamp. This method will
@@ -103,7 +103,7 @@ type ChannelGraphSource interface {
 	// emanating from the "source" node which is the center of the
 	// star-graph.
 	ForAllOutgoingChannels(cb func(c *channeldb.ChannelEdgeInfo,
-		e *channeldb.ChannelEdgePolicy) error) error
+		e *channeldb.SignedChannelEdgePolicy) error) error
 
 	// CurrentBlockHeight returns the block height from POV of the router
 	// subsystem.
@@ -111,7 +111,7 @@ type ChannelGraphSource interface {
 
 	// GetChannelByID return the channel by the channel id.
 	GetChannelByID(chanID lnwire.ShortChannelID) (*channeldb.ChannelEdgeInfo,
-		*channeldb.ChannelEdgePolicy, *channeldb.ChannelEdgePolicy, error)
+		*channeldb.SignedChannelEdgePolicy, *channeldb.SignedChannelEdgePolicy, error)
 
 	// FetchLightningNode attempts to look up a target node by its identity
 	// public key. channeldb.ErrGraphNodeNotFound is returned if the node
@@ -124,7 +124,7 @@ type ChannelGraphSource interface {
 	// ForEachChannel is used to iterate over every channel in the known
 	// graph.
 	ForEachChannel(func(chanInfo *channeldb.ChannelEdgeInfo,
-		e1, e2 *channeldb.ChannelEdgePolicy) error) error
+		e1, e2 *channeldb.SignedChannelEdgePolicy) error) error
 }
 
 // PaymentAttemptDispatcher is used by the router to send payment attempts onto
@@ -726,7 +726,7 @@ func (r *ChannelRouter) pruneZombieChans() error {
 	// First, we'll collect all the channels which are eligible for garbage
 	// collection due to being zombies.
 	filterPruneChans := func(info *channeldb.ChannelEdgeInfo,
-		e1, e2 *channeldb.ChannelEdgePolicy) error {
+		e1, e2 *channeldb.SignedChannelEdgePolicy) error {
 
 		// Exit early in case this channel is already marked to be pruned
 		if _, markedToPrune := chansToPrune[info.ChannelID]; markedToPrune {
@@ -1246,7 +1246,7 @@ func (r *ChannelRouter) processUpdate(msg interface{}) error {
 				"view: %v", err)
 		}
 
-	case *channeldb.ChannelEdgePolicy:
+	case *channeldb.SignedChannelEdgePolicy:
 		// We make sure to hold the mutex for this channel ID,
 		// such that no other goroutine is concurrently doing
 		// database accesses for the same channel ID.
@@ -1948,17 +1948,19 @@ func (r *ChannelRouter) applyChannelUpdate(msg *lnwire.ChannelUpdate,
 		return false
 	}
 
-	err = r.UpdateEdge(&channeldb.ChannelEdgePolicy{
-		SigBytes:                  msg.Signature.ToSignatureBytes(),
-		ChannelID:                 msg.ShortChannelID.ToUint64(),
-		LastUpdate:                time.Unix(int64(msg.Timestamp), 0),
-		MessageFlags:              msg.MessageFlags,
-		ChannelFlags:              msg.ChannelFlags,
-		TimeLockDelta:             msg.TimeLockDelta,
-		MinHTLC:                   msg.HtlcMinimumMsat,
-		MaxHTLC:                   msg.HtlcMaximumMsat,
-		FeeBaseMSat:               lnwire.MilliSatoshi(msg.BaseFee),
-		FeeProportionalMillionths: lnwire.MilliSatoshi(msg.FeeRate),
+	err = r.UpdateEdge(&channeldb.SignedChannelEdgePolicy{
+		SigBytes: msg.Signature.ToSignatureBytes(),
+		ChannelEdgePolicy: channeldb.ChannelEdgePolicy{
+			ChannelID:                 msg.ShortChannelID.ToUint64(),
+			LastUpdate:                time.Unix(int64(msg.Timestamp), 0),
+			MessageFlags:              msg.MessageFlags,
+			ChannelFlags:              msg.ChannelFlags,
+			TimeLockDelta:             msg.TimeLockDelta,
+			MinHTLC:                   msg.HtlcMinimumMsat,
+			MaxHTLC:                   msg.HtlcMaximumMsat,
+			FeeBaseMSat:               lnwire.MilliSatoshi(msg.BaseFee),
+			FeeProportionalMillionths: lnwire.MilliSatoshi(msg.FeeRate),
+		},
 	})
 	if err != nil && !IsError(err, ErrIgnored, ErrOutdated) {
 		log.Errorf("Unable to apply channel update: %v", err)
@@ -2020,7 +2022,7 @@ func (r *ChannelRouter) AddEdge(edge *channeldb.ChannelEdgeInfo) error {
 // considered as not fully constructed.
 //
 // NOTE: This method is part of the ChannelGraphSource interface.
-func (r *ChannelRouter) UpdateEdge(update *channeldb.ChannelEdgePolicy) error {
+func (r *ChannelRouter) UpdateEdge(update *channeldb.SignedChannelEdgePolicy) error {
 	rMsg := &routingMsg{
 		msg: update,
 		err: make(chan error, 1),
@@ -2052,8 +2054,8 @@ func (r *ChannelRouter) CurrentBlockHeight() (uint32, error) {
 // NOTE: This method is part of the ChannelGraphSource interface.
 func (r *ChannelRouter) GetChannelByID(chanID lnwire.ShortChannelID) (
 	*channeldb.ChannelEdgeInfo,
-	*channeldb.ChannelEdgePolicy,
-	*channeldb.ChannelEdgePolicy, error) {
+	*channeldb.SignedChannelEdgePolicy,
+	*channeldb.SignedChannelEdgePolicy, error) {
 
 	return r.cfg.Graph.FetchChannelEdgesByID(chanID.ToUint64())
 }
@@ -2085,10 +2087,10 @@ func (r *ChannelRouter) ForEachNode(cb func(*channeldb.LightningNode) error) err
 //
 // NOTE: This method is part of the ChannelGraphSource interface.
 func (r *ChannelRouter) ForAllOutgoingChannels(cb func(*channeldb.ChannelEdgeInfo,
-	*channeldb.ChannelEdgePolicy) error) error {
+	*channeldb.SignedChannelEdgePolicy) error) error {
 
 	return r.selfNode.ForEachChannel(nil, func(_ *bbolt.Tx, c *channeldb.ChannelEdgeInfo,
-		e, _ *channeldb.ChannelEdgePolicy) error {
+		e, _ *channeldb.SignedChannelEdgePolicy) error {
 
 		if e == nil {
 			return fmt.Errorf("Channel from self node has no policy")
@@ -2103,7 +2105,7 @@ func (r *ChannelRouter) ForAllOutgoingChannels(cb func(*channeldb.ChannelEdgeInf
 //
 // NOTE: This method is part of the ChannelGraphSource interface.
 func (r *ChannelRouter) ForEachChannel(cb func(chanInfo *channeldb.ChannelEdgeInfo,
-	e1, e2 *channeldb.ChannelEdgePolicy) error) error {
+	e1, e2 *channeldb.SignedChannelEdgePolicy) error) error {
 
 	return r.cfg.Graph.ForEachChannel(cb)
 }
@@ -2230,7 +2232,7 @@ func generateBandwidthHints(sourceNode *channeldb.LightningNode,
 	var localChans []*channeldb.ChannelEdgeInfo
 	err := sourceNode.ForEachChannel(nil, func(tx *bbolt.Tx,
 		edgeInfo *channeldb.ChannelEdgeInfo,
-		_, _ *channeldb.ChannelEdgePolicy) error {
+		_, _ *channeldb.SignedChannelEdgePolicy) error {
 
 		localChans = append(localChans, edgeInfo)
 		return nil

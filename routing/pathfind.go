@@ -595,7 +595,7 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 		}
 
 		cb := func(_ *bbolt.Tx, edgeInfo *channeldb.ChannelEdgeInfo, _,
-			inEdge *channeldb.ChannelEdgePolicy) error {
+			inEdge *channeldb.SignedChannelEdgePolicy) error {
 
 			// If there is no edge policy for this candidate
 			// node, skip. Note that we are searching backwards
@@ -634,7 +634,7 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 
 			// Check if this candidate node is better than what we
 			// already have.
-			processEdge(route.Vertex(chanSource), edgeBandwidth, inEdge, pivot)
+			processEdge(route.Vertex(chanSource), edgeBandwidth, &inEdge.ChannelEdgePolicy, pivot)
 			return nil
 		}
 

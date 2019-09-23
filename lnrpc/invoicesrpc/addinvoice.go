@@ -335,7 +335,7 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 
 			// Now, we'll need to determine which is the correct
 			// policy for HTLCs being sent from the remote node.
-			var remotePolicy *channeldb.ChannelEdgePolicy
+			var remotePolicy *channeldb.SignedChannelEdgePolicy
 			if bytes.Equal(remotePub[:], info.NodeKey1Bytes[:]) {
 				remotePolicy = p1
 			} else {

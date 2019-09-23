@@ -15,7 +15,7 @@ import (
 // peer's initial routing table upon connect.
 func CreateChanAnnouncement(chanProof *channeldb.ChannelAuthProof,
 	chanInfo *channeldb.ChannelEdgeInfo,
-	e1, e2 *channeldb.ChannelEdgePolicy) (*lnwire.ChannelAnnouncement,
+	e1, e2 *channeldb.SignedChannelEdgePolicy) (*lnwire.ChannelAnnouncement,
 	*lnwire.ChannelUpdate, *lnwire.ChannelUpdate, error) {
 
 	// First, using the parameters of the channel, along with the channel

@@ -459,7 +459,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 		//
 		// TODO(roasbeef): can add helper method to get policy for
 		// particular channel.
-		var selfPolicy *channeldb.ChannelEdgePolicy
+		var selfPolicy *channeldb.SignedChannelEdgePolicy
 		if info != nil && bytes.Equal(info.NodeKey1Bytes[:],
 			p.server.identityPriv.PubKey().SerializeCompressed()) {
 

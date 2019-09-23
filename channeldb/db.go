@@ -938,9 +938,11 @@ func (d *DB) RestoreChannelShells(channelShells ...*ChannelShell) error {
 
 			// Similarly, we'll construct a channel edge shell and
 			// add that itself to the graph.
-			chanEdge := ChannelEdgePolicy{
-				ChannelID:  edgeInfo.ChannelID,
-				LastUpdate: time.Now(),
+			chanEdge := SignedChannelEdgePolicy{
+				ChannelEdgePolicy: ChannelEdgePolicy{
+					ChannelID:  edgeInfo.ChannelID,
+					LastUpdate: time.Now(),
+				},
 			}
 
 			// If their pubkey is larger, then we'll flip the

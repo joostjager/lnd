@@ -3745,7 +3745,7 @@ func (r *rpcServer) DescribeGraph(ctx context.Context,
 	// similar response which details both the edge information as well as
 	// the routing policies of th nodes connecting the two edges.
 	err = graph.ForEachChannel(func(edgeInfo *channeldb.ChannelEdgeInfo,
-		c1, c2 *channeldb.ChannelEdgePolicy) error {
+		c1, c2 *channeldb.SignedChannelEdgePolicy) error {
 
 		// Do not include unannounced channels unless specifically
 		// requested. Unannounced channels include both private channels as
@@ -3768,7 +3768,7 @@ func (r *rpcServer) DescribeGraph(ctx context.Context,
 }
 
 func marshalDbEdge(edgeInfo *channeldb.ChannelEdgeInfo,
-	c1, c2 *channeldb.ChannelEdgePolicy) *lnrpc.ChannelEdge {
+	c1, c2 *channeldb.SignedChannelEdgePolicy) *lnrpc.ChannelEdge {
 
 	// Order the edges by increasing pubkey.
 	if bytes.Compare(edgeInfo.NodeKey2Bytes[:],
@@ -3880,7 +3880,7 @@ func (r *rpcServer) GetNodeInfo(ctx context.Context,
 
 	if err := node.ForEachChannel(nil, func(_ *bbolt.Tx,
 		edge *channeldb.ChannelEdgeInfo,
-		c1, c2 *channeldb.ChannelEdgePolicy) error {
+		c1, c2 *channeldb.SignedChannelEdgePolicy) error {
 
 		numChannels++
 		totalCapacity += edge.Capacity
@@ -3984,7 +3984,7 @@ func (r *rpcServer) GetNetworkInfo(ctx context.Context,
 		// re-use it within this inner view.
 		var outDegree uint32
 		if err := node.ForEachChannel(tx, func(_ *bbolt.Tx,
-			edge *channeldb.ChannelEdgeInfo, _, _ *channeldb.ChannelEdgePolicy) error {
+			edge *channeldb.ChannelEdgeInfo, _, _ *channeldb.SignedChannelEdgePolicy) error {
 
 			// Bump up the out degree for this node for each
 			// channel encountered.
@@ -4418,7 +4418,7 @@ func (r *rpcServer) FeeReport(ctx context.Context,
 
 	var feeReports []*lnrpc.ChannelFeeReport
 	err = selfNode.ForEachChannel(nil, func(_ *bbolt.Tx, chanInfo *channeldb.ChannelEdgeInfo,
-		edgePolicy, _ *channeldb.ChannelEdgePolicy) error {
+		edgePolicy, _ *channeldb.SignedChannelEdgePolicy) error {
 
 		// Self node should always have policies for its channels.
 		if edgePolicy == nil {

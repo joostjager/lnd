@@ -81,11 +81,11 @@ func SignChannelUpdate(signer lnwallet.MessageSigner, pubKey *btcec.PublicKey,
 // NOTE: The passed policies can be nil.
 func ExtractChannelUpdate(ownerPubKey []byte,
 	info *channeldb.ChannelEdgeInfo,
-	policies ...*channeldb.ChannelEdgePolicy) (
+	policies ...*channeldb.SignedChannelEdgePolicy) (
 	*lnwire.ChannelUpdate, error) {
 
 	// Helper function to extract the owner of the given policy.
-	owner := func(edge *channeldb.ChannelEdgePolicy) []byte {
+	owner := func(edge *channeldb.SignedChannelEdgePolicy) []byte {
 		var pubKey *btcec.PublicKey
 		if edge.ChannelFlags&lnwire.ChanUpdateDirection == 0 {
 			pubKey, _ = info.NodeKey1()
@@ -115,7 +115,7 @@ func ExtractChannelUpdate(ownerPubKey []byte,
 // ChannelUpdateFromEdge reconstructs a signed ChannelUpdate from the given edge
 // info and policy.
 func ChannelUpdateFromEdge(info *channeldb.ChannelEdgeInfo,
-	policy *channeldb.ChannelEdgePolicy) (*lnwire.ChannelUpdate, error) {
+	policy *channeldb.SignedChannelEdgePolicy) (*lnwire.ChannelUpdate, error) {
 
 	update := &lnwire.ChannelUpdate{
 		ChainHash:       info.ChainHash,
