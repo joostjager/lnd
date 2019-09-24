@@ -3984,6 +3984,16 @@ var _ error = (*InvalidCommitSigError)(nil)
 func (lc *LightningChannel) ReceiveNewCommitment(commitSig lnwire.Sig,
 	htlcSigs []lnwire.Sig) error {
 
+	// Check for empty commit sig. Because of a previously existing bug, it
+	// is possible that we receive an empty commit sig from nodes running an
+	// older version. This is a relaxation of the spec, but it is still
+	// possible to handle it. To not break any channels with those older
+	// nodes, we just log the event. This call acquires a lock in its
+	// implementation.
+	if !lc.OweCommitment(false) {
+		lc.log.Warnf("empty commit sig message received")
+	}
+
 	lc.Lock()
 	defer lc.Unlock()
 
@@ -4138,6 +4148,65 @@ func (lc *LightningChannel) ReceiveNewCommitment(commitSig lnwire.Sig,
 	lc.localCommitChain.addCommitment(localCommitmentView)
 
 	return nil
+}
+
+// OweCommitment returns a boolean value reflecting whether we need to send
+// out a commitment signature because there are outstanding local updates and/or
+// updates in the local commit tx that aren't reflected in the remote commit tx
+// yet.
+func (lc *LightningChannel) OweCommitment(local bool) bool {
+	lc.RLock()
+	defer lc.RUnlock()
+
+	var (
+		remoteUpdatesPending, localUpdatesPending bool
+
+		lastLocalCommit  = lc.localCommitChain.tip()
+		lastRemoteCommit = lc.remoteCommitChain.tip()
+
+		perspective string
+	)
+
+	if local {
+		perspective = "local"
+
+		// There are local updates pending if our local update log is
+		// not in sync with our remote commitment tx.
+		localUpdatesPending = lc.localUpdateLog.logIndex !=
+			lastRemoteCommit.ourMessageIndex
+
+		// There are remote updates pending if their remote commitment
+		// tx (our local commitment tx) contains updates that we don't
+		// have added to our remote commitment tx yet.
+		remoteUpdatesPending = lastLocalCommit.theirMessageIndex !=
+			lastRemoteCommit.theirMessageIndex
+
+	} else {
+		perspective = "remote"
+
+		// There are local updates pending (local updates from the
+		// perspective of the remote party) if the remote party has
+		// updates to their remote tx pending for which they haven't
+		// signed yet.
+		localUpdatesPending = lc.remoteUpdateLog.logIndex !=
+			lastLocalCommit.theirMessageIndex
+
+		// There are remote updates pending (remote updates from the
+		// perspective of the remote party) if we have updates on our
+		// remote commitment tx that they haven't added to theirs yet.
+		remoteUpdatesPending = lastRemoteCommit.ourMessageIndex !=
+			lastLocalCommit.ourMessageIndex
+	}
+
+	// If any of the conditions above is true, we owe a commitment
+	// signature.
+	oweCommitment := localUpdatesPending || remoteUpdatesPending
+
+	lc.log.Tracef("%v owes commit: %v (local updates: %v, "+
+		"remote updates %v)", perspective, oweCommitment,
+		localUpdatesPending, remoteUpdatesPending)
+
+	return oweCommitment
 }
 
 // FullySynced returns a boolean value reflecting if both commitment chains
