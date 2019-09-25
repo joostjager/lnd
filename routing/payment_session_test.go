@@ -62,7 +62,7 @@ func TestRequestRoute(t *testing.T) {
 		FinalCLTVDelta: finalCltvDelta,
 	}
 
-	route, err := session.RequestRoute(payment, height, finalCltvDelta)
+	route, _, err := session.RequestRoute(payment, height, finalCltvDelta)
 	if err != nil {
 		t.Fatal(err)
 	}

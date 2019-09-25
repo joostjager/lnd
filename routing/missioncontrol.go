@@ -267,6 +267,30 @@ func (m *MissionControl) GetProbability(fromNode, toNode route.Vertex,
 	return m.estimator.getPairProbability(now, results, toNode, amt)
 }
 
+// GetLastTimestamp returns the last time at which a payment result was obtained
+// for the given connection.
+func (m *MissionControl) GetLastTimestamp(fromNode, toNode route.Vertex) time.Time {
+	m.Lock()
+	defer m.Unlock()
+
+	results := m.lastPairResult[fromNode]
+	if len(results) == 0 {
+		return time.Time{}
+	}
+
+	last, ok := results[toNode]
+	if !ok {
+		return time.Time{}
+	}
+
+	lastTime := last.FailTime
+	if last.SuccessTime.After(lastTime) {
+		lastTime = last.SuccessTime
+	}
+
+	return lastTime
+}
+
 // setLastPairResult stores a result for a node pair.
 func (m *MissionControl) setLastPairResult(fromNode, toNode route.Vertex,
 	timestamp time.Time, result *pairResult) {

@@ -2,6 +2,7 @@ package routing
 
 import (
 	"errors"
+	"time"
 
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -25,7 +26,8 @@ type PaymentSession interface {
 	// RequestRoute returns the next route to attempt for routing the
 	// specified HTLC payment to the target node.
 	RequestRoute(payment *LightningPayment,
-		height uint32, finalCltvDelta uint16) (*route.Route, error)
+		height uint32, finalCltvDelta uint16) (*route.Route, bool,
+		error)
 }
 
 // paymentSession is used during an HTLC routings session to prune the local
@@ -59,7 +61,7 @@ type paymentSession struct {
 // NOTE: This function is safe for concurrent access.
 // NOTE: Part of the PaymentSession interface.
 func (p *paymentSession) RequestRoute(payment *LightningPayment,
-	height uint32, finalCltvDelta uint16) (*route.Route, error) {
+	height uint32, finalCltvDelta uint16) (*route.Route, bool, error) {
 
 	switch {
 
@@ -67,12 +69,12 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	case p.preBuiltRoute != nil && !p.preBuiltRouteTried:
 		p.preBuiltRouteTried = true
 
-		return p.preBuiltRoute, nil
+		return p.preBuiltRoute, false, nil
 
 	// If the pre-built route has been tried already, the payment session is
 	// over.
 	case p.preBuiltRoute != nil:
-		return nil, errPrebuiltRouteTried
+		return nil, false, errPrebuiltRouteTried
 	}
 
 	// Add BlockPadding to the finalCltvDelta so that the receiving node
@@ -110,7 +112,7 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	// balances.
 	bandwidthHints, err := p.getBandwidthHints()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	finalHtlcExpiry := int32(height) + int32(finalCltvDelta)
@@ -126,12 +128,50 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 		payment.Amount, finalHtlcExpiry,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+
+	sourceVertex := route.Vertex(ss.SelfNode.PubKeyBytes)
+
+	fromNode := sourceVertex
+	for l := 0; l < len(path); l++ {
+		toNode := route.Vertex(path[l].Node.PubKeyBytes)
+
+		lastTime := ss.MissionControl.GetLastTimestamp(fromNode, toNode)
+		age := time.Since(lastTime)
+		if age > time.Minute {
+			probePath := path[:l+1]
+
+			probeAmt, err := getMinAmt(probePath)
+			if err != nil {
+				return nil, false, err
+			}
+
+			log.Debugf("Probing link %v->%v with %v (last result: %v ago)",
+				fromNode, toNode, probeAmt, age)
+
+			finalHop := finalHopParams{
+				amt:       probeAmt,
+				cltvDelta: finalCltvDelta,
+				// todo: payment addr?
+			}
+
+			route, err := newRoute(
+				sourceVertex, probePath, height, finalHop,
+			)
+			if err != nil {
+				return nil, false, err
+			}
+
+			return route, true, err
+		}
+
+		fromNode = toNode
 	}
 
 	// With the next candidate path found, we'll attempt to turn this into
 	// a route by applying the time-lock and fee requirements.
-	sourceVertex := route.Vertex(ss.SelfNode.PubKeyBytes)
+
 	route, err := newRoute(
 		sourceVertex, path, height,
 		finalHopParams{
@@ -144,8 +184,48 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	if err != nil {
 		// TODO(roasbeef): return which edge/vertex didn't work
 		// out
-		return nil, err
+		return nil, false, err
 	}
 
-	return route, err
+	return route, false, err
+}
+
+func getMinAmt(path []*channeldb.ChannelEdgePolicy) (lnwire.MilliSatoshi,
+	error) {
+
+	runningAmt := lnwire.MilliSatoshi(1)
+
+	// Traverse hops backwards to accumulate fees in the running amounts.
+	for i := len(path) - 1; i >= 0; i-- {
+		edge := path[i]
+
+		min := edge.MinHTLC
+		if min > runningAmt {
+			runningAmt = min
+		}
+
+		// Add fee for this hop.
+		localChan := i == 0
+		if !localChan {
+			runningAmt += edge.ComputeFee(runningAmt)
+		}
+	}
+
+	// Now that we arrived at the start of the route and found out the route
+	// total amount, we make a forward pass. Because the amount may have
+	// been increased in the backward pass, fees need to be recalculated and
+	// amount ranges re-checked.
+	receiverAmt := runningAmt
+	for i, edge := range path {
+		// TODO: Check edge policy for amt range
+
+		if i > 0 {
+			// Decrease the amount to send while going forward.
+			receiverAmt -= edge.ComputeFeeFromIncoming(
+				receiverAmt,
+			)
+		}
+	}
+
+	return receiverAmt, nil
 }

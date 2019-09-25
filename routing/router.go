@@ -192,6 +192,8 @@ type MissionController interface {
 	// payment from fromNode along edge.
 	GetProbability(fromNode, toNode route.Vertex,
 		amt lnwire.MilliSatoshi) float64
+
+	GetLastTimestamp(fromNode, toNode route.Vertex) time.Time
 }
 
 // FeeSchema is the set fee configuration for a Lightning Node on the network.

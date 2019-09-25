@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"crypto/rand"
 	"fmt"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing/route"
 )
@@ -243,35 +245,47 @@ func (p *paymentLifecycle) createNewPaymentAttempt() (lnwire.ShortChannelID,
 		// are expiring.
 	}
 
-	// Create a new payment attempt from the given payment session.
-	rt, err := p.paySession.RequestRoute(
-		p.payment, uint32(p.currentHeight), p.finalCLTVDelta,
-	)
-	if err != nil {
-		log.Warnf("Failed to find route for payment %x: %v",
-			p.payment.PaymentHash, err)
-
-		// Convert error to payment-level failure.
-		failure := errorToPaymentFailure(err)
-
-		// If we're unable to successfully make a payment using
-		// any of the routes we've found, then mark the payment
-		// as permanently failed.
-		saveErr := p.router.cfg.Control.Fail(
-			p.payment.PaymentHash, failure,
+	var rt *route.Route
+	for {
+		// Create a new payment attempt from the given payment session.
+		var (
+			probe bool
+			err   error
 		)
-		if saveErr != nil {
-			return lnwire.ShortChannelID{}, nil, saveErr
+		rt, probe, err = p.paySession.RequestRoute(
+			p.payment, uint32(p.currentHeight), p.finalCLTVDelta,
+		)
+		if err != nil {
+			log.Warnf("Failed to find route for payment %x: %v",
+				p.payment.PaymentHash, err)
+
+			// Convert error to payment-level failure.
+			failure := errorToPaymentFailure(err)
+			// If we're unable to successfully make a payment using
+			// any of the routes we've found, then mark the payment
+			// as permanently failed.
+			saveErr := p.router.cfg.Control.Fail(
+				p.payment.PaymentHash, failure,
+			)
+			if saveErr != nil {
+				return lnwire.ShortChannelID{}, nil, saveErr
+			}
+
+			// If there was an error already recorded for this
+			// payment, we'll return that.
+			if p.lastError != nil {
+				return lnwire.ShortChannelID{}, nil,
+					errNoRoute{lastError: p.lastError}
+			}
+			// Terminal state, return.
+			return lnwire.ShortChannelID{}, nil, err
 		}
 
-		// If there was an error already recorded for this
-		// payment, we'll return that.
-		if p.lastError != nil {
-			return lnwire.ShortChannelID{}, nil,
-				errNoRoute{lastError: p.lastError}
+		if !probe {
+			break
 		}
-		// Terminal state, return.
-		return lnwire.ShortChannelID{}, nil, err
+
+		p.probe(rt)
 	}
 
 	// Generate a new key to be used for this attempt.
@@ -420,4 +434,106 @@ func (p *paymentLifecycle) handleSendError(sendErr error) error {
 
 	// Terminal state, return the error we encountered.
 	return sendErr
+}
+
+func (p *paymentLifecycle) probe(route *route.Route) error {
+	// Generate a new key to be used for this attempt.
+	sessionKey, err := generateNewSessionKey()
+	if err != nil {
+		return err
+	}
+
+	var hash lntypes.Hash
+	if _, err := rand.Read(hash[:]); err != nil {
+		return err
+	}
+
+	// Generate the raw encoded sphinx packet to be included along
+	// with the htlcAdd message that we send directly to the
+	// switch.
+	onionBlob, circuit, err := generateSphinxPacket(
+		route, hash[:], sessionKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Craft an HTLC packet to send to the layer 2 switch. The
+	// metadata within this packet will be used to route the
+	// payment through the network, starting with the first-hop.
+	htlcAdd := &lnwire.UpdateAddHTLC{
+		Amount:      route.TotalAmount,
+		Expiry:      route.TotalTimeLock,
+		PaymentHash: hash,
+	}
+	copy(htlcAdd.OnionBlob[:], onionBlob)
+
+	// Attempt to send this payment through the network to complete
+	// the payment. If this attempt fails, then we'll continue on
+	// to the next available route.
+	firstHop := lnwire.NewShortChanIDFromInt(
+		route.Hops[0].ChannelID,
+	)
+
+	// We generate a new, unique payment ID that we will use for
+	// this HTLC.
+	paymentID, err := p.router.cfg.NextPaymentID()
+	if err != nil {
+		return err
+	}
+
+	// Send it to the Switch. When this method returns we assume
+	// the Switch successfully has persisted the payment attempt,
+	// such that we can resume waiting for the result after a
+	// restart.
+	err = p.router.cfg.Payer.SendHTLC(
+		firstHop, paymentID, htlcAdd,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Using the created circuit, initialize the error decrypter so we can
+	// parse+decode any failures incurred by this payment within the
+	// switch.
+	errorDecryptor := &htlcswitch.SphinxErrorDecrypter{
+		OnionErrorDecrypter: sphinx.NewOnionErrorDecrypter(circuit),
+	}
+
+	// Now ask the switch to return the result of the payment when
+	// available.
+	resultChan, err := p.router.cfg.Payer.GetPaymentResult(
+		paymentID, hash, errorDecryptor,
+	)
+	if err != nil {
+		return err
+	}
+
+	// The switch knows about this payment, we'll wait for a result
+	// to be available.
+	var (
+		result *htlcswitch.PaymentResult
+		ok     bool
+	)
+
+	select {
+	case result, ok = <-resultChan:
+		if !ok {
+			return htlcswitch.ErrSwitchExiting
+		}
+
+	case <-p.router.quit:
+		return ErrRouterShuttingDown
+	}
+
+	if result.Error == nil {
+		// Should not happen
+		return nil
+	}
+
+	p.router.processSendError(
+		paymentID, route, result.Error,
+	)
+
+	return nil
 }

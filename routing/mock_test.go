@@ -3,6 +3,7 @@ package routing
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -117,6 +118,10 @@ func (m *mockMissionControl) GetProbability(fromNode, toNode route.Vertex,
 	return 0
 }
 
+func (m *mockMissionControl) GetLastTimestamp(fromNode, toNode route.Vertex) time.Time {
+	return time.Time{}
+}
+
 type mockPaymentSession struct {
 	routes []*route.Route
 }
@@ -124,16 +129,16 @@ type mockPaymentSession struct {
 var _ PaymentSession = (*mockPaymentSession)(nil)
 
 func (m *mockPaymentSession) RequestRoute(payment *LightningPayment,
-	height uint32, finalCltvDelta uint16) (*route.Route, error) {
+	height uint32, finalCltvDelta uint16) (*route.Route, bool, error) {
 
 	if len(m.routes) == 0 {
-		return nil, fmt.Errorf("no routes")
+		return nil, false, fmt.Errorf("no routes")
 	}
 
 	r := m.routes[0]
 	m.routes = m.routes[1:]
 
-	return r, nil
+	return r, false, nil
 }
 
 type mockPayer struct {
