@@ -51,11 +51,6 @@ type ContractResolver interface {
 	// instance. It also initializes the resolver configuration.
 	Decode(r io.Reader, resCfg ResolverConfig) error
 
-	// AttachConfig should be called once a resolved is successfully decoded
-	// from its stored format. This struct delivers the configuration items
-	// that resolvers need to complete their duty.
-	AttachConfig(ResolverConfig)
-
 	// Stop signals the resolver to cancel any current resolution
 	// processes, and suspend.
 	Stop()

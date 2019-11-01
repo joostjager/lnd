@@ -5,6 +5,8 @@ import (
 	"io"
 
 	"github.com/btcsuite/btcutil"
+	"github.com/lightningnetwork/lnd/lnwallet"
+	"github.com/lightningnetwork/lnd/lnwire"
 )
 
 // htlcOutgoingContestResolver is a ContractResolver that's able to resolve an
@@ -16,6 +18,21 @@ type htlcOutgoingContestResolver struct {
 	// htlcTimeoutResolver is the inner solver that this resolver may turn
 	// into. This only happens if the HTLC expires on-chain.
 	htlcTimeoutResolver
+}
+
+// newOutgoingContestResolver instantiates a new outgoing contested htlc
+// resolver.
+func newOutgoingContestResolver(res lnwallet.OutgoingHtlcResolution,
+	broadcastHeight uint32, htlcIndex uint64, htlcAmt lnwire.MilliSatoshi,
+	resCfg ResolverConfig) *htlcOutgoingContestResolver {
+
+	timeout := newTimeoutResolver(
+		res, broadcastHeight, htlcIndex, htlcAmt, resCfg,
+	)
+
+	return &htlcOutgoingContestResolver{
+		htlcTimeoutResolver: *timeout,
+	}
 }
 
 // Resolve commences the resolution of this contract. As this contract hasn't
@@ -179,15 +196,6 @@ func (h *htlcOutgoingContestResolver) IsResolved() bool {
 // NOTE: Part of the ContractResolver interface.
 func (h *htlcOutgoingContestResolver) Encode(w io.Writer) error {
 	return h.htlcTimeoutResolver.Encode(w)
-}
-
-// AttachConfig should be called once a resolved is successfully decoded from
-// its stored format. This struct delivers the configuration items that
-// resolvers need to complete their duty.
-//
-// NOTE: Part of the ContractResolver interface.
-func (h *htlcOutgoingContestResolver) AttachConfig(r ResolverConfig) {
-	h.htlcTimeoutResolver.AttachConfig(r)
 }
 
 // A compile time assertion to ensure htlcOutgoingContestResolver meets the
