@@ -297,17 +297,20 @@ func (h *htlcIncomingContestResolver) Encode(w io.Writer) error {
 }
 
 // Decode attempts to decode an encoded ContractResolver from the passed Reader
-// instance, returning an active ContractResolver instance.
+// instance, yielding an active ContractResolver instance. It also initializes
+// the resolver configuration.
 //
 // NOTE: Part of the ContractResolver interface.
-func (h *htlcIncomingContestResolver) Decode(r io.Reader) error {
+func (h *htlcIncomingContestResolver) Decode(r io.Reader,
+	resCfg ResolverConfig) error {
+
 	// We'll first read the one field unique to this resolver.
 	if err := binary.Read(r, endian, &h.htlcExpiry); err != nil {
 		return err
 	}
 
 	// Then we'll decode our internal resolver.
-	return h.htlcSuccessResolver.Decode(r)
+	return h.htlcSuccessResolver.Decode(r, resCfg)
 }
 
 // AttachConfig should be called once a resolved is successfully decoded from

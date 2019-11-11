@@ -489,12 +489,10 @@ func (b *boltArbitratorLog) FetchUnresolvedContracts() ([]ContractResolver, erro
 			}
 
 			// Decode the stream into it.
-			err := res.Decode(resReader)
+			err := res.Decode(resReader, resolverCfg)
 			if err != nil {
 				return err
 			}
-
-			res.AttachConfig(resolverCfg)
 
 			contracts = append(contracts, res)
 			return nil

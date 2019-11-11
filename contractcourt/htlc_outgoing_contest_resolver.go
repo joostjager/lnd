@@ -181,14 +181,6 @@ func (h *htlcOutgoingContestResolver) Encode(w io.Writer) error {
 	return h.htlcTimeoutResolver.Encode(w)
 }
 
-// Decode attempts to decode an encoded ContractResolver from the passed Reader
-// instance, returning an active ContractResolver instance.
-//
-// NOTE: Part of the ContractResolver interface.
-func (h *htlcOutgoingContestResolver) Decode(r io.Reader) error {
-	return h.htlcTimeoutResolver.Decode(r)
-}
-
 // AttachConfig should be called once a resolved is successfully decoded from
 // its stored format. This struct delivers the configuration items that
 // resolvers need to complete their duty.

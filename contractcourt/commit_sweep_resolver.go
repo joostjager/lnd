@@ -263,10 +263,13 @@ func (c *commitSweepResolver) Encode(w io.Writer) error {
 }
 
 // Decode attempts to decode an encoded ContractResolver from the passed Reader
-// instance, returning an active ContractResolver instance.
+// instance, yielding an active ContractResolver instance. It also initializes
+// the resolver configuration.
 //
 // NOTE: Part of the ContractResolver interface.
-func (c *commitSweepResolver) Decode(r io.Reader) error {
+func (c *commitSweepResolver) Decode(r io.Reader, resCfg ResolverConfig) error {
+	c.contractResolverKit = *newContractResolverKit(resCfg)
+
 	if err := decodeCommitResolution(r, &c.commitResolution); err != nil {
 		return err
 	}

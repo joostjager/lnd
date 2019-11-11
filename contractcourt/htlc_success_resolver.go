@@ -291,10 +291,13 @@ func (h *htlcSuccessResolver) Encode(w io.Writer) error {
 }
 
 // Decode attempts to decode an encoded ContractResolver from the passed Reader
-// instance, returning an active ContractResolver instance.
+// instance, yielding an active ContractResolver instance. It also initializes
+// the resolver configuration.
 //
 // NOTE: Part of the ContractResolver interface.
-func (h *htlcSuccessResolver) Decode(r io.Reader) error {
+func (h *htlcSuccessResolver) Decode(r io.Reader, resCfg ResolverConfig) error {
+	h.contractResolverKit = *newContractResolverKit(resCfg)
+
 	// First we'll decode our inner HTLC resolution.
 	if err := decodeIncomingResolution(r, &h.htlcResolution); err != nil {
 		return err

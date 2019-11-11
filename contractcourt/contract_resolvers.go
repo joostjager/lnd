@@ -47,9 +47,9 @@ type ContractResolver interface {
 	Encode(w io.Writer) error
 
 	// Decode attempts to decode an encoded ContractResolver from the
-	// passed Reader instance, returning an active ContractResolver
-	// instance.
-	Decode(r io.Reader) error
+	// passed Reader instance, yielding an active ContractResolver
+	// instance. It also initializes the resolver configuration.
+	Decode(r io.Reader, resCfg ResolverConfig) error
 
 	// AttachConfig should be called once a resolved is successfully decoded
 	// from its stored format. This struct delivers the configuration items
