@@ -467,56 +467,35 @@ func (b *boltArbitratorLog) FetchUnresolvedContracts() ([]ContractResolver, erro
 			// bytes.
 			resReader := bytes.NewReader(resBytes[1:])
 
+			// Instantiate an uninitialized resolver.
 			switch resType {
 			case resolverTimeout:
-				timeoutRes := &htlcTimeoutResolver{}
-				if err := timeoutRes.Decode(resReader); err != nil {
-					return err
-				}
-
-				res = timeoutRes
+				res = &htlcTimeoutResolver{}
 
 			case resolverSuccess:
-				successRes := &htlcSuccessResolver{}
-				if err := successRes.Decode(resReader); err != nil {
-					return err
-				}
-
-				res = successRes
+				res = &htlcSuccessResolver{}
 
 			case resolverOutgoingContest:
-				outContestRes := &htlcOutgoingContestResolver{
-					htlcTimeoutResolver: htlcTimeoutResolver{},
-				}
-				if err := outContestRes.Decode(resReader); err != nil {
-					return err
-				}
-
-				res = outContestRes
+				res = &htlcOutgoingContestResolver{}
 
 			case resolverIncomingContest:
-				inContestRes := &htlcIncomingContestResolver{
-					htlcSuccessResolver: htlcSuccessResolver{},
-				}
-				if err := inContestRes.Decode(resReader); err != nil {
-					return err
-				}
-
-				res = inContestRes
+				res = &htlcIncomingContestResolver{}
 
 			case resolverUnilateralSweep:
-				sweepRes := &commitSweepResolver{}
-				if err := sweepRes.Decode(resReader); err != nil {
-					return err
-				}
-
-				res = sweepRes
+				res = &commitSweepResolver{}
 
 			default:
 				return fmt.Errorf("unknown resolver type: %v", resType)
 			}
 
+			// Decode the stream into it.
+			err := res.Decode(resReader)
+			if err != nil {
+				return err
+			}
+
 			res.AttachConfig(resolverCfg)
+
 			contracts = append(contracts, res)
 			return nil
 		})
