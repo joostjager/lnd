@@ -93,6 +93,8 @@ type InvoiceRegistry struct {
 	// now returns the current time.
 	now func() time.Time
 
+	getTick func(duration time.Duration) <-chan time.Time
+
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
@@ -115,6 +117,7 @@ func NewRegistry(cdb *channeldb.DB, finalCltvRejectDelta int32) *InvoiceRegistry
 		finalCltvRejectDelta:      finalCltvRejectDelta,
 		htlcAutoReleaseChan:       make(chan *releaseEvent),
 		now:                       time.Now,
+		getTick:                   time.After,
 		quit:                      make(chan struct{}),
 	}
 }
@@ -160,7 +163,7 @@ func (i *InvoiceRegistry) invoiceEventLoop() {
 		if autoReleaseHeap.Len() > 0 {
 			head := (*autoReleaseHeap)[0]
 			now := i.now()
-			nextReleaseTick = time.After(head.releaseTime.Sub(now))
+			nextReleaseTick = i.getTick(head.releaseTime.Sub(now))
 		}
 
 		select {
@@ -229,8 +232,9 @@ func (i *InvoiceRegistry) invoiceEventLoop() {
 			}
 
 		case event := <-i.htlcAutoReleaseChan:
-			log.Debugf("Scheduling auto-release for hash %v at %v",
-				event.hash, event.releaseTime)
+			log.Debugf("Scheduling auto-release for htlc: "+
+				"hash=%v, key=%v at %v",
+				event.hash, event.key, event.releaseTime)
 
 			heap.Push(autoReleaseHeap, event)
 

@@ -15,6 +15,8 @@ import (
 var (
 	testTimeout = 5 * time.Second
 
+	testTime = time.Date(2018, time.February, 2, 14, 0, 0, 0, time.UTC)
+
 	preimage = lntypes.Preimage{
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
@@ -44,6 +46,8 @@ var (
 )
 
 type testContext struct {
+	now      time.Time
+	chans    map[time.Time][]chan time.Time
 	registry *InvoiceRegistry
 
 	cleanup func()
@@ -68,12 +72,18 @@ func newTestContext(t *testing.T) *testContext {
 
 	ctx := testContext{
 		registry: registry,
+		chans:    make(map[time.Time][]chan time.Time),
 		t:        t,
 		cleanup: func() {
 			registry.Stop()
 			cleanup()
 		},
 	}
+
+	registry.now = func() time.Time { return ctx.now }
+	registry.getTick = ctx.getTick
+
+	registry.cdb.Now = func() time.Time { return ctx.now }
 
 	return &ctx
 }
@@ -670,4 +680,118 @@ type mockPayload struct {
 
 func (p *mockPayload) MultiPath() *record.MPP {
 	return p.mpp
+}
+
+func (t *testContext) getTick(duration time.Duration) <-chan time.Time {
+	triggerTime := t.now.Add(duration)
+	log.Debugf("getTick called: duration=%v, trigger_time=%v",
+		duration, triggerTime)
+
+	c := make(chan time.Time)
+	chans := t.chans[triggerTime]
+	chans = append(chans, c)
+	t.chans[triggerTime] = chans
+
+	return c
+}
+
+func (t *testContext) setTime(now time.Time) {
+	t.now = now
+	remainingChans := make(map[time.Time][]chan time.Time)
+	for t, chans := range t.chans {
+		if t.After(now) {
+			remainingChans[t] = chans
+			continue
+		}
+
+		for _, c := range chans {
+			c <- now
+		}
+	}
+
+	t.chans = remainingChans
+}
+
+// TestSettleMpp tests settling of an invoice with multiple partial payments.
+func TestSettleMpp(t *testing.T) {
+	ctx := newTestContext(t)
+	defer ctx.cleanup()
+
+	ctx.now = testTime
+
+	// Add the invoice.
+	_, err := ctx.registry.AddInvoice(testInvoice, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mppPayload := &mockPayload{
+		mpp: record.NewMPP(testInvoiceAmt, [32]byte{}),
+	}
+
+	// Send htlc 1.
+	hodlChan1 := make(chan interface{}, 1)
+	event, err := ctx.registry.NotifyExitHopHtlc(
+		hash, testInvoice.Terms.Value/2,
+		testHtlcExpiry,
+		testCurrentHeight, getCircuitKey(10), hodlChan1, mppPayload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event != nil {
+		t.Fatal("expected no direct resolution")
+	}
+
+	// Wait for timer to be set up.
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate mpp timeout releasing htlc 1.
+	ctx.setTime(testTime.Add(30 * time.Second))
+
+	hodlEvent := (<-hodlChan1).(HodlEvent)
+	if hodlEvent.Preimage != nil {
+		t.Fatal("expected cancel event")
+	}
+
+	// Send htlc 2.
+	hodlChan2 := make(chan interface{}, 1)
+	event, err = ctx.registry.NotifyExitHopHtlc(
+		hash, testInvoice.Terms.Value/2,
+		testHtlcExpiry,
+		testCurrentHeight, getCircuitKey(11), hodlChan2, mppPayload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event != nil {
+		t.Fatal("expected no direct resolution")
+	}
+
+	// Send htlc 3.
+	hodlChan3 := make(chan interface{}, 1)
+	event, err = ctx.registry.NotifyExitHopHtlc(
+		hash, testInvoice.Terms.Value/2,
+		testHtlcExpiry,
+		testCurrentHeight, getCircuitKey(12), hodlChan3, mppPayload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event == nil {
+		t.Fatal("expected a settle event")
+	}
+
+	// Check that settled amount is equal to the sum of values of the htlcs
+	// 0 and 1.
+	inv, err := ctx.registry.LookupInvoice(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.Terms.State != channeldb.ContractSettled {
+		t.Fatal("expected invoice to be settled")
+	}
+	if inv.AmtPaid != testInvoice.Terms.Value {
+		t.Fatal("amount incorrect")
+	}
 }
