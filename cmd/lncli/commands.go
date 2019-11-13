@@ -2380,7 +2380,9 @@ func readPaymentStatusStream(stream routerrpc.Router_TrackPaymentClient) error {
 		}
 
 		fmt.Printf("State: %v\n", status.State)
-		if status.State == routerrpc.PaymentState_SUCCEEDED {
+		if status.State == routerrpc.PaymentState_SUCCEEDED ||
+			status.State == routerrpc.PaymentState_FAILED_INCORRECT_PAYMENT_DETAILS {
+
 			fmt.Printf("Preimage: %x\n", status.Preimage)
 			fmt.Printf("Route:\n")
 			printJSON(status.Route)
