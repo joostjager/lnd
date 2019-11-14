@@ -3511,7 +3511,6 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 
 	addInvoiceData := &invoicesrpc.AddInvoiceData{
 		Memo:            invoice.Memo,
-		Receipt:         invoice.Receipt,
 		Value:           btcutil.Amount(invoice.Value),
 		DescriptionHash: invoice.DescriptionHash,
 		Expiry:          invoice.Expiry,
