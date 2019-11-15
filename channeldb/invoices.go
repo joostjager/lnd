@@ -1213,7 +1213,7 @@ func (d *DB) updateInvoice(hash lntypes.Hash, invoices, settleIndex *bbolt.Bucke
 	// Update invoice state.
 	invoice.Terms.State = update.State
 
-	now := d.now()
+	now := d.Now()
 
 	// Update htlc set.
 	for key, htlcUpdate := range update.Htlcs {
