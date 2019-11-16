@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"io/ioutil"
 	"time"
 
 	"github.com/btcsuite/btcd/wire"
@@ -26,17 +27,6 @@ const (
 	// TODO(halseth): determine the max length payment request when field
 	// lengths are final.
 	MaxPaymentRequestSize = 4096
-
-	// A set of tlv type definitions used to serialize invoice htlcs to the
-	// database.
-	chanIDType       tlv.Type = 1
-	htlcIDType       tlv.Type = 3
-	amtType          tlv.Type = 5
-	acceptHeightType tlv.Type = 7
-	acceptTimeType   tlv.Type = 9
-	resolveTimeType  tlv.Type = 11
-	expiryHeightType tlv.Type = 13
-	htlcStateType    tlv.Type = 15
 
 	memoType        tlv.Type = 0
 	payReqType      tlv.Type = 1
@@ -178,7 +168,7 @@ type Invoice struct {
 
 	// Htlcs records all htlcs that paid to this invoice. Some of these
 	// htlcs may have been marked as canceled.
-	Htlcs map[CircuitKey]*InvoiceHTLC
+	Htlcs []byte
 }
 
 // HtlcState defines the states an htlc paying to an invoice can be in.
@@ -280,77 +270,12 @@ func deserializeInvoice(r io.Reader) (Invoice, error) {
 		return invoice, err
 	}
 
-	invoice.Htlcs, err = deserializeHtlcs(r)
+	invoice.Htlcs, err = ioutil.ReadAll(r)
 	if err != nil {
 		return Invoice{}, err
 	}
 
 	return invoice, nil
-}
-
-// deserializeHtlcs reads a list of invoice htlcs from a reader and returns it
-// as a map.
-//
-// nolint: dupl
-func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
-	htlcs := make(map[CircuitKey]*InvoiceHTLC)
-
-	for {
-		// Read the length of the tlv stream for this htlc.
-		var streamLen uint64
-		if err := binary.Read(r, byteOrder, &streamLen); err != nil {
-			if err == io.EOF {
-				break
-			}
-
-			return nil, err
-		}
-
-		streamBytes := make([]byte, streamLen)
-		if _, err := r.Read(streamBytes); err != nil {
-			return nil, err
-		}
-		streamReader := bytes.NewReader(streamBytes)
-
-		// Decode the contents into the htlc fields.
-		var (
-			htlc                    InvoiceHTLC
-			key                     CircuitKey
-			chanID                  uint64
-			state                   uint8
-			acceptTime, resolveTime uint64
-			amt                     uint64
-		)
-		tlvStream, err := tlv.NewStream(
-			tlv.MakePrimitiveRecord(chanIDType, &chanID),
-			tlv.MakePrimitiveRecord(htlcIDType, &key.HtlcID),
-			tlv.MakePrimitiveRecord(amtType, &amt),
-			tlv.MakePrimitiveRecord(
-				acceptHeightType, &htlc.AcceptHeight,
-			),
-			tlv.MakePrimitiveRecord(acceptTimeType, &acceptTime),
-			tlv.MakePrimitiveRecord(resolveTimeType, &resolveTime),
-			tlv.MakePrimitiveRecord(expiryHeightType, &htlc.Expiry),
-			tlv.MakePrimitiveRecord(htlcStateType, &state),
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := tlvStream.Decode(streamReader); err != nil {
-			return nil, err
-		}
-
-		key.ChanID = lnwire.NewShortChanIDFromInt(chanID)
-		htlc.AcceptTime = time.Unix(0, int64(acceptTime))
-		htlc.ResolveTime = time.Unix(0, int64(resolveTime))
-		htlc.State = HtlcState(state)
-		htlc.Amt = lnwire.MilliSatoshi(amt)
-
-		htlcs[key] = &htlc
-	}
-
-	return htlcs, nil
 }
 
 // serializeInvoice serializes an invoice to a writer.
@@ -427,53 +352,8 @@ func serializeInvoice(w io.Writer, i *Invoice) error {
 		return err
 	}
 
-	return serializeHtlcs(w, i.Htlcs)
-}
-
-// serializeHtlcs serializes a map containing circuit keys and invoice htlcs to
-// a writer.
-//
-// nolint: dupl
-func serializeHtlcs(w io.Writer, htlcs map[CircuitKey]*InvoiceHTLC) error {
-	for key, htlc := range htlcs {
-		// Encode the htlc in a tlv stream.
-		chanID := key.ChanID.ToUint64()
-		amt := uint64(htlc.Amt)
-		acceptTime := uint64(htlc.AcceptTime.UnixNano())
-		resolveTime := uint64(htlc.ResolveTime.UnixNano())
-		state := uint8(htlc.State)
-
-		tlvStream, err := tlv.NewStream(
-			tlv.MakePrimitiveRecord(chanIDType, &chanID),
-			tlv.MakePrimitiveRecord(htlcIDType, &key.HtlcID),
-			tlv.MakePrimitiveRecord(amtType, &amt),
-			tlv.MakePrimitiveRecord(
-				acceptHeightType, &htlc.AcceptHeight,
-			),
-			tlv.MakePrimitiveRecord(acceptTimeType, &acceptTime),
-			tlv.MakePrimitiveRecord(resolveTimeType, &resolveTime),
-			tlv.MakePrimitiveRecord(expiryHeightType, &htlc.Expiry),
-			tlv.MakePrimitiveRecord(htlcStateType, &state),
-		)
-		if err != nil {
-			return err
-		}
-
-		var b bytes.Buffer
-		if err := tlvStream.Encode(&b); err != nil {
-			return err
-		}
-
-		// Write the length of the tlv stream followed by the stream
-		// bytes.
-		err = binary.Write(w, byteOrder, uint64(b.Len()))
-		if err != nil {
-			return err
-		}
-
-		if _, err := w.Write(b.Bytes()); err != nil {
-			return err
-		}
+	if _, err := w.Write(i.Htlcs); err != nil {
+		return err
 	}
 
 	return nil
