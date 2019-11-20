@@ -88,7 +88,7 @@ type InvoiceRegistry struct {
 	// not be hit.
 	finalCltvRejectDelta int32
 
-	htlcAutoReleaseChan chan *releaseEvent
+	htlcAutoReleaseChan chan *htlcReleaseEvent
 
 	// now returns the current time.
 	now func() time.Time
@@ -115,7 +115,7 @@ func NewRegistry(cdb *channeldb.DB, finalCltvRejectDelta int32) *InvoiceRegistry
 		hodlSubscriptions:         make(map[channeldb.CircuitKey]map[chan<- interface{}]struct{}),
 		hodlReverseSubscriptions:  make(map[chan<- interface{}]map[channeldb.CircuitKey]struct{}),
 		finalCltvRejectDelta:      finalCltvRejectDelta,
-		htlcAutoReleaseChan:       make(chan *releaseEvent),
+		htlcAutoReleaseChan:       make(chan *htlcReleaseEvent),
 		now:                       time.Now,
 		getTick:                   time.After,
 		quit:                      make(chan struct{}),
@@ -146,6 +146,12 @@ type invoiceEvent struct {
 	invoice *channeldb.Invoice
 }
 
+type htlcReleaseEvent struct {
+	hash        lntypes.Hash
+	key         channeldb.CircuitKey
+	releaseTime time.Time
+}
+
 // invoiceEventLoop is the dedicated goroutine responsible for accepting
 // new notification subscriptions, cancelling old subscriptions, and
 // dispatching new invoice events.
@@ -153,15 +159,14 @@ func (i *InvoiceRegistry) invoiceEventLoop() {
 	defer i.wg.Done()
 
 	// Set up a heap for htlc auto-releases.
-	autoReleaseHeap := &releaseHeap{}
-	heap.Init(autoReleaseHeap)
+	autoReleaseHeap := newReleaseHeap()
 
 	for {
 		// If there is something to release, set up a release tick
 		// channel.
 		var nextReleaseTick <-chan time.Time
 		if autoReleaseHeap.Len() > 0 {
-			head := (*autoReleaseHeap)[0]
+			head := autoReleaseHeap.heap[0]
 			now := i.now()
 			nextReleaseTick = i.getTick(head.releaseTime.Sub(now))
 		}
@@ -236,13 +241,14 @@ func (i *InvoiceRegistry) invoiceEventLoop() {
 				"hash=%v, key=%v at %v",
 				event.hash, event.key, event.releaseTime)
 
-			heap.Push(autoReleaseHeap, event)
+			autoReleaseHeap.Schedule(&hashReleaseEvent{
+				hash:        event.hash,
+				releaseTime: event.releaseTime,
+			})
 
 		case <-nextReleaseTick:
-			event := heap.Pop(autoReleaseHeap).(*releaseEvent)
-			err := i.cancelSingleHtlc(
-				event.hash, event.key,
-			)
+			event := heap.Pop(&autoReleaseHeap).(*hashReleaseEvent)
+			err := i.cancelHtlcs(event.hash)
 			if err != nil {
 				log.Errorf("HTLC timer: %v",
 					err)
@@ -470,7 +476,7 @@ func (i *InvoiceRegistry) startHtlcTimer(hash lntypes.Hash,
 	key channeldb.CircuitKey, acceptTime time.Time) error {
 
 	releaseTime := acceptTime.Add(htlcHoldDuration)
-	event := &releaseEvent{
+	event := &htlcReleaseEvent{
 		hash:        hash,
 		key:         key,
 		releaseTime: releaseTime,
@@ -486,9 +492,7 @@ func (i *InvoiceRegistry) startHtlcTimer(hash lntypes.Hash,
 }
 
 // cancelSingleHtlc cancels a single accepted htlc on an invoice.
-func (i *InvoiceRegistry) cancelSingleHtlc(hash lntypes.Hash,
-	key channeldb.CircuitKey) error {
-
+func (i *InvoiceRegistry) cancelHtlcs(hash lntypes.Hash) error {
 	i.Lock()
 	defer i.Unlock()
 
@@ -502,23 +506,19 @@ func (i *InvoiceRegistry) cancelSingleHtlc(hash lntypes.Hash,
 			return nil, errNoUpdate
 		}
 
-		htlc, ok := invoice.Htlcs[key]
-		if !ok {
-			return nil, fmt.Errorf("htlc %v not found", key)
-		}
+		canceledHtlcs := make(map[channeldb.CircuitKey]*channeldb.HtlcAcceptDesc)
+		for key, htlc := range invoice.Htlcs {
+			if htlc.State != channeldb.HtlcStateAccepted {
+				log.Debugf("cancelSingleHtlc: htlc %v on invoice %v "+
+					"is already resolved", key, hash)
 
-		if htlc.State != channeldb.HtlcStateAccepted {
-			log.Debugf("cancelSingleHtlc: htlc %v on invoice %v "+
-				"is already resolved", key, hash)
+				return nil, errNoUpdate
+			}
 
-			return nil, errNoUpdate
-		}
+			log.Debugf("cancelSingleHtlc: cancelling htlc %v on invoice %v",
+				key, hash)
 
-		log.Debugf("cancelSingleHtlc: cancelling htlc %v on invoice %v",
-			key, hash)
-
-		canceledHtlcs := map[channeldb.CircuitKey]*channeldb.HtlcAcceptDesc{
-			key: nil,
+			canceledHtlcs[key] = nil
 		}
 
 		// Cancel htlc and keep invoice open.
@@ -536,16 +536,22 @@ func (i *InvoiceRegistry) cancelSingleHtlc(hash lntypes.Hash,
 		return err
 	}
 
-	htlc, ok := invoice.Htlcs[key]
-	if !ok {
-		return fmt.Errorf("htlc %v not found", key)
-	}
-	if htlc.State == channeldb.HtlcStateCanceled {
+	// In the callback, some htlcs may have been moved to the canceled
+	// state. We now go through all of these and notify links and resolvers
+	// that are waiting for resolution. Any htlcs that were already canceled
+	// before, will be notified again. This isn't necessary but doesn't hurt
+	// either.
+	for key, htlc := range invoice.Htlcs {
+		if htlc.State != channeldb.HtlcStateCanceled {
+			continue
+		}
+
 		i.notifyHodlSubscribers(HodlEvent{
 			CircuitKey:   key,
 			AcceptHeight: int32(htlc.AcceptHeight),
 		})
 	}
+
 	return nil
 }
 
