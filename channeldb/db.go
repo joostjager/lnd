@@ -399,7 +399,10 @@ func (d *DB) fetchOpenChannels(tx *bbolt.Tx,
 
 		// Finally, we both of the necessary buckets retrieved, fetch
 		// all the active channels related to this node.
-		nodeChannels, err := d.fetchNodeChannels(chainBucket)
+		nodeChannels, err := d.fetchNodeChannels(
+			chainBucket,
+			ChannelPendingOpen|ChannelOpen|ChannelWaitingClose,
+		)
 		if err != nil {
 			return fmt.Errorf("unable to read channel for "+
 				"chain_hash=%x, node_key=%x: %v",
@@ -416,7 +419,22 @@ func (d *DB) fetchOpenChannels(tx *bbolt.Tx,
 // fetchNodeChannels retrieves all active channels from the target chainBucket
 // which is under a node's dedicated channel bucket. This function is typically
 // used to fetch all the active channels related to a particular node.
-func (d *DB) fetchNodeChannels(chainBucket *bbolt.Bucket) ([]*OpenChannel, error) {
+func (d *DB) fetchNodeChannels(chainBucket *bbolt.Bucket,
+	filter ChannelFilter) ([]*OpenChannel, error) {
+
+	includeChannel := func(channel *OpenChannel) bool {
+		if channel.IsPending {
+			return filter.includes(ChannelPendingOpen)
+		}
+
+		// If the channel is in the state Default, it is open.
+		if channel.ChanStatus() == ChanStatusDefault {
+			return filter.includes(ChannelOpen)
+		}
+
+		// Otherwise the channel is waiting for close.
+		return filter.includes(ChannelWaitingClose)
+	}
 
 	var channels []*OpenChannel
 
@@ -444,7 +462,9 @@ func (d *DB) fetchNodeChannels(chainBucket *bbolt.Bucket) ([]*OpenChannel, error
 		}
 		oChannel.Db = d
 
-		channels = append(channels, oChannel)
+		if includeChannel(oChannel) {
+			channels = append(channels, oChannel)
+		}
 
 		return nil
 	})
@@ -555,42 +575,23 @@ func (d *DB) FetchChannel(chanPoint wire.OutPoint) (*OpenChannel, error) {
 // within the database, including pending open, fully open and channels waiting
 // for a closing transaction to confirm.
 func (d *DB) FetchAllChannels() ([]*OpenChannel, error) {
-	var channels []*OpenChannel
-
-	// TODO(halseth): fetch all in one db tx.
-	openChannels, err := d.FetchAllOpenChannels()
-	if err != nil {
-		return nil, err
-	}
-	channels = append(channels, openChannels...)
-
-	pendingChannels, err := d.FetchPendingChannels()
-	if err != nil {
-		return nil, err
-	}
-	channels = append(channels, pendingChannels...)
-
-	waitingClose, err := d.FetchWaitingCloseChannels()
-	if err != nil {
-		return nil, err
-	}
-	channels = append(channels, waitingClose...)
-
-	return channels, nil
+	return fetchChannels(
+		d, ChannelOpen|ChannelPendingOpen|ChannelWaitingClose,
+	)
 }
 
 // FetchAllOpenChannels will return all channels that have the funding
 // transaction confirmed, and is not waiting for a closing transaction to be
 // confirmed.
 func (d *DB) FetchAllOpenChannels() ([]*OpenChannel, error) {
-	return fetchChannels(d, false, false)
+	return fetchChannels(d, ChannelOpen)
 }
 
 // FetchPendingChannels will return channels that have completed the process of
 // generating and broadcasting funding transactions, but whose funding
 // transactions have yet to be confirmed on the blockchain.
 func (d *DB) FetchPendingChannels() ([]*OpenChannel, error) {
-	return fetchChannels(d, true, false)
+	return fetchChannels(d, ChannelPendingOpen)
 }
 
 // FetchWaitingCloseChannels will return all channels that have been opened,
@@ -598,25 +599,39 @@ func (d *DB) FetchPendingChannels() ([]*OpenChannel, error) {
 //
 // NOTE: This includes channels that are also pending to be opened.
 func (d *DB) FetchWaitingCloseChannels() ([]*OpenChannel, error) {
-	waitingClose, err := fetchChannels(d, false, true)
-	if err != nil {
-		return nil, err
-	}
-	pendingWaitingClose, err := fetchChannels(d, true, true)
+	notOpen, err := fetchChannels(d, ChannelPendingOpen|ChannelWaitingClose)
 	if err != nil {
 		return nil, err
 	}
 
-	return append(waitingClose, pendingWaitingClose...), nil
+	return notOpen, nil
 }
 
-// fetchChannels attempts to retrieve channels currently stored in the
-// database. The pending parameter determines whether only pending channels
-// will be returned, or only open channels will be returned. The waitingClose
-// parameter determines whether only channels waiting for a closing transaction
-// to be confirmed should be returned. If no active channels exist within the
-// network, then ErrNoActiveChannels is returned.
-func fetchChannels(d *DB, pending, waitingClose bool) ([]*OpenChannel, error) {
+// ChannelFilter allows filtering channel by state.
+type ChannelFilter uint8
+
+const (
+	// ChannelPendingOpen are channels in the pending open state.
+	ChannelPendingOpen ChannelFilter = 1 << 0
+
+	// ChannelOpen are channels in the open state.
+	ChannelOpen ChannelFilter = 1 << 1
+
+	// ChannelWaitingClose are channels for which the commitment tx is
+	// published, but not yet confirmed.
+	ChannelWaitingClose ChannelFilter = 1 << 2
+)
+
+// includes returns whether a given state is part of the filter.
+func (f ChannelFilter) includes(state ChannelFilter) bool {
+	return f&state == state
+}
+
+// fetchChannels attempts to retrieve channels currently stored in the database.
+// The filter parameters determine whether channels in those states will be
+// returned. If no active channels exist within the network, then
+// ErrNoActiveChannels is returned.
+func fetchChannels(d *DB, filter ChannelFilter) ([]*OpenChannel, error) {
 	var channels []*OpenChannel
 
 	err := d.View(func(tx *bbolt.Tx) error {
@@ -659,30 +674,15 @@ func fetchChannels(d *DB, pending, waitingClose bool) ([]*OpenChannel, error) {
 						"bucket for chain=%x", chainHash[:])
 				}
 
-				nodeChans, err := d.fetchNodeChannels(chainBucket)
+				nodeChans, err := d.fetchNodeChannels(
+					chainBucket, filter,
+				)
 				if err != nil {
 					return fmt.Errorf("unable to read "+
 						"channel for chain_hash=%x, "+
 						"node_key=%x: %v", chainHash[:], k, err)
 				}
 				for _, channel := range nodeChans {
-					if channel.IsPending != pending {
-						continue
-					}
-
-					// If the channel is in any other state
-					// than Default, then it means it is
-					// waiting to be closed.
-					channelWaitingClose :=
-						channel.ChanStatus() != ChanStatusDefault
-
-					// Only include it if we requested
-					// channels with the same waitingClose
-					// status.
-					if channelWaitingClose != waitingClose {
-						continue
-					}
-
 					channels = append(channels, channel)
 				}
 				return nil
