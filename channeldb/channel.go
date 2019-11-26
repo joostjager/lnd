@@ -37,6 +37,11 @@ var (
 	// TODO(roasbeef): flesh out comment
 	openChannelBucket = []byte("open-chan-bucket")
 
+	// pendingCloseChannelBucket stores all channels that are in the pending
+	// close state. All information from their previous open state is
+	// retained.
+	pendingCloseChannelBucket = []byte("pending-close-chan-bucket")
+
 	// chanInfoKey can be accessed within the bucket for a channel
 	// (identified by its chanPoint). This key stores all the static
 	// information for a channel which is decided at the end of  the
@@ -2197,7 +2202,8 @@ func (c *OpenChannel) CloseChannel(summary *ChannelCloseSummary) error {
 		if err != nil {
 			return err
 		}
-		chanBucket := chainBucket.Bucket(chanPointBuf.Bytes())
+		chanKey := chanPointBuf.Bytes()
+		chanBucket := chainBucket.Bucket(chanKey)
 		if chanBucket == nil {
 			return ErrNoActiveChannels
 		}
@@ -2215,6 +2221,26 @@ func (c *OpenChannel) CloseChannel(summary *ChannelCloseSummary) error {
 		// Delete the bucket containing all information about this open
 		// channel. Sub-buckets will be deleted recursively.
 		err = chainBucket.DeleteBucket(chanPointBuf.Bytes())
+		if err != nil {
+			return err
+		}
+
+		// Add pending close channel state to the pending close bucket.
+		pendingCloseBucket, err := tx.CreateBucketIfNotExists(
+			pendingCloseChannelBucket,
+		)
+		if err != nil {
+			return err
+		}
+
+		pendingCloseChanBucket, err := pendingCloseBucket.CreateBucket(
+			chanKey,
+		)
+		if err != nil {
+			return err
+		}
+
+		err = putOpenChannel(pendingCloseChanBucket, chanState)
 		if err != nil {
 			return err
 		}

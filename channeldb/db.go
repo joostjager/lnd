@@ -622,6 +622,10 @@ const (
 	// ChannelWaitingClose are channels for which the commitment tx is
 	// published, but not yet confirmed.
 	ChannelWaitingClose ChannelFilter = 1 << 2
+
+	// ChannelPendingClose are channels for which the commitment tx is
+	// has been confirmed.
+	ChannelPendingClose ChannelFilter = 1 << 3
 )
 
 // includes returns whether a given state is part of the filter.
@@ -867,6 +871,22 @@ func (d *DB) MarkChanFullyClosed(chanPoint *wire.OutPoint) error {
 
 		err = closedChanBucket.Put(chanID, newSummary.Bytes())
 		if err != nil {
+			return err
+		}
+
+		// Delete the bucket containing all information about this
+		// pending close channel. Sub-buckets will be deleted
+		// recursively. For legacy channels, the channel bucket may have
+		// already been deleted at this point so ignore that error.
+		pendingCloseBucket, err := tx.CreateBucketIfNotExists(
+			pendingCloseChannelBucket,
+		)
+		if err != nil {
+			return err
+		}
+
+		err = pendingCloseBucket.DeleteBucket(chanID)
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 
