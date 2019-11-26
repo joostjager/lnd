@@ -2212,23 +2212,8 @@ func (c *OpenChannel) CloseChannel(summary *ChannelCloseSummary) error {
 			return err
 		}
 
-		// Now that the index to this channel has been deleted, purge
-		// the remaining channel metadata from the database.
-		err = deleteOpenChannel(chanBucket, chanPointBuf.Bytes())
-		if err != nil {
-			return err
-		}
-
-		// With the base channel data deleted, attempt to delete the
-		// information stored within the revocation log.
-		logBucket := chanBucket.Bucket(revocationLogBucket)
-		if logBucket != nil {
-			err = chanBucket.DeleteBucket(revocationLogBucket)
-			if err != nil {
-				return err
-			}
-		}
-
+		// Delete the bucket containing all information about this open
+		// channel. Sub-buckets will be deleted recursively.
 		err = chainBucket.DeleteBucket(chanPointBuf.Bytes())
 		if err != nil {
 			return err
@@ -2761,33 +2746,6 @@ func fetchChanRevocationState(chanBucket *bbolt.Bucket, channel *OpenChannel) er
 	// Otherwise we'll read the next revocation for the remote party which
 	// is always the last item within the buffer.
 	return ReadElements(r, &channel.RemoteNextRevocation)
-}
-
-func deleteOpenChannel(chanBucket *bbolt.Bucket, chanPointBytes []byte) error {
-
-	if err := chanBucket.Delete(chanInfoKey); err != nil {
-		return err
-	}
-
-	err := chanBucket.Delete(append(chanCommitmentKey, byte(0x00)))
-	if err != nil {
-		return err
-	}
-	err = chanBucket.Delete(append(chanCommitmentKey, byte(0x01)))
-	if err != nil {
-		return err
-	}
-
-	if err := chanBucket.Delete(revocationStateKey); err != nil {
-		return err
-	}
-
-	if diff := chanBucket.Get(commitDiffKey); diff != nil {
-		return chanBucket.Delete(commitDiffKey)
-	}
-
-	return nil
-
 }
 
 // makeLogKey converts a uint64 into an 8 byte array.
