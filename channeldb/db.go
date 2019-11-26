@@ -352,7 +352,10 @@ func (d *DB) FetchOpenChannels(nodeID *btcec.PublicKey) ([]*OpenChannel, error) 
 	var channels []*OpenChannel
 	err := d.View(func(tx *bbolt.Tx) error {
 		var err error
-		channels, err = d.fetchOpenChannels(tx, nodeID)
+		channels, err = d.fetchOpenChannels(
+			tx, nodeID,
+			ChannelPendingOpen|ChannelOpen|ChannelWaitingClose,
+		)
 		return err
 	})
 
@@ -364,7 +367,7 @@ func (d *DB) FetchOpenChannels(nodeID *btcec.PublicKey) ([]*OpenChannel, error) 
 // the case that no active channels are known to have been created with this
 // node, then a zero-length slice is returned.
 func (d *DB) fetchOpenChannels(tx *bbolt.Tx,
-	nodeID *btcec.PublicKey) ([]*OpenChannel, error) {
+	nodeID *btcec.PublicKey, filter ChannelFilter) ([]*OpenChannel, error) {
 
 	// Get the bucket dedicated to storing the metadata for open channels.
 	openChanBucket := tx.Bucket(openChannelBucket)
@@ -400,8 +403,7 @@ func (d *DB) fetchOpenChannels(tx *bbolt.Tx,
 		// Finally, we both of the necessary buckets retrieved, fetch
 		// all the active channels related to this node.
 		nodeChannels, err := d.fetchNodeChannels(
-			chainBucket,
-			ChannelPendingOpen|ChannelOpen|ChannelWaitingClose,
+			chainBucket, filter,
 		)
 		if err != nil {
 			return fmt.Errorf("unable to read channel for "+
@@ -880,7 +882,10 @@ func (d *DB) MarkChanFullyClosed(chanPoint *wire.OutPoint) error {
 // the database due to no longer having any open channels with it. If there are
 // any left, then this acts as a no-op.
 func (d *DB) pruneLinkNode(tx *bbolt.Tx, remotePub *btcec.PublicKey) error {
-	openChannels, err := d.fetchOpenChannels(tx, remotePub)
+	openChannels, err := d.fetchOpenChannels(
+		tx, remotePub,
+		ChannelPendingOpen|ChannelOpen|ChannelWaitingClose,
+	)
 	if err != nil {
 		return fmt.Errorf("unable to fetch open channels for peer %x: "+
 			"%v", remotePub.SerializeCompressed(), err)
