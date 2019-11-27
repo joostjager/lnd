@@ -439,111 +439,45 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 			rHash[:], s, amtPaid, expiry, circuitKey)
 	}
 
-	// Default is to not update subscribers after the invoice update.
-	updateSubscribers := false
-
-	updateInvoice := func(inv *channeldb.Invoice) (
-		*channeldb.InvoiceUpdateDesc, error) {
-
-		// Don't update the invoice when this is a replayed htlc.
-		htlc, ok := inv.Htlcs[circuitKey]
-		if ok {
-			switch htlc.State {
-			case channeldb.HtlcStateCanceled:
-				debugLog("replayed htlc to canceled invoice")
-
-			case channeldb.HtlcStateAccepted:
-				debugLog("replayed htlc to accepted invoice")
-
-			case channeldb.HtlcStateSettled:
-				debugLog("replayed htlc to settled invoice")
-
-			default:
-				return nil, errors.New("unexpected htlc state")
-			}
-
-			return nil, errNoUpdate
-		}
-
-		// If the invoice is already canceled, there is no further
-		// checking to do.
-		if inv.State == channeldb.ContractCanceled {
-			debugLog("invoice already canceled")
-			return nil, errNoUpdate
-		}
-
-		// If an invoice amount is specified, check that enough
-		// is paid. Also check this for duplicate payments if
-		// the invoice is already settled or accepted.
-		if inv.Terms.Value > 0 && amtPaid < inv.Terms.Value {
-			debugLog("amount too low")
-			return nil, errNoUpdate
-		}
-
-		// The invoice is still open. Check the expiry.
-		if expiry < uint32(currentHeight+i.finalCltvRejectDelta) {
-			debugLog("expiry too soon")
-			return nil, errNoUpdate
-		}
-
-		if expiry < uint32(currentHeight+inv.Terms.FinalCltvDelta) {
-			debugLog("expiry too soon")
-			return nil, errNoUpdate
-		}
-
-		// Record HTLC in the invoice database.
-		newHtlcs := map[channeldb.CircuitKey]*channeldb.HtlcAcceptDesc{
-			circuitKey: {
-				Amt:          amtPaid,
-				Expiry:       expiry,
-				AcceptHeight: currentHeight,
-			},
-		}
-
-		update := channeldb.InvoiceUpdateDesc{
-			Htlcs: newHtlcs,
-		}
-
-		// Don't update invoice state if we are accepting a duplicate
-		// payment. We do accept or settle the HTLC.
-		switch inv.State {
-		case channeldb.ContractAccepted:
-			debugLog("accepting duplicate payment to accepted invoice")
-			update.State = channeldb.ContractAccepted
-			return &update, nil
-
-		case channeldb.ContractSettled:
-			debugLog("accepting duplicate payment to settled invoice")
-			update.State = channeldb.ContractSettled
-			return &update, nil
-		}
-
-		// Check to see if we can settle or this is an hold invoice and
-		// we need to wait for the preimage.
-		holdInvoice := inv.Terms.PaymentPreimage == channeldb.UnknownPreimage
-		if holdInvoice {
-			debugLog("accepted")
-			update.State = channeldb.ContractAccepted
-		} else {
-			debugLog("settled")
-			update.Preimage = inv.Terms.PaymentPreimage
-			update.State = channeldb.ContractSettled
-		}
-
-		updateSubscribers = true
-
-		return &update, nil
-	}
-
 	// We'll attempt to settle an invoice matching this rHash on disk (if
 	// one exists). The callback will set the resolution action that is
 	// returned to the link or contract resolver.
-	invoice, err := i.cdb.UpdateInvoice(rHash, updateInvoice)
+	updateCtx := invoiceUpdateCtx{
+		circuitKey:           circuitKey,
+		amtPaid:              amtPaid,
+		expiry:               expiry,
+		currentHeight:        currentHeight,
+		finalCltvRejectDelta: i.finalCltvRejectDelta,
+	}
+
+	var (
+		result            updateResult
+		updateSubscribers bool
+	)
+	invoice, err := i.cdb.UpdateInvoice(
+		rHash,
+		func(inv *channeldb.Invoice) (
+			*channeldb.InvoiceUpdateDesc, error) {
+
+			state := inv.State
+
+			var updateDesc *channeldb.InvoiceUpdateDesc
+			updateDesc, result = updateInvoice(&updateCtx, inv)
+			if updateDesc == nil {
+				return nil, errNoUpdate
+			}
+
+			updateSubscribers = state != updateDesc.State
+
+			return updateDesc, nil
+		},
+	)
 	if err != nil && err != errNoUpdate {
 		debugLog(err.Error())
 
 		return nil, err
 	}
+	debugLog(result.String())
 
 	if updateSubscribers {
 		i.notifyClients(rHash, invoice, invoice.State)
@@ -1042,4 +976,147 @@ func (i *InvoiceRegistry) HodlUnsubscribeAll(subscriber chan<- interface{}) {
 	}
 
 	delete(i.hodlReverseSubscriptions, subscriber)
+}
+
+// updateResult is the result of the invoice update call.
+type updateResult uint8
+
+const (
+	resultReplayToCanceled updateResult = iota
+	resultReplayToAccepted
+	resultReplayToSettled
+	resultInvoiceAlreadyCanceled
+	resultAmountTooLow
+	resultExpiryTooSoon
+	resultDuplicateToAccepted
+	resultDuplicateToSettled
+	resultAccepted
+	resultSettled
+)
+
+// String returns a human-readable representation of the invoice update result.
+func (u updateResult) String() string {
+	switch u {
+
+	case resultReplayToCanceled:
+		return "replayed htlc to canceled invoice"
+
+	case resultReplayToAccepted:
+		return "replayed htlc to accepted invoice"
+
+	case resultReplayToSettled:
+		return "replayed htlc to settled invoice"
+
+	case resultInvoiceAlreadyCanceled:
+		return "invoice already canceled"
+
+	case resultAmountTooLow:
+		return "amount too low"
+
+	case resultExpiryTooSoon:
+		return "expiry too soon"
+
+	case resultDuplicateToAccepted:
+		return "accepting duplicate payment to accepted invoice"
+
+	case resultDuplicateToSettled:
+		return "accepting duplicate payment to settled invoice"
+
+	case resultAccepted:
+		return "accepted"
+
+	case resultSettled:
+		return "settled"
+
+	default:
+		return "unknown"
+	}
+}
+
+// invoiceUpdateCtx is an object that describes the context for the invoice
+// update to be carried out.
+type invoiceUpdateCtx struct {
+	circuitKey           channeldb.CircuitKey
+	amtPaid              lnwire.MilliSatoshi
+	expiry               uint32
+	currentHeight        int32
+	finalCltvRejectDelta int32
+}
+
+// update is a callback for DB.UpdateInvoice that contains the invoice
+// settlement logic.
+func updateInvoice(ctx *invoiceUpdateCtx, inv *channeldb.Invoice) (
+	*channeldb.InvoiceUpdateDesc, updateResult) {
+
+	// Don't update the invoice when this is a replayed htlc.
+	htlc, ok := inv.Htlcs[ctx.circuitKey]
+	if ok {
+		switch htlc.State {
+		case channeldb.HtlcStateCanceled:
+			return nil, resultReplayToCanceled
+
+		case channeldb.HtlcStateAccepted:
+			return nil, resultReplayToAccepted
+
+		case channeldb.HtlcStateSettled:
+			return nil, resultReplayToSettled
+		}
+
+		panic("unexpected htlc state")
+	}
+
+	// If the invoice is already canceled, there is no further
+	// checking to do.
+	if inv.State == channeldb.ContractCanceled {
+		return nil, resultInvoiceAlreadyCanceled
+	}
+
+	// If an invoice amount is specified, check that enough
+	// is paid. Also check this for duplicate payments if
+	// the invoice is already settled or accepted.
+	if inv.Terms.Value > 0 && ctx.amtPaid < inv.Terms.Value {
+		return nil, resultAmountTooLow
+	}
+
+	// The invoice is still open. Check the expiry.
+	if ctx.expiry < uint32(ctx.currentHeight+ctx.finalCltvRejectDelta) {
+		return nil, resultExpiryTooSoon
+	}
+
+	if ctx.expiry < uint32(ctx.currentHeight+inv.Terms.FinalCltvDelta) {
+		return nil, resultExpiryTooSoon
+	}
+
+	// Record HTLC in the invoice database.
+	newHtlcs := map[channeldb.CircuitKey]*channeldb.HtlcAcceptDesc{
+		ctx.circuitKey: {
+			Amt:          ctx.amtPaid,
+			Expiry:       ctx.expiry,
+			AcceptHeight: ctx.currentHeight,
+		},
+	}
+
+	update := channeldb.InvoiceUpdateDesc{Htlcs: newHtlcs}
+	// Don't update invoice state if we are accepting a duplicate
+	// payment. We do accept or settle the HTLC.
+	switch inv.State {
+	case channeldb.ContractAccepted:
+		update.State = channeldb.ContractAccepted
+		return &update, resultDuplicateToAccepted
+
+	case channeldb.ContractSettled:
+		update.State = channeldb.ContractSettled
+		return &update, resultDuplicateToSettled
+	}
+
+	holdInvoice := inv.Terms.PaymentPreimage == channeldb.UnknownPreimage
+	if holdInvoice {
+		update.State = channeldb.ContractAccepted
+		return &update, resultAccepted
+	}
+
+	update.Preimage = inv.Terms.PaymentPreimage
+	update.State = channeldb.ContractSettled
+
+	return &update, resultSettled
 }
