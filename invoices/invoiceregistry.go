@@ -459,15 +459,13 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 		func(inv *channeldb.Invoice) (
 			*channeldb.InvoiceUpdateDesc, error) {
 
-			state := inv.State
-
 			var updateDesc *channeldb.InvoiceUpdateDesc
 			updateDesc, result = updateInvoice(&updateCtx, inv)
 			if updateDesc == nil {
 				return nil, errNoUpdate
 			}
 
-			updateSubscribers = state != updateDesc.State
+			updateSubscribers = updateDesc.State != nil
 
 			return updateDesc, nil
 		},
@@ -541,8 +539,10 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 		}
 
 		return &channeldb.InvoiceUpdateDesc{
-			State:    channeldb.ContractSettled,
-			Preimage: preimage,
+			State: &channeldb.InvoiceStateUpdateDesc{
+				NewState: channeldb.ContractSettled,
+				Preimage: preimage,
+			},
 		}, nil
 	}
 
@@ -589,39 +589,13 @@ func (i *InvoiceRegistry) CancelInvoice(payHash lntypes.Hash) error {
 	updateInvoice := func(invoice *channeldb.Invoice) (
 		*channeldb.InvoiceUpdateDesc, error) {
 
-		switch invoice.State {
-		case channeldb.ContractSettled:
-			return nil, channeldb.ErrInvoiceAlreadySettled
-		case channeldb.ContractCanceled:
-			return nil, channeldb.ErrInvoiceAlreadyCanceled
-		}
-
-		// Mark individual held htlcs as canceled.
-		canceledHtlcs := make(
-			map[channeldb.CircuitKey]struct{},
-		)
-		for key, htlc := range invoice.Htlcs {
-			switch htlc.State {
-
-			// If we get here, there shouldn't be any settled htlcs.
-			case channeldb.HtlcStateSettled:
-				return nil, errors.New("cannot cancel " +
-					"invoice with settled htlc(s)")
-
-			// Don't cancel htlcs that were already canceled,
-			// because it would incorrectly modify the invoice paid
-			// amt.
-			case channeldb.HtlcStateCanceled:
-				continue
-			}
-
-			canceledHtlcs[key] = struct{}{}
-		}
-
-		// Move invoice to the canceled state.
+		// Move invoice to the canceled state. Rely on validation in
+		// channeldb to return an error if the invoice is already
+		// settled or canceled.
 		return &channeldb.InvoiceUpdateDesc{
-			CancelHtlcs: canceledHtlcs,
-			State:       channeldb.ContractCanceled,
+			State: &channeldb.InvoiceStateUpdateDesc{
+				NewState: channeldb.ContractCanceled,
+			},
 		}, nil
 	}
 
@@ -1104,22 +1078,24 @@ func updateInvoice(ctx *invoiceUpdateCtx, inv *channeldb.Invoice) (
 	// payment. We do accept or settle the HTLC.
 	switch inv.State {
 	case channeldb.ContractAccepted:
-		update.State = channeldb.ContractAccepted
 		return &update, resultDuplicateToAccepted
 
 	case channeldb.ContractSettled:
-		update.State = channeldb.ContractSettled
 		return &update, resultDuplicateToSettled
 	}
 
 	holdInvoice := inv.Terms.PaymentPreimage == channeldb.UnknownPreimage
 	if holdInvoice {
-		update.State = channeldb.ContractAccepted
+		update.State = &channeldb.InvoiceStateUpdateDesc{
+			NewState: channeldb.ContractAccepted,
+		}
 		return &update, resultAccepted
 	}
 
-	update.Preimage = inv.Terms.PaymentPreimage
-	update.State = channeldb.ContractSettled
+	update.State = &channeldb.InvoiceStateUpdateDesc{
+		NewState: channeldb.ContractSettled,
+		Preimage: inv.Terms.PaymentPreimage,
+	}
 
 	return &update, resultSettled
 }
