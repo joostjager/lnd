@@ -3106,6 +3106,8 @@ type rpcPaymentIntent struct {
 	routeHints        [][]zpay32.HopHint
 	outgoingChannelID *uint64
 	lastHop           *route.Vertex
+	invoiceFeatures   *lnwire.FeatureVector
+	paymentAddr       *[32]byte
 	payReq            []byte
 
 	destCustomRecords record.CustomSet
@@ -3235,6 +3237,8 @@ func (r *rpcServer) extractPaymentIntent(rpcPayReq *rpcPaymentRequest) (rpcPayme
 		payIntent.cltvDelta = uint16(payReq.MinFinalCLTVExpiry())
 		payIntent.routeHints = payReq.RouteHints
 		payIntent.payReq = []byte(rpcPayReq.PaymentRequest)
+		payIntent.invoiceFeatures = payReq.Features
+		payIntent.paymentAddr = payReq.PaymentAddr
 
 		if err := validateDest(payIntent.dest); err != nil {
 			return payIntent, err
@@ -3357,6 +3361,8 @@ func (r *rpcServer) dispatchPaymentIntent(
 			PaymentRequest:    payIntent.payReq,
 			PayAttemptTimeout: routing.DefaultPayAttemptTimeout,
 			DestCustomRecords: payIntent.destCustomRecords,
+			DestFeatures:      payIntent.invoiceFeatures,
+			PaymentAddr:       payIntent.paymentAddr,
 		}
 
 		preImage, route, routerErr = r.server.chanRouter.SendPayment(
