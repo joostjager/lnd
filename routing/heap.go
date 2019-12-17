@@ -3,7 +3,6 @@ package routing
 import (
 	"container/heap"
 
-	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing/route"
 )
@@ -11,13 +10,11 @@ import (
 // nodeWithDist is a helper struct that couples the distance from the current
 // source to a node with a pointer to the node itself.
 type nodeWithDist struct {
+	route.Hop
+
 	// dist is the distance to this node from the source node in our
 	// current context.
 	dist int64
-
-	// node is the vertex itself. This can be used to explore all the
-	// outgoing edges (channels) emanating from a node.
-	node route.Vertex
 
 	// amountToReceive is the amount that should be received by this node.
 	// Either as final payment to the final node or as an intermediate
@@ -37,8 +34,8 @@ type nodeWithDist struct {
 	// time locks.
 	weight int64
 
-	// nextHop is the edge this route comes from.
-	nextHop *channeldb.ChannelEdgePolicy
+	// nextHop is the pubkey of the next hop.
+	nextHop *route.Vertex
 }
 
 // distanceHeap is a min-distance heap that's used within our path finding
@@ -86,8 +83,8 @@ func (d *distanceHeap) Less(i, j int) bool {
 // NOTE: This is part of the heap.Interface implementation.
 func (d *distanceHeap) Swap(i, j int) {
 	d.nodes[i], d.nodes[j] = d.nodes[j], d.nodes[i]
-	d.pubkeyIndices[d.nodes[i].node] = i
-	d.pubkeyIndices[d.nodes[j].node] = j
+	d.pubkeyIndices[d.nodes[i].PubKeyBytes] = i
+	d.pubkeyIndices[d.nodes[j].PubKeyBytes] = j
 }
 
 // Push pushes the passed item onto the priority queue.
@@ -96,7 +93,7 @@ func (d *distanceHeap) Swap(i, j int) {
 func (d *distanceHeap) Push(x interface{}) {
 	n := x.(*nodeWithDist)
 	d.nodes = append(d.nodes, n)
-	d.pubkeyIndices[n.node] = len(d.nodes) - 1
+	d.pubkeyIndices[n.PubKeyBytes] = len(d.nodes) - 1
 }
 
 // Pop removes the highest priority item (according to Less) from the priority
@@ -108,7 +105,7 @@ func (d *distanceHeap) Pop() interface{} {
 	x := d.nodes[n-1]
 	d.nodes[n-1] = nil
 	d.nodes = d.nodes[0 : n-1]
-	delete(d.pubkeyIndices, x.node)
+	delete(d.pubkeyIndices, x.PubKeyBytes)
 	return x
 }
 
@@ -118,7 +115,7 @@ func (d *distanceHeap) Pop() interface{} {
 // exist in the heap, then it is pushed onto the heap. Otherwise, we will end
 // up performing more db lookups on the same node in the pathfinding algorithm.
 func (d *distanceHeap) PushOrFix(dist *nodeWithDist) {
-	index, ok := d.pubkeyIndices[dist.node]
+	index, ok := d.pubkeyIndices[dist.PubKeyBytes]
 	if !ok {
 		heap.Push(d, dist)
 		return

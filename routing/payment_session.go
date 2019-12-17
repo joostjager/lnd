@@ -113,7 +113,9 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 		return nil, err
 	}
 
-	path, err := p.pathFinder(
+	finalHtlcExpiry := int32(height) + int32(finalCltvDelta)
+
+	route, err := p.pathFinder(
 		&graphParams{
 			graph:           ss.Graph,
 			additionalEdges: p.additionalEdges,
@@ -121,27 +123,9 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 		},
 		restrictions, &ss.PathFindingConfig,
 		ss.SelfNode.PubKeyBytes, payment.Target,
-		payment.Amount,
+		payment.Amount, finalHtlcExpiry,
 	)
 	if err != nil {
-		return nil, err
-	}
-
-	// With the next candidate path found, we'll attempt to turn this into
-	// a route by applying the time-lock and fee requirements.
-	sourceVertex := route.Vertex(ss.SelfNode.PubKeyBytes)
-	route, err := newRoute(
-		sourceVertex, path, height,
-		finalHopParams{
-			amt:         payment.Amount,
-			cltvDelta:   finalCltvDelta,
-			records:     payment.DestCustomRecords,
-			paymentAddr: payment.PaymentAddr,
-		},
-	)
-	if err != nil {
-		// TODO(roasbeef): return which edge/vertex didn't work
-		// out
 		return nil, err
 	}
 

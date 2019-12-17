@@ -1431,20 +1431,6 @@ func (r *ChannelRouter) FindRoute(source, target route.Vertex,
 		return nil, err
 	}
 
-	// Now that we know the destination is reachable within the graph, we'll
-	// execute our path finding algorithm.
-	path, err := findPath(
-		&graphParams{
-			graph:          r.cfg.Graph,
-			bandwidthHints: bandwidthHints,
-		},
-		restrictions, &r.cfg.PathFindingConfig,
-		source, target, amt,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	// We'll fetch the current block height so we can properly calculate the
 	// required HTLC time locks within the route.
 	_, currentHeight, err := r.cfg.Chain.GetBestBlock()
@@ -1452,14 +1438,17 @@ func (r *ChannelRouter) FindRoute(source, target route.Vertex,
 		return nil, err
 	}
 
-	// Create the route with absolute time lock values.
-	route, err := newRoute(
-		source, path, uint32(currentHeight),
-		finalHopParams{
-			amt:       amt,
-			cltvDelta: finalCLTVDelta,
-			records:   destCustomRecords,
+	// Now that we know the destination is reachable within the graph, we'll
+	// execute our path finding algorithm.
+	finalHtlcExpiry := int32(currentHeight) + int32(finalCLTVDelta)
+
+	route, err := findPath(
+		&graphParams{
+			graph:          r.cfg.Graph,
+			bandwidthHints: bandwidthHints,
 		},
+		restrictions, &r.cfg.PathFindingConfig,
+		source, target, amt, finalHtlcExpiry,
 	)
 	if err != nil {
 		return nil, err

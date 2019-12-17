@@ -48,7 +48,8 @@ const (
 // pathFinder defines the interface of a path finding algorithm.
 type pathFinder = func(g *graphParams, r *RestrictParams,
 	cfg *PathFindingConfig, source, target route.Vertex,
-	amt lnwire.MilliSatoshi) ([]*channeldb.ChannelEdgePolicy, error)
+	amt lnwire.MilliSatoshi, finalHtlcExpiry int32) (
+	*route.Route, error)
 
 var (
 	// DefaultPaymentAttemptPenalty is the virtual cost in path finding weight
@@ -417,8 +418,8 @@ func getMaxOutgoingAmt(node route.Vertex, outgoingChan *uint64,
 // that need to be paid along the path and accurately check the amount
 // to forward at every node against the available bandwidth.
 func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
-	source, target route.Vertex, amt lnwire.MilliSatoshi) (
-	[]*channeldb.ChannelEdgePolicy, error) {
+	source, target route.Vertex, amt lnwire.MilliSatoshi,
+	finalHtlcExpiry int32) (*route.Route, error) {
 
 	// Pathfinding can be a significant portion of the total payment
 	// latency, especially on low-powered devices. Log several metrics to
@@ -548,10 +549,17 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 	//
 	// Don't record the initial partial path in the distance map and reserve
 	// that key for the source key in the case we route to ourselves.
+	finalHop := route.Hop{
+		PubKeyBytes:      target,
+		AmtToForward:     amt,
+		OutgoingTimeLock: uint32(finalHtlcExpiry),
+		CustomRecords:    r.DestCustomRecords,
+	}
+
 	partialPath := &nodeWithDist{
+		Hop:             finalHop,
 		dist:            0,
 		weight:          0,
-		node:            target,
 		amountToReceive: amt,
 		incomingCltv:    0,
 		probability:     1,
@@ -570,13 +578,13 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 
 		// Request the success probability for this edge.
 		edgeProbability := r.ProbabilitySource(
-			fromVertex, toNodeDist.node, amountToSend,
+			fromVertex, toNodeDist.PubKeyBytes, amountToSend,
 		)
 
 		log.Trace(newLogClosure(func() string {
 			return fmt.Sprintf("path finding probability: fromnode=%v,"+
-				" tonode=%v, probability=%v", fromVertex, toNodeDist.node,
-				edgeProbability)
+				" tonode=%v, probability=%v", fromVertex,
+				toNodeDist.PubKeyBytes, edgeProbability)
 		}))
 
 		// If the probability is zero, there is no point in trying.
@@ -709,19 +717,31 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 			}
 		}
 
+		nextSupportsTlv := edge.Node.Features.HasFeature(
+			lnwire.TLVOnionPayloadOptional,
+		)
+		toNodeDist.LegacyPayload = !nextSupportsTlv
+		toNodeDist.ChannelID = edge.ChannelID
+
 		// All conditions are met and this new tentative distance is
 		// better than the current best known distance to this node.
 		// The new better distance is recorded, and also our "next hop"
 		// map is populated with this edge.
 		withDist := &nodeWithDist{
+			Hop: route.Hop{
+				PubKeyBytes:  fromVertex,
+				AmtToForward: amountToSend,
+				OutgoingTimeLock: uint32(finalHtlcExpiry) +
+					toNodeDist.incomingCltv,
+			},
+			nextHop:         &toNodeDist.PubKeyBytes,
 			dist:            tempDist,
 			weight:          tempWeight,
-			node:            fromVertex,
 			amountToReceive: amountToReceive,
 			incomingCltv:    incomingCltv,
 			probability:     probability,
-			nextHop:         edge,
 		}
+
 		distance[fromVertex] = withDist
 
 		// Either push withDist onto the heap if the node
@@ -737,7 +757,7 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 	for {
 		nodesVisited++
 
-		pivot := partialPath.node
+		pivot := partialPath.PubKeyBytes
 
 		// Create unified policies for all incoming connections.
 		u := newUnifiedPolicies(self, pivot, r.OutgoingChannelID)
@@ -796,42 +816,52 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 		// If we've reached our source (or we don't have any incoming
 		// edges), then we're done here and can exit the graph
 		// traversal early.
-		if partialPath.node == source {
+		if partialPath.PubKeyBytes == source {
 			break
 		}
 	}
 
 	// Use the distance map to unravel the forward path from source to
 	// target.
-	var pathEdges []*channeldb.ChannelEdgePolicy
-	currentNode := source
+
+	sourceHop, ok := distance[source]
+	if !ok {
+		// If the node doesnt have a next hop it means we didn't find a path.
+		return nil, errNoPathFound
+	}
+
+	route := route.Route{
+		SourcePubKey:  source,
+		TotalAmount:   sourceHop.AmtToForward,
+		TotalTimeLock: sourceHop.OutgoingTimeLock,
+	}
+
+	currentNode := sourceHop
 	for {
+		// If there is no next hop, then the route is complete.
+		if currentNode.nextHop == nil {
+			break
+		}
+
 		// Determine the next hop forward using the next map.
-		currentNodeWithDist, ok := distance[currentNode]
+		currentNode, ok := distance[*currentNode.nextHop]
 		if !ok {
-			// If the node doesnt have a next hop it means we didn't find a path.
-			return nil, errNoPathFound
+			return nil, errors.New(
+				"node not present in distance map")
 		}
 
 		// Add the next hop to the list of path edges.
-		pathEdges = append(pathEdges, currentNodeWithDist.nextHop)
-
-		// Advance current node.
-		currentNode = currentNodeWithDist.nextHop.Node.PubKeyBytes
-
-		// Check stop condition at the end of this loop. This prevents
-		// breaking out too soon for self-payments that have target set
-		// to source.
-		if currentNode == target {
-			break
-		}
+		route.Hops = append(route.Hops, &currentNode.Hop)
 	}
+
+	// Add the final hop to the route because it is not in the distance map.
+	route.Hops = append(route.Hops, &finalHop)
 
 	// The route is invalid if it spans more than 20 hops. The current
 	// Sphinx (onion routing) implementation can only encode up to 20 hops
 	// as the entire packet is fixed size. If this route is more than 20
 	// hops, then it's invalid.
-	numEdges := len(pathEdges)
+	numEdges := len(route.Hops)
 	if numEdges > HopLimit {
 		return nil, errMaxHopsExceeded
 	}
@@ -840,7 +870,7 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 		distance[source].probability, numEdges,
 		distance[source].amountToReceive-amt)
 
-	return pathEdges, nil
+	return &route, nil
 }
 
 // getProbabilityBasedDist converts a weight into a distance that takes into
