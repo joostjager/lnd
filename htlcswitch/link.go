@@ -1750,6 +1750,13 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 			l.log.Errorf("unable to revoke commitment: %v", err)
 			return
 		}
+
+		// if rand.Int31n(5) == 0 {
+		if panicCount == 1 {
+			panic("debug exit")
+		}
+		panicCount++
+		// }
 		l.cfg.Peer.SendMessage(false, nextRevocation)
 
 		// Since we just revoked our commitment, we may have a new set
@@ -1877,6 +1884,8 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 	}
 
 }
+
+var panicCount = 0
 
 // ackDownStreamPackets is responsible for removing htlcs from a link's mailbox
 // for packets delivered from server, and cleaning up any circuits closed by

@@ -2268,11 +2268,15 @@ func (lc *LightningChannel) fetchHTLCView(theirLogIndex, ourLogIndex uint64) *ht
 	for e := lc.localUpdateLog.Front(); e != nil; e = e.Next() {
 		htlc := e.Value.(*PaymentDescriptor)
 
+		lc.log.Debugf("fetchHTLCView: log entry: local htlc %v at log index %v", htlc.HtlcIndex, htlc.LogIndex)
+
 		// This HTLC is active from this point-of-view iff the log
 		// index of the state update is below the specified index in
 		// our update log.
 		if htlc.LogIndex < ourLogIndex {
 			ourHTLCs = append(ourHTLCs, htlc)
+
+			lc.log.Debugf("fetchHTLCView: including local htlc %v at log index %v", htlc.HtlcIndex, htlc.LogIndex)
 		}
 	}
 
@@ -2280,11 +2284,15 @@ func (lc *LightningChannel) fetchHTLCView(theirLogIndex, ourLogIndex uint64) *ht
 	for e := lc.remoteUpdateLog.Front(); e != nil; e = e.Next() {
 		htlc := e.Value.(*PaymentDescriptor)
 
+		lc.log.Debugf("fetchHTLCView: log entry: remote htlc %v at log index %v", htlc.HtlcIndex, htlc.LogIndex)
+
 		// If this is an incoming HTLC, then it is only active from
 		// this point-of-view if the index of the HTLC addition in
 		// their log is below the specified view index.
 		if htlc.LogIndex < theirLogIndex {
 			theirHTLCs = append(theirHTLCs, htlc)
+
+			lc.log.Debugf("fetchHTLCView: including remote htlc %v at log index %v", htlc.HtlcIndex, htlc.LogIndex)
 		}
 	}
 
@@ -2599,6 +2607,7 @@ func (lc *LightningChannel) evaluateHTLCView(view *htlcView, ourBalance,
 			))
 		}
 
+		lc.log.Debugf("evaluateHTLCView: skip their htlc %v update", addEntry.HtlcIndex)
 		skipThem[addEntry.HtlcIndex] = struct{}{}
 		processRemoveEntry(entry, ourBalance, theirBalance,
 			nextHeight, remoteChain, true, mutateState)
@@ -2644,6 +2653,7 @@ func (lc *LightningChannel) evaluateHTLCView(view *htlcView, ourBalance,
 			))
 		}
 
+		lc.log.Debugf("evaluateHTLCView: skip our htlc %v update", addEntry.HtlcIndex)
 		skipUs[addEntry.HtlcIndex] = struct{}{}
 		processRemoveEntry(entry, ourBalance, theirBalance,
 			nextHeight, remoteChain, false, mutateState)
@@ -2658,6 +2668,7 @@ func (lc *LightningChannel) evaluateHTLCView(view *htlcView, ourBalance,
 			continue
 		}
 
+		lc.log.Debugf("processAddEntry: logindex=%v, htlc=%v, remote=%v", entry.LogIndex, entry.HtlcIndex, false)
 		processAddEntry(entry, ourBalance, theirBalance, nextHeight,
 			remoteChain, false, mutateState)
 		newView.ourUpdates = append(newView.ourUpdates, entry)
@@ -2668,6 +2679,7 @@ func (lc *LightningChannel) evaluateHTLCView(view *htlcView, ourBalance,
 			continue
 		}
 
+		lc.log.Debugf("processAddEntry: logindex=%v, htlc=%v, remote=%v", entry.LogIndex, entry.HtlcIndex, true)
 		processAddEntry(entry, ourBalance, theirBalance, nextHeight,
 			remoteChain, true, mutateState)
 		newView.theirUpdates = append(newView.theirUpdates, entry)
@@ -3259,6 +3271,8 @@ func (lc *LightningChannel) SignNextCommitment() (lnwire.Sig, []lnwire.Sig, []ch
 	// Determine the last update on the remote log that has been locked in.
 	remoteACKedIndex := lc.localCommitChain.tail().theirMessageIndex
 	remoteHtlcIndex := lc.localCommitChain.tail().theirHtlcIndex
+
+	lc.log.Infof("Signing commitment for: local=%v, remote=%v", lc.localUpdateLog.logIndex, remoteACKedIndex)
 
 	// Before we extend this new commitment to the remote commitment chain,
 	// ensure that we aren't violating any of the constraints the remote
@@ -4271,9 +4285,17 @@ func (lc *LightningChannel) RevokeCurrentCommitment() (*lnwire.RevokeAndAck, []c
 	}
 
 	lc.log.Tracef("state transition accepted: "+
-		"our_balance=%v, their_balance=%v",
+		"our_balance=%v, their_balance=%v, our_msg_idx=%v, their_msg_idx=%v",
 		chainTail.ourBalance,
-		chainTail.theirBalance)
+		chainTail.theirBalance,
+		chainTail.ourMessageIndex, chainTail.theirMessageIndex)
+
+	for _, h := range chainTail.outgoingHTLCs {
+		lc.log.Tracef("outgoing htlc: index=%v, amt=%v", h.HtlcIndex, h.Amount)
+	}
+	for _, h := range chainTail.incomingHTLCs {
+		lc.log.Tracef("incoming htlc: index=%v, amt=%v", h.HtlcIndex, h.Amount)
+	}
 
 	revocationMsg.ChanID = lnwire.NewChanIDFromOutPoint(
 		&lc.channelState.FundingOutpoint,

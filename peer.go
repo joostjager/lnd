@@ -1365,6 +1365,16 @@ func messageSummary(msg lnwire.Message) string {
 // nil. Doing this avoids printing out each of the field elements in the curve
 // parameters for secp256k1.
 func (p *peer) logWireMessage(msg lnwire.Message, read bool) {
+	// Skip gossip spam.
+	switch msg.(type) {
+	case *lnwire.QueryShortChanIDs, *lnwire.ChannelAnnouncement,
+		*lnwire.ChannelUpdate, *lnwire.NodeAnnouncement,
+		*lnwire.ReplyShortChanIDsEnd, *lnwire.GossipTimestampRange,
+		*lnwire.QueryChannelRange, *lnwire.AnnounceSignatures, *lnwire.ReplyChannelRange:
+
+		return
+	}
+
 	summaryPrefix := "Received"
 	if !read {
 		summaryPrefix = "Sending"
