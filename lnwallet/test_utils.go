@@ -462,37 +462,61 @@ func calcStaticFee(numHTLCs int) btcutil.Amount {
 // pending updates. This method is useful when testing interactions between two
 // live state machines.
 func ForceStateTransition(chanA, chanB *LightningChannel) error {
-	aliceSig, aliceHtlcSigs, _, err := chanA.SignNextCommitment()
-	if err != nil {
-		return err
-	}
-	if err = chanB.ReceiveNewCommitment(aliceSig, aliceHtlcSigs); err != nil {
-		return err
+	var (
+		sender, receiver *LightningChannel
+		sig              lnwire.Sig
+		htlcSigs         []lnwire.Sig
+	)
+
+	switch {
+	case chanA.OweCommitment(true):
+		var err error
+		sig, htlcSigs, _, err = chanA.SignNextCommitment()
+		if err != nil {
+			return err
+		}
+		sender, receiver = chanA, chanB
+
+	case chanB.OweCommitment(true):
+		var err error
+		sig, htlcSigs, _, err = chanB.SignNextCommitment()
+		if err != nil {
+			return err
+		}
+		sender, receiver = chanB, chanA
+
+	default:
+		return nil
 	}
 
-	bobRevocation, _, _, err := chanB.RevokeCurrentCommitment()
-	if err != nil {
-		return err
-	}
-	bobSig, bobHtlcSigs, _, err := chanB.SignNextCommitment()
-	if err != nil {
-		return err
+	commitSig := &NewCommitSig{
+		HtlcSigs:       htlcSigs,
+		TheirCommitSig: sig,
 	}
 
-	if _, _, _, _, err := chanA.ReceiveRevocation(bobRevocation); err != nil {
-		return err
-	}
-	if err := chanA.ReceiveNewCommitment(bobSig, bobHtlcSigs); err != nil {
-		return err
-	}
+	for {
+		err := receiver.ReceiveNewCommitment(
+			commitSig.TheirCommitSig, commitSig.HtlcSigs,
+		)
+		if err != nil {
+			return err
+		}
 
-	aliceRevocation, _, _, err := chanA.RevokeCurrentCommitment()
-	if err != nil {
-		return err
-	}
-	if _, _, _, _, err := chanB.ReceiveRevocation(aliceRevocation); err != nil {
-		return err
-	}
+		revocation, _, newSig, err := receiver.RevokeCurrentCommitment()
+		if err != nil {
+			return err
+		}
 
-	return nil
+		_, _, _, _, err = sender.ReceiveRevocation(revocation)
+		if err != nil {
+			return err
+		}
+
+		if newSig == nil {
+			return nil
+		}
+
+		commitSig = newSig
+		receiver, sender = sender, receiver
+	}
 }

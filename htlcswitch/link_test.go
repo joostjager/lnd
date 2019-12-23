@@ -1807,19 +1807,15 @@ func handleStateUpdate(link *channelLink,
 		return err
 	}
 
-	remoteRev, _, err := remoteChannel.RevokeCurrentCommitment()
+	remoteRev, _, newRemoteSig, err := remoteChannel.RevokeCurrentCommitment()
 	if err != nil {
 		return err
 	}
 	link.HandleChannelUpdate(remoteRev)
 
-	remoteSig, remoteHtlcSigs, _, err := remoteChannel.SignNextCommitment()
-	if err != nil {
-		return err
-	}
 	commitSig = &lnwire.CommitSig{
-		CommitSig: remoteSig,
-		HtlcSigs:  remoteHtlcSigs,
+		CommitSig: newRemoteSig.TheirCommitSig,
+		HtlcSigs:  newRemoteSig.HtlcSigs,
 	}
 	link.HandleChannelUpdate(commitSig)
 
@@ -1849,7 +1845,8 @@ func handleStateUpdate(link *channelLink,
 // make the remoteChannel initiate the state update.
 func updateState(batchTick chan time.Time, link *channelLink,
 	remoteChannel *lnwallet.LightningChannel,
-	initiateUpdate bool) error {
+	initiateUpdate bool) (*lnwallet.NewCommitSig, error) {
+
 	sentMsgs := link.cfg.Peer.(*mockPeer).sentMsgs
 
 	if initiateUpdate {
@@ -1857,16 +1854,16 @@ func updateState(batchTick chan time.Time, link *channelLink,
 		select {
 		case batchTick <- time.Now():
 		case <-link.quit:
-			return fmt.Errorf("link shutting down")
+			return nil, fmt.Errorf("link shutting down")
 		}
-		return handleStateUpdate(link, remoteChannel)
+		return nil, handleStateUpdate(link, remoteChannel)
 	}
 
 	// The remote is triggering the state update, emulate this by
 	// signing and sending CommitSig to the link.
 	remoteSig, remoteHtlcSigs, _, err := remoteChannel.SignNextCommitment()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	commitSig := &lnwire.CommitSig{
@@ -1880,47 +1877,47 @@ func updateState(batchTick chan time.Time, link *channelLink,
 	select {
 	case msg = <-sentMsgs:
 	case <-time.After(60 * time.Second):
-		return fmt.Errorf("did not receive RevokeAndAck from Alice")
+		return nil, fmt.Errorf("did not receive RevokeAndAck from Alice")
 	}
 
 	revoke, ok := msg.(*lnwire.RevokeAndAck)
 	if !ok {
-		return fmt.Errorf("expected RevokeAndAck got %T",
+		return nil, fmt.Errorf("expected RevokeAndAck got %T",
 			msg)
 	}
 	_, _, _, _, err = remoteChannel.ReceiveRevocation(revoke)
 	if err != nil {
-		return fmt.Errorf("unable to receive "+
+		return nil, fmt.Errorf("unable to receive "+
 			"revocation: %v", err)
 	}
 	select {
 	case msg = <-sentMsgs:
 	case <-time.After(60 * time.Second):
-		return fmt.Errorf("did not receive CommitSig from Alice")
+		return nil, fmt.Errorf("did not receive CommitSig from Alice")
 	}
 
 	commitSig, ok = msg.(*lnwire.CommitSig)
 	if !ok {
-		return fmt.Errorf("expected CommitSig, got %T", msg)
+		return nil, fmt.Errorf("expected CommitSig, got %T", msg)
 	}
 
 	err = remoteChannel.ReceiveNewCommitment(
 		commitSig.CommitSig, commitSig.HtlcSigs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Lastly, send a revocation back to the link.
-	remoteRev, _, err := remoteChannel.RevokeCurrentCommitment()
+	remoteRev, _, newSigs, err := remoteChannel.RevokeCurrentCommitment()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	link.HandleChannelUpdate(remoteRev)
 
 	// Sleep to make sure Alice has handled the remote revocation.
 	time.Sleep(500 * time.Millisecond)
 
-	return nil
+	return newSigs, nil
 }
 
 // TestChannelLinkBandwidthConsistency ensures that the reported bandwidth of a
@@ -2033,7 +2030,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 	}
 
 	// Lock in the HTLC.
-	if err := updateState(tmr, coreLink, bobChannel, true); err != nil {
+	if _, err := updateState(tmr, coreLink, bobChannel, true); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 	// Locking in the HTLC should not change Alice's bandwidth.
@@ -2058,7 +2055,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 	assertLinkBandwidth(t, aliceLink, aliceStartingBandwidth-htlcAmt-htlcFee)
 
 	// Lock in the settle.
-	if err := updateState(tmr, coreLink, bobChannel, false); err != nil {
+	if _, err := updateState(tmr, coreLink, bobChannel, false); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -2111,7 +2108,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 	}
 
 	// Lock in the HTLC, which should not affect the bandwidth.
-	if err := updateState(tmr, coreLink, bobChannel, true); err != nil {
+	if _, err := updateState(tmr, coreLink, bobChannel, true); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -2136,7 +2133,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 	assertLinkBandwidth(t, aliceLink, aliceStartingBandwidth-htlcAmt*2-htlcFee)
 
 	// Lock in the Fail.
-	if err := updateState(tmr, coreLink, bobChannel, false); err != nil {
+	if _, err := updateState(tmr, coreLink, bobChannel, false); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -2180,7 +2177,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 	assertLinkBandwidth(t, aliceLink, aliceStartingBandwidth-htlcAmt)
 
 	// Lock in the HTLC.
-	if err := updateState(tmr, coreLink, bobChannel, false); err != nil {
+	if _, err := updateState(tmr, coreLink, bobChannel, false); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -2289,7 +2286,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 
 	// No changes before the HTLC is locked in.
 	assertLinkBandwidth(t, aliceLink, aliceStartingBandwidth)
-	if err := updateState(tmr, coreLink, bobChannel, false); err != nil {
+	if _, err := updateState(tmr, coreLink, bobChannel, false); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -2510,7 +2507,7 @@ func TestChannelLinkBandwidthConsistencyOverflow(t *testing.T) {
 
 	// We trigger a state update to lock in the HTLCs. This should
 	// not change Alice's bandwidth.
-	if err := updateState(batchTick, coreLink, bobChannel, true); err != nil {
+	if _, err := updateState(batchTick, coreLink, bobChannel, true); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 	time.Sleep(time.Millisecond * 500)
@@ -2538,7 +2535,7 @@ func TestChannelLinkBandwidthConsistencyOverflow(t *testing.T) {
 	assertLinkBandwidth(t, aliceLink, expectedBandwidth)
 
 	// We trigger a state update to lock in the Settles.
-	if err := updateState(batchTick, coreLink, bobChannel, false); err != nil {
+	if _, err := updateState(batchTick, coreLink, bobChannel, false); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -3233,7 +3230,7 @@ func TestChannelLinkBandwidthChanReserve(t *testing.T) {
 	}
 
 	// Lock in the HTLC.
-	if err := updateState(batchTimer, coreLink, bobChannel, true); err != nil {
+	if _, err := updateState(batchTimer, coreLink, bobChannel, true); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -3258,7 +3255,7 @@ func TestChannelLinkBandwidthChanReserve(t *testing.T) {
 	assertLinkBandwidth(t, aliceLink, aliceStartingBandwidth-htlcAmt-htlcFee)
 
 	// Lock in the settle.
-	if err := updateState(batchTimer, coreLink, bobChannel, false); err != nil {
+	if _, err := updateState(batchTimer, coreLink, bobChannel, false); err != nil {
 		t.Fatalf("unable to update state: %v", err)
 	}
 
@@ -4673,7 +4670,7 @@ func TestChannelLinkNoEmptySig(t *testing.T) {
 	ctx.receiveCommitSigAliceToBob(1)
 
 	// Bob revokes previous commitment tx.
-	ctx.sendRevAndAckBobToAlice()
+	newSig := ctx.sendRevAndAckBobToAlice()
 
 	// Alice sends htlc 2 to Bob.
 	htlc2, _ := generateHtlcAndInvoice(t, 0)
@@ -4691,7 +4688,7 @@ func TestChannelLinkNoEmptySig(t *testing.T) {
 	commitSigAlice := ctx.receiveCommitSigAlice(2)
 
 	// Bob adds htlc 1 to its remote commit tx.
-	ctx.sendCommitSigBobToAlice(1)
+	ctx.sendCommitSigToAlice(newSig, 1)
 
 	// Now send Bob the signature from Alice covering both htlcs.
 	err = bobChannel.ReceiveNewCommitment(
@@ -4795,8 +4792,8 @@ func testChannelLinkBatchPreimageWrite(t *testing.T, disconnect bool) {
 	// Do a commitment dance to lock in the Adds, we expect numHtlcs htlcs
 	// to be on each party's commitment transactions.
 	ctx.receiveCommitSigAliceToBob(numHtlcs)
-	ctx.sendRevAndAckBobToAlice()
-	ctx.sendCommitSigBobToAlice(numHtlcs)
+	newSig := ctx.sendRevAndAckBobToAlice()
+	ctx.sendCommitSigToAlice(newSig, numHtlcs)
 	ctx.receiveRevAndAckAliceToBob()
 
 	// Check again that no preimages exist for these htlcs in Alice's cache.
@@ -4989,8 +4986,8 @@ func TestChannelLinkCleanupSpuriousResponses(t *testing.T) {
 	//   |------  rev  ----->|
 	//   |------  sig  ----->|
 	//   |<-----  rev  ------|
-	ctx.sendRevAndAckBobToAlice()
-	ctx.sendCommitSigBobToAlice(1)
+	bobNewSig := ctx.sendRevAndAckBobToAlice()
+	ctx.sendCommitSigToAlice(bobNewSig, 1)
 	ctx.receiveRevAndAckAliceToBob()
 
 	// Next, we'll construct a fail packet for add-2 (index 1), which we'll
@@ -5055,8 +5052,8 @@ func TestChannelLinkCleanupSpuriousResponses(t *testing.T) {
 	//   |------  rev  ----->|
 	//   |------  sig  ----->|
 	//   |<-----  rev  ------|
-	ctx.sendRevAndAckBobToAlice()
-	ctx.sendCommitSigBobToAlice(0)
+	bobNewSig = ctx.sendRevAndAckBobToAlice()
+	ctx.sendCommitSigToAlice(bobNewSig, 0)
 	ctx.receiveRevAndAckAliceToBob()
 
 	// We'll do a quick sanity check, and blindly send the same fail packet
@@ -6113,7 +6110,7 @@ func TestChannelLinkRevocationWindowHodl(t *testing.T) {
 	}
 
 	// Bob sends revocation and signs commit with htlc 1 settled.
-	ctx.sendRevAndAckBobToAlice()
+	bobNewSig := ctx.sendRevAndAckBobToAlice()
 
 	// Allow some time for it to be processed by the link.
 	time.Sleep(time.Second)
@@ -6125,10 +6122,9 @@ func TestChannelLinkRevocationWindowHodl(t *testing.T) {
 	// After the revocation, it is again possible for Alice to send a commit
 	// sig no more htlcs. Bob acks the update.
 	ctx.receiveCommitSigAliceToBob(0)
-	ctx.sendRevAndAckBobToAlice()
 
-	// Bob updates his remote commit tx.
-	ctx.sendCommitSigBobToAlice(0)
+	// Bob's sig arrives at Alice.
+	ctx.sendCommitSigToAlice(bobNewSig, 1)
 	ctx.receiveRevAndAckAliceToBob()
 
 	// Stop the link

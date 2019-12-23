@@ -111,6 +111,26 @@ func (l *linkTestContext) sendCommitSigBobToAlice(expHtlcs int) {
 	l.aliceLink.HandleChannelUpdate(commitSig)
 }
 
+// sendCommitSigToAlice sends a new commitment to Alice, asserting that it signs
+// expHtlcs number of HTLCs.
+func (l *linkTestContext) sendCommitSigToAlice(
+	commitSig *lnwallet.NewCommitSig, expHtlcs int) {
+
+	l.t.Helper()
+
+	if len(commitSig.HtlcSigs) != expHtlcs {
+		l.t.Fatalf("Expected %d htlc sigs, got %d", expHtlcs,
+			len(commitSig.HtlcSigs))
+	}
+
+	commitSigMsg := &lnwire.CommitSig{
+		CommitSig: commitSig.TheirCommitSig,
+		HtlcSigs:  commitSig.HtlcSigs,
+	}
+
+	l.aliceLink.HandleChannelUpdate(commitSigMsg)
+}
+
 // receiveRevAndAckAliceToBob waits for Alice to send a RevAndAck to Bob, then
 // hands this to Bob.
 func (l *linkTestContext) receiveRevAndAckAliceToBob() {
@@ -176,15 +196,17 @@ func (l *linkTestContext) receiveCommitSigAlice(expHtlcs int) *lnwire.CommitSig 
 
 // sendRevAndAckBobToAlice make Bob revoke his current commitment, then hand
 // the RevokeAndAck to Alice.
-func (l *linkTestContext) sendRevAndAckBobToAlice() {
+func (l *linkTestContext) sendRevAndAckBobToAlice() *lnwallet.NewCommitSig {
 	l.t.Helper()
 
-	rev, _, err := l.bobChannel.RevokeCurrentCommitment()
+	rev, _, newSig, err := l.bobChannel.RevokeCurrentCommitment()
 	if err != nil {
 		l.t.Fatalf("unable to revoke commitment: %v", err)
 	}
 
 	l.aliceLink.HandleChannelUpdate(rev)
+
+	return newSig
 }
 
 // receiveSettleAliceToBob waits for Alice to send a HTLC settle message to
