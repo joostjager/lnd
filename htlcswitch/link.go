@@ -1935,10 +1935,7 @@ func (l *channelLink) ackDownStreamPackets() error {
 	return nil
 }
 
-// updateCommitTx signs, then sends an update to the remote peer adding a new
-// commitment to their commitment chain which includes all the latest updates
-// we've received+processed up to this point.
-func (l *channelLink) updateCommitTx() error {
+func (l *channelLink) writePendingKeystones() error {
 	// Preemptively write all pending keystones to disk, just in case the
 	// HTLCs we have in memory are included in the subsequent attempt to
 	// sign a commitment state.
@@ -1949,6 +1946,21 @@ func (l *channelLink) updateCommitTx() error {
 
 	// Reset the batch, but keep the backing buffer to avoid reallocating.
 	l.keystoneBatch = l.keystoneBatch[:0]
+
+	return nil
+}
+
+// updateCommitTx signs, then sends an update to the remote peer adding a new
+// commitment to their commitment chain which includes all the latest updates
+// we've received+processed up to this point.
+func (l *channelLink) updateCommitTx() error {
+	// Preemptively write all pending keystones to disk, just in case the
+	// HTLCs we have in memory are included in the subsequent attempt to
+	// sign a commitment state.
+	err := l.writePendingKeystones()
+	if err != nil {
+		return err
+	}
 
 	// If hodl.Commit mode is active, we will refrain from attempting to
 	// commit any in-memory modifications to the channel state. Exiting here
