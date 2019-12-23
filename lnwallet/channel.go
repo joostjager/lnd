@@ -3217,6 +3217,12 @@ func (lc *LightningChannel) validateCommitmentSanity(theirLogCounter,
 	return nil
 }
 
+type NewCommitSig struct {
+	TheirCommitSig lnwire.Sig
+	HtlcSigs       []lnwire.Sig
+	CommitDiff     *channeldb.CommitDiff
+}
+
 // SignNextCommitment signs a new commitment which includes any previous
 // unsettled HTLCs, any new HTLCs, and any modifications to prior HTLCs
 // committed in previous commitment updates. Signing a new commitment
@@ -3232,21 +3238,21 @@ func (lc *LightningChannel) SignNextCommitment() (lnwire.Sig, []lnwire.Sig, []ch
 	lc.Lock()
 	defer lc.Unlock()
 
-	sigs, htlcSigs, commitDiff, err := lc.signNextCommitment()
+	sig, err := lc.signNextCommitment()
 	if err != nil {
-		return sigs, htlcSigs, nil, err
+		return lnwire.Sig{}, nil, nil, err
 	}
 
-	err = lc.channelState.AppendRemoteCommitChain(commitDiff)
+	err = lc.channelState.AppendRemoteCommitChain(sig.CommitDiff)
 	if err != nil {
-		return sigs, htlcSigs, nil, err
+		return lnwire.Sig{}, nil, nil, err
 	}
 
-	return sigs, htlcSigs, commitDiff.Commitment.Htlcs, nil
+	return sig.TheirCommitSig, sig.HtlcSigs,
+		sig.CommitDiff.Commitment.Htlcs, nil
 }
 
-func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
-	*channeldb.CommitDiff, error) {
+func (lc *LightningChannel) signNextCommitment() (*NewCommitSig, error) {
 
 	// Check for empty commit sig. This should never happen, but we don't
 	// dare to fail hard here. We assume peers can deal with the empty sig
@@ -3268,7 +3274,7 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 	commitPoint := lc.channelState.RemoteNextRevocation
 	if lc.remoteCommitChain.hasUnackedCommitment() || commitPoint == nil {
 
-		return sig, htlcSigs, nil, ErrNoWindow
+		return nil, ErrNoWindow
 	}
 
 	// Determine the last update on the remote log that has been locked in.
@@ -3283,7 +3289,7 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 		remoteACKedIndex, lc.localUpdateLog.logIndex, true, nil,
 	)
 	if err != nil {
-		return sig, htlcSigs, nil, err
+		return nil, err
 	}
 
 	// Grab the next commitment point for the remote party. This will be
@@ -3306,7 +3312,7 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 		remoteACKedIndex, remoteHtlcIndex, keyRing,
 	)
 	if err != nil {
-		return sig, htlcSigs, nil, err
+		return nil, err
 	}
 
 	lc.log.Tracef("extending remote chain to height %v, "+
@@ -3331,7 +3337,7 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 		lc.localChanCfg, lc.remoteChanCfg, newCommitView,
 	)
 	if err != nil {
-		return sig, htlcSigs, nil, err
+		return nil, err
 	}
 	lc.sigPool.SubmitSignBatch(sigBatch)
 
@@ -3342,12 +3348,12 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 	rawSig, err := lc.Signer.SignOutputRaw(newCommitView.txn, lc.signDesc)
 	if err != nil {
 		close(cancelChan)
-		return sig, htlcSigs, nil, err
+		return nil, err
 	}
 	sig, err = lnwire.NewSigFromRawSignature(rawSig)
 	if err != nil {
 		close(cancelChan)
-		return sig, htlcSigs, nil, err
+		return nil, err
 	}
 
 	// We'll need to send over the signatures to the remote party in the
@@ -3367,7 +3373,7 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 		// jobs.
 		if jobResp.Err != nil {
 			close(cancelChan)
-			return sig, htlcSigs, nil, err
+			return nil, err
 		}
 
 		htlcSigs = append(htlcSigs, jobResp.Sig)
@@ -3378,7 +3384,7 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 	// can retransmit it if necessary.
 	commitDiff, err := lc.createCommitDiff(newCommitView, sig, htlcSigs)
 	if err != nil {
-		return sig, htlcSigs, nil, err
+		return nil, err
 	}
 
 	// TODO(roasbeef): check that one eclair bug
@@ -3389,7 +3395,11 @@ func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
 	// latest commitment update.
 	lc.remoteCommitChain.addCommitment(newCommitView)
 
-	return sig, htlcSigs, commitDiff, nil
+	return &NewCommitSig{
+		TheirCommitSig: sig,
+		HtlcSigs:       htlcSigs,
+		CommitDiff:     commitDiff,
+	}, nil
 }
 
 // ProcessChanSyncMsg processes a ChannelReestablish message sent by the remote
