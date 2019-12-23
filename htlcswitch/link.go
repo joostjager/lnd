@@ -1742,12 +1742,24 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 			return
 		}
 
+		// Preemptively write all pending keystones to disk, just in
+		// case the HTLCs we have in memory are included in the
+		// subsequent attempt to sign a commitment state.
+		err = l.writePendingKeystones()
+		if err != nil {
+			l.fail(LinkFailureError{code: ErrInternalError},
+				"unable to write pending keystones: %v", err)
+			return
+		}
+
 		// As we've just accepted a new state, we'll now
 		// immediately send the remote peer a revocation for our prior
 		// state.
-		nextRevocation, currentHtlcs, err := l.channel.RevokeCurrentCommitment()
+		nextRevocation, currentHtlcs, newCommitSig, err :=
+			l.channel.RevokeCurrentCommitment()
 		if err != nil {
-			l.log.Errorf("unable to revoke commitment: %v", err)
+			l.fail(LinkFailureError{code: ErrInternalError},
+				"unable to update commitments: %v", err)
 			return
 		}
 		l.cfg.Peer.SendMessage(false, nextRevocation)
@@ -1764,20 +1776,17 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 			return
 		}
 
-		// If both commitment chains are fully synced from our PoV,
-		// then we don't need to reply with a signature as both sides
-		// already have a commitment with the latest accepted.
-		if !l.channel.OweCommitment(true) {
-			return
-		}
-
-		// Otherwise, the remote party initiated the state transition,
-		// so we'll reply with a signature to provide them with their
-		// version of the latest commitment.
-		if err := l.updateCommitTx(); err != nil {
-			l.fail(LinkFailureError{code: ErrInternalError},
-				"unable to update commitment: %v", err)
-			return
+		if newCommitSig != nil {
+			err := l.processNewSig(
+				newCommitSig.TheirCommitSig,
+				newCommitSig.HtlcSigs,
+				newCommitSig.CommitDiff.Commitment.Htlcs,
+			)
+			if err != nil {
+				l.fail(LinkFailureError{code: ErrInternalError},
+					"unable to update commitment: %v", err)
+				return
+			}
 		}
 
 	case *lnwire.RevokeAndAck:

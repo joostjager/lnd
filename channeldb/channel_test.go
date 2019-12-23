@@ -524,7 +524,7 @@ func TestChannelStateTransition(t *testing.T) {
 	// First update the local node's broadcastable state and also add a
 	// CommitDiff remote node's as well in order to simulate a proper state
 	// transition.
-	if err := channel.UpdateCommitment(&commitment); err != nil {
+	if err := channel.UpdateCommitment(&commitment, nil); err != nil {
 		t.Fatalf("unable to update commitment: %v", err)
 	}
 

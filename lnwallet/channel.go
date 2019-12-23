@@ -4265,13 +4265,15 @@ func (lc *LightningChannel) PendingLocalUpdateCount() uint64 {
 // method also returns the set of HTLC's currently active within the commitment
 // transaction. This return value allows callers to act once an HTLC has been
 // locked into our commitment transaction.
-func (lc *LightningChannel) RevokeCurrentCommitment() (*lnwire.RevokeAndAck, []channeldb.HTLC, error) {
+func (lc *LightningChannel) RevokeCurrentCommitment() (*lnwire.RevokeAndAck,
+	[]channeldb.HTLC, *NewCommitSig, error) {
+
 	lc.Lock()
 	defer lc.Unlock()
 
 	revocationMsg, err := lc.generateRevocation(lc.currentHeight)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	lc.log.Tracef("revoking height=%v, now at height=%v",
@@ -4286,9 +4288,29 @@ func (lc *LightningChannel) RevokeCurrentCommitment() (*lnwire.RevokeAndAck, []c
 	// persistent storage.
 	chainTail := lc.localCommitChain.tail()
 	newCommitment := chainTail.toDiskCommit(true)
-	err = lc.channelState.UpdateCommitment(newCommitment, nil)
+
+	revocationMsg.ChanID = lnwire.NewChanIDFromOutPoint(
+		&lc.channelState.FundingOutpoint,
+	)
+
+	var remoteCommitDiff *channeldb.CommitDiff
+	var newCommitSig *NewCommitSig
+
+	// If we owe a commitment after this revocation, create one.
+	if lc.oweCommitment(true) {
+		sig, err := lc.signNextCommitment()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		newCommitSig = sig
+		remoteCommitDiff = sig.CommitDiff
+	}
+
+	// Update the local commitment and, if changed, the remote commitment in
+	// the same transaction.
+	err = lc.channelState.UpdateCommitment(newCommitment, remoteCommitDiff)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	lc.log.Tracef("state transition accepted: "+
@@ -4296,11 +4318,7 @@ func (lc *LightningChannel) RevokeCurrentCommitment() (*lnwire.RevokeAndAck, []c
 		chainTail.ourBalance,
 		chainTail.theirBalance)
 
-	revocationMsg.ChanID = lnwire.NewChanIDFromOutPoint(
-		&lc.channelState.FundingOutpoint,
-	)
-
-	return revocationMsg, newCommitment.Htlcs, nil
+	return revocationMsg, newCommitment.Htlcs, newCommitSig, nil
 }
 
 // ReceiveRevocation processes a revocation sent by the remote party for the
