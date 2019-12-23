@@ -3050,6 +3050,100 @@ func TestChanSyncOweCommitment(t *testing.T) {
 	}
 }
 
+// TestChanSyncOweCommitmentPendingRemote asserts that local updates are applied
+// to the remote commit across restarts.
+func TestChanSyncOweCommitmentPendingRemote(t *testing.T) {
+	t.Parallel()
+
+	// Create a test channel which will be used for the duration of this
+	// unittest.
+	aliceChannel, bobChannel, cleanUp, err := CreateTestChannels(true)
+	if err != nil {
+		t.Fatalf("unable to create test channels: %v", err)
+	}
+	defer cleanUp()
+
+	var fakeOnionBlob [lnwire.OnionPacketSize]byte
+	copy(fakeOnionBlob[:], bytes.Repeat([]byte{0x05}, lnwire.OnionPacketSize))
+
+	// We'll start off the scenario with Bob an HTLC to Alice in a single
+	// state update.
+	htlcAmt := lnwire.NewMSatFromSatoshis(20000)
+	var bobPreimage [32]byte
+	copy(bobPreimage[:], bytes.Repeat([]byte{0xbb}, 32))
+	rHash := sha256.Sum256(bobPreimage[:])
+	h := &lnwire.UpdateAddHTLC{
+		PaymentHash: rHash,
+		Amount:      htlcAmt,
+		Expiry:      uint32(10),
+		OnionBlob:   fakeOnionBlob,
+	}
+
+	htlcIndex, err := bobChannel.AddHTLC(h, nil)
+	if err != nil {
+		t.Fatalf("unable to add bob's htlc: %v", err)
+	}
+
+	h.ID = htlcIndex
+	if _, err := aliceChannel.ReceiveHTLC(h); err != nil {
+		t.Fatalf("unable to recv bob's htlc: %v", err)
+	}
+
+	// With the HTLC's applied to both update logs, we'll initiate a state
+	// transition from Bob.
+	if err := ForceStateTransition(bobChannel, aliceChannel); err != nil {
+		t.Fatalf("unable to complete bob's state transition: %v", err)
+	}
+
+	// Next, Alice settles the HTLC from Bob.
+	err = aliceChannel.SettleHTLC(bobPreimage, 0, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unable to settle htlc: %v", err)
+	}
+	err = bobChannel.ReceiveHTLCSettle(bobPreimage, 0)
+	if err != nil {
+		t.Fatalf("unable to settle htlc: %v", err)
+	}
+
+	aliceSig, aliceHtlcSigs, _, err := aliceChannel.SignNextCommitment()
+	if err != nil {
+		t.Fatalf("unable to sign commitment: %v", err)
+	}
+
+	err = bobChannel.ReceiveNewCommitment(aliceSig, aliceHtlcSigs)
+	if err != nil {
+		t.Fatalf("unable to receive commitment: %v", err)
+	}
+
+	// Bob revokes his current commitment. After this call completes, the
+	// htlc is settled on the local commitment transaction. Bob still owes
+	// Alice a signature to also settle the htlc on her local commitment
+	// transaction.
+	_, _, err = bobChannel.RevokeCurrentCommitment()
+	if err != nil {
+		t.Fatalf("unable to revoke commitment: %v", err)
+	}
+
+	// We restart Bob. This should have no impact on further message that
+	// are generated.
+	bobChannel, err = restartChannel(bobChannel)
+	if err != nil {
+		t.Fatalf("unable to restart bob: %v", err)
+	}
+
+	// Bob signs the commitment he owes.
+	_, bobHtlcSigs, _, err := bobChannel.SignNextCommitment()
+	if err != nil {
+		t.Fatalf("unable to sign commitment: %v", err)
+	}
+
+	// This commitment is expected to contain no htlcs anymore, but because
+	// of a bug it is still present. THIS IS NOT CORRECT!
+	if len(bobHtlcSigs) != 1 {
+		t.Fatal("expected htlc to still be pending")
+	}
+}
+
 // TestChanSyncOweRevocation tests that if Bob restarts (and then Alice) before
 // he receiver's Alice's RevokeAndAck message, then Alice concludes that she
 // needs to re-send the RevokeAndAck. After the revocation has been sent, both
