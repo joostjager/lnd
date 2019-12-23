@@ -1988,6 +1988,12 @@ func (l *channelLink) updateCommitTx() error {
 		return err
 	}
 
+	return l.processNewSig(theirCommitSig, htlcSigs, pendingHTLCs)
+}
+
+func (l *channelLink) processNewSig(theirCommitSig lnwire.Sig,
+	htlcSigs []lnwire.Sig, pendingHTLCs []channeldb.HTLC) error {
+
 	// The remote party now has a new pending commitment, so we'll update
 	// the contract court to be aware of this new set (the prior old remote
 	// pending).
