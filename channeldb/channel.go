@@ -1686,6 +1686,14 @@ func (c *OpenChannel) AppendRemoteCommitChain(diff *CommitDiff) error {
 	c.Lock()
 	defer c.Unlock()
 
+	return c.Db.Update(func(tx *bbolt.Tx) error {
+		return c.appendRemoteCommitChain(tx, diff)
+	})
+}
+
+func (c *OpenChannel) appendRemoteCommitChain(tx *bbolt.Tx,
+	diff *CommitDiff) error {
+
 	// If this is a restored channel, then we want to avoid mutating the
 	// state at all, as it's impossible to do so in a protocol compliant
 	// manner.
@@ -1693,56 +1701,54 @@ func (c *OpenChannel) AppendRemoteCommitChain(diff *CommitDiff) error {
 		return ErrNoRestoredChannelMutation
 	}
 
-	return c.Db.Update(func(tx *bbolt.Tx) error {
-		// First, we'll grab the writable bucket where this channel's
-		// data resides.
-		chanBucket, err := fetchChanBucket(
-			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
-		)
-		if err != nil {
-			return err
-		}
+	// First, we'll grab the writable bucket where this channel's
+	// data resides.
+	chanBucket, err := fetchChanBucket(
+		tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+	)
+	if err != nil {
+		return err
+	}
 
-		// If the channel is marked as borked, then for safety reasons,
-		// we shouldn't attempt any further updates.
-		isBorked, err := c.isBorked(chanBucket)
-		if err != nil {
-			return err
-		}
-		if isBorked {
-			return ErrChanBorked
-		}
+	// If the channel is marked as borked, then for safety reasons,
+	// we shouldn't attempt any further updates.
+	isBorked, err := c.isBorked(chanBucket)
+	if err != nil {
+		return err
+	}
+	if isBorked {
+		return ErrChanBorked
+	}
 
-		// Any outgoing settles and fails necessarily have a
-		// corresponding adds in this channel's forwarding packages.
-		// Mark all of these as being fully processed in our forwarding
-		// package, which prevents us from reprocessing them after
-		// startup.
-		err = c.Packager.AckAddHtlcs(tx, diff.AddAcks...)
-		if err != nil {
-			return err
-		}
+	// Any outgoing settles and fails necessarily have a
+	// corresponding adds in this channel's forwarding packages.
+	// Mark all of these as being fully processed in our forwarding
+	// package, which prevents us from reprocessing them after
+	// startup.
+	err = c.Packager.AckAddHtlcs(tx, diff.AddAcks...)
+	if err != nil {
+		return err
+	}
 
-		// Additionally, we ack from any fails or settles that are
-		// persisted in another channel's forwarding package. This
-		// prevents the same fails and settles from being retransmitted
-		// after restarts. The actual fail or settle we need to
-		// propagate to the remote party is now in the commit diff.
-		err = c.Packager.AckSettleFails(tx, diff.SettleFailAcks...)
-		if err != nil {
-			return err
-		}
+	// Additionally, we ack from any fails or settles that are
+	// persisted in another channel's forwarding package. This
+	// prevents the same fails and settles from being retransmitted
+	// after restarts. The actual fail or settle we need to
+	// propagate to the remote party is now in the commit diff.
+	err = c.Packager.AckSettleFails(tx, diff.SettleFailAcks...)
+	if err != nil {
+		return err
+	}
 
-		// TODO(roasbeef): use seqno to derive key for later LCP
+	// TODO(roasbeef): use seqno to derive key for later LCP
 
-		// With the bucket retrieved, we'll now serialize the commit
-		// diff itself, and write it to disk.
-		var b bytes.Buffer
-		if err := serializeCommitDiff(&b, diff); err != nil {
-			return err
-		}
-		return chanBucket.Put(commitDiffKey, b.Bytes())
-	})
+	// With the bucket retrieved, we'll now serialize the commit
+	// diff itself, and write it to disk.
+	var b bytes.Buffer
+	if err := serializeCommitDiff(&b, diff); err != nil {
+		return err
+	}
+	return chanBucket.Put(commitDiffKey, b.Bytes())
 }
 
 // RemoteCommitChainTip returns the "tip" of the current remote commitment
