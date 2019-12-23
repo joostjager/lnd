@@ -1244,7 +1244,9 @@ func syncNewChannel(tx *bbolt.Tx, c *OpenChannel, addrs []net.Addr) error {
 // state at this point in the commitment chain. This method its to be called on
 // two occasions: when we revoke our prior commitment state, and when the
 // remote party revokes their prior commitment state.
-func (c *OpenChannel) UpdateCommitment(newCommitment *ChannelCommitment) error {
+func (c *OpenChannel) UpdateCommitment(newCommitment *ChannelCommitment,
+	remoteCommitDiff *CommitDiff) error {
+
 	c.Lock()
 	defer c.Unlock()
 
@@ -1285,6 +1287,10 @@ func (c *OpenChannel) UpdateCommitment(newCommitment *ChannelCommitment) error {
 		if err != nil {
 			return fmt.Errorf("unable to store chan "+
 				"revocations: %v", err)
+		}
+
+		if remoteCommitDiff != nil {
+			return c.appendRemoteCommitChain(tx, remoteCommitDiff)
 		}
 
 		return nil

@@ -4276,7 +4276,7 @@ func (lc *LightningChannel) RevokeCurrentCommitment() (*lnwire.RevokeAndAck, []c
 	// persistent storage.
 	chainTail := lc.localCommitChain.tail()
 	newCommitment := chainTail.toDiskCommit(true)
-	err = lc.channelState.UpdateCommitment(newCommitment)
+	err = lc.channelState.UpdateCommitment(newCommitment, nil)
 	if err != nil {
 		return nil, nil, err
 	}
