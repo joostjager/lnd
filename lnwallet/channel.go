@@ -3229,9 +3229,24 @@ func (lc *LightningChannel) validateCommitmentSanity(theirLogCounter,
 // HTLC's on the commitment transaction. Finally, the new set of pending HTLCs
 // for the remote party's commitment are also returned.
 func (lc *LightningChannel) SignNextCommitment() (lnwire.Sig, []lnwire.Sig, []channeldb.HTLC, error) {
-
 	lc.Lock()
 	defer lc.Unlock()
+
+	sigs, htlcSigs, commitDiff, err := lc.signNextCommitment()
+	if err != nil {
+		return sigs, htlcSigs, nil, err
+	}
+
+	err = lc.channelState.AppendRemoteCommitChain(commitDiff)
+	if err != nil {
+		return sigs, htlcSigs, nil, err
+	}
+
+	return sigs, htlcSigs, commitDiff.Commitment.Htlcs, nil
+}
+
+func (lc *LightningChannel) signNextCommitment() (lnwire.Sig, []lnwire.Sig,
+	*channeldb.CommitDiff, error) {
 
 	// Check for empty commit sig. This should never happen, but we don't
 	// dare to fail hard here. We assume peers can deal with the empty sig
@@ -3365,10 +3380,6 @@ func (lc *LightningChannel) SignNextCommitment() (lnwire.Sig, []lnwire.Sig, []ch
 	if err != nil {
 		return sig, htlcSigs, nil, err
 	}
-	err = lc.channelState.AppendRemoteCommitChain(commitDiff)
-	if err != nil {
-		return sig, htlcSigs, nil, err
-	}
 
 	// TODO(roasbeef): check that one eclair bug
 	//  * need to retransmit on first state still?
@@ -3378,7 +3389,7 @@ func (lc *LightningChannel) SignNextCommitment() (lnwire.Sig, []lnwire.Sig, []ch
 	// latest commitment update.
 	lc.remoteCommitChain.addCommitment(newCommitView)
 
-	return sig, htlcSigs, commitDiff.Commitment.Htlcs, nil
+	return sig, htlcSigs, commitDiff, nil
 }
 
 // ProcessChanSyncMsg processes a ChannelReestablish message sent by the remote
