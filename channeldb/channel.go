@@ -1564,6 +1564,22 @@ type CommitDiff struct {
 	SettleFailAcks []SettleFailRef
 }
 
+func serializeLogUpdates(w io.Writer, logUpdates []LogUpdate) error {
+	numUpdates := uint16(len(logUpdates))
+	if err := binary.Write(w, byteOrder, numUpdates); err != nil {
+		return err
+	}
+
+	for _, diff := range logUpdates {
+		err := WriteElements(w, diff.LogIndex, diff.UpdateMsg)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func serializeCommitDiff(w io.Writer, diff *CommitDiff) error {
 	if err := serializeChanCommit(w, &diff.Commitment); err != nil {
 		return err
@@ -1573,16 +1589,8 @@ func serializeCommitDiff(w io.Writer, diff *CommitDiff) error {
 		return err
 	}
 
-	numUpdates := uint16(len(diff.LogUpdates))
-	if err := binary.Write(w, byteOrder, numUpdates); err != nil {
+	if err := serializeLogUpdates(w, diff.LogUpdates); err != nil {
 		return err
-	}
-
-	for _, diff := range diff.LogUpdates {
-		err := WriteElements(w, diff.LogIndex, diff.UpdateMsg)
-		if err != nil {
-			return err
-		}
 	}
 
 	numOpenRefs := uint16(len(diff.OpenedCircuitKeys))
