@@ -66,6 +66,10 @@ var (
 	// party.
 	chanCommitmentKey = []byte("chan-commitment-key")
 
+	// remoteUpdatesKey is an entry in the channel bucket that contains the
+	// local updates that have not yet been incorporated in a remote commit.
+	remoteUpdatesKey = []byte("remote-updates-key")
+
 	// revocationStateKey stores their current revocation hash, our
 	// preimage producer and their preimage store.
 	revocationStateKey = []byte("revocation-state-key")
@@ -1244,7 +1248,9 @@ func syncNewChannel(tx *bbolt.Tx, c *OpenChannel, addrs []net.Addr) error {
 // state completely describes the balance state at this point in the commitment
 // chain. This method its to be called when we revoke our prior commitment
 // state.
-func (c *OpenChannel) UpdateCommitment(newCommitment *ChannelCommitment) error {
+func (c *OpenChannel) UpdateCommitment(newCommitment *ChannelCommitment,
+	localUpdates []LogUpdate) error {
+
 	c.Lock()
 	defer c.Unlock()
 
@@ -1285,6 +1291,16 @@ func (c *OpenChannel) UpdateCommitment(newCommitment *ChannelCommitment) error {
 		if err != nil {
 			return fmt.Errorf("unable to store chan "+
 				"revocations: %v", err)
+		}
+
+		// Persist pending local updates.
+		var b bytes.Buffer
+		if err := serializeLogUpdates(&b, localUpdates); err != nil {
+			return err
+		}
+		if err := chanBucket.Put(remoteUpdatesKey, b.Bytes()); err != nil {
+			return fmt.Errorf("unable to store local updates: %v",
+				err)
 		}
 
 		return nil
@@ -1620,6 +1636,24 @@ func serializeCommitDiff(w io.Writer, diff *CommitDiff) error {
 	return nil
 }
 
+func deserializeLogUpdates(r io.Reader) ([]LogUpdate, error) {
+	var numUpdates uint16
+	if err := binary.Read(r, byteOrder, &numUpdates); err != nil {
+		return nil, err
+	}
+
+	logUpdates := make([]LogUpdate, numUpdates)
+	for i := 0; i < int(numUpdates); i++ {
+		err := ReadElements(r,
+			&logUpdates[i].LogIndex, &logUpdates[i].UpdateMsg,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return logUpdates, nil
+}
+
 func deserializeCommitDiff(r io.Reader) (*CommitDiff, error) {
 	var (
 		d   CommitDiff
@@ -1636,19 +1670,9 @@ func deserializeCommitDiff(r io.Reader) (*CommitDiff, error) {
 		return nil, err
 	}
 
-	var numUpdates uint16
-	if err := binary.Read(r, byteOrder, &numUpdates); err != nil {
+	d.LogUpdates, err = deserializeLogUpdates(r)
+	if err != nil {
 		return nil, err
-	}
-
-	d.LogUpdates = make([]LogUpdate, numUpdates)
-	for i := 0; i < int(numUpdates); i++ {
-		err := ReadElements(r,
-			&d.LogUpdates[i].LogIndex, &d.LogUpdates[i].UpdateMsg,
-		)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	var numOpenRefs uint16
@@ -1792,6 +1816,36 @@ func (c *OpenChannel) RemoteCommitChainTip() (*CommitDiff, error) {
 	}
 
 	return cd, err
+}
+
+func (c *OpenChannel) RemoteUpdates() ([]LogUpdate, error) {
+	var updates []LogUpdate
+	err := c.Db.View(func(tx *bbolt.Tx) error {
+		chanBucket, err := fetchChanBucket(
+			tx, c.IdentityPub, &c.FundingOutpoint, c.ChainHash,
+		)
+		switch err {
+		case nil:
+		case ErrNoChanDBExists, ErrNoActiveChannels, ErrChannelNotFound:
+			return nil
+		default:
+			return err
+		}
+
+		remoteUpdateBytes := chanBucket.Get(remoteUpdatesKey)
+		if remoteUpdateBytes == nil {
+			return nil
+		}
+
+		r := bytes.NewReader(remoteUpdateBytes)
+		updates, err = deserializeLogUpdates(r)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return updates, nil
 }
 
 // InsertNextRevocation inserts the _next_ commitment point (revocation) into

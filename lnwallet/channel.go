@@ -1626,6 +1626,99 @@ func (lc *LightningChannel) logUpdateToPayDesc(logUpdate *channeldb.LogUpdate,
 	return pd, nil
 }
 
+func (lc *LightningChannel) remoteLogUpdateToPayDesc(logUpdate *channeldb.LogUpdate,
+	localUpdateLog *updateLog, commitHeight uint64) (*PaymentDescriptor, error) {
+
+	var pd *PaymentDescriptor
+
+	switch wireMsg := logUpdate.UpdateMsg.(type) {
+
+	case *lnwire.UpdateAddHTLC:
+		pd = &PaymentDescriptor{
+			RHash:                 wireMsg.PaymentHash,
+			Timeout:               wireMsg.Expiry,
+			Amount:                wireMsg.Amount,
+			EntryType:             Add,
+			HtlcIndex:             wireMsg.ID,
+			LogIndex:              logUpdate.LogIndex,
+			addCommitHeightRemote: commitHeight,
+		}
+		pd.OnionBlob = make([]byte, len(wireMsg.OnionBlob))
+		copy(pd.OnionBlob[:], wireMsg.OnionBlob[:])
+
+		// pd.theirPkScript = theirP2WSH
+		// pd.theirWitnessScript = theirWitnessScript
+
+	// For HTLC's we're offered we'll fetch the original offered HTLC
+	// from the remote party's update log so we can retrieve the same
+	// PaymentDescriptor that SettleHTLC would produce.
+	case *lnwire.UpdateFulfillHTLC:
+		ogHTLC := localUpdateLog.lookupHtlc(wireMsg.ID)
+
+		pd = &PaymentDescriptor{
+			Amount:                   ogHTLC.Amount,
+			RPreimage:                wireMsg.PaymentPreimage,
+			LogIndex:                 logUpdate.LogIndex,
+			ParentIndex:              ogHTLC.HtlcIndex,
+			EntryType:                Settle,
+			removeCommitHeightRemote: commitHeight,
+		}
+
+	// If we sent a failure for a prior incoming HTLC, then we'll consult
+	// the update log of the remote party so we can retrieve the
+	// information of the original HTLC we're failing. We also set the
+	// removal height for the remote commitment.
+	case *lnwire.UpdateFailHTLC:
+		ogHTLC := localUpdateLog.lookupHtlc(wireMsg.ID)
+
+		pd = &PaymentDescriptor{
+			Amount:                   ogHTLC.Amount,
+			RHash:                    ogHTLC.RHash,
+			ParentIndex:              ogHTLC.HtlcIndex,
+			LogIndex:                 logUpdate.LogIndex,
+			EntryType:                Fail,
+			FailReason:               wireMsg.Reason[:],
+			removeCommitHeightRemote: commitHeight,
+		}
+
+	// HTLC fails due to malformed onion blobs are treated the exact same
+	// way as regular HTLC fails.
+	case *lnwire.UpdateFailMalformedHTLC:
+		ogHTLC := localUpdateLog.lookupHtlc(wireMsg.ID)
+		// TODO(roasbeef): err if nil?
+
+		pd = &PaymentDescriptor{
+			Amount:                   ogHTLC.Amount,
+			RHash:                    ogHTLC.RHash,
+			ParentIndex:              ogHTLC.HtlcIndex,
+			LogIndex:                 logUpdate.LogIndex,
+			EntryType:                MalformedFail,
+			FailCode:                 wireMsg.FailureCode,
+			ShaOnionBlob:             wireMsg.ShaOnionBlob,
+			removeCommitHeightRemote: commitHeight,
+		}
+
+	// For fee updates we'll create a FeeUpdate type to add to the log. We
+	// reuse the amount field to hold the fee rate. Since the amount field
+	// is denominated in msat we won't lose precision when storing the
+	// sat/kw denominated feerate. Note that we set both the add and remove
+	// height to the same value, as we consider the fee update locked in by
+	// adding and removing it at the same height.
+	case *lnwire.UpdateFee:
+		pd = &PaymentDescriptor{
+			LogIndex: logUpdate.LogIndex,
+			Amount: lnwire.NewMSatFromSatoshis(
+				btcutil.Amount(wireMsg.FeePerKw),
+			),
+			EntryType:                FeeUpdate,
+			addCommitHeightRemote:    commitHeight,
+			removeCommitHeightRemote: commitHeight,
+		}
+	}
+
+	return pd, nil
+}
+
 // restoreCommitState will restore the local commitment chain and updateLog
 // state to a consistent in-memory representation of the passed disk commitment.
 // This method is to be used upon reconnection to our channel counter party.
@@ -1726,12 +1819,19 @@ func (lc *LightningChannel) restoreCommitState(
 		)
 	}
 
+	// Fetch remote updates that we haven't signed for.
+	danglingRemoteUpdates, err := lc.channelState.RemoteUpdates()
+	if err != nil {
+		return err
+	}
+
 	// Finally, with the commitment states restored, we'll now restore the
 	// state logs based on the current local+remote commit, and any pending
 	// remote commit that exists.
 	err = lc.restoreStateLogs(
 		localCommit, remoteCommit, pendingRemoteCommit,
 		pendingRemoteCommitDiff, pendingRemoteKeyChain,
+		danglingRemoteUpdates,
 	)
 	if err != nil {
 		return err
@@ -1747,7 +1847,8 @@ func (lc *LightningChannel) restoreCommitState(
 func (lc *LightningChannel) restoreStateLogs(
 	localCommitment, remoteCommitment, pendingRemoteCommit *commitment,
 	pendingRemoteCommitDiff *channeldb.CommitDiff,
-	pendingRemoteKeys *CommitmentKeyRing) error {
+	pendingRemoteKeys *CommitmentKeyRing,
+	danglingRemoteUpdates []channeldb.LogUpdate) error {
 
 	// We make a map of incoming HTLCs to the height of the remote
 	// commitment they were first added, and outgoing HTLCs to the height
@@ -1815,68 +1916,120 @@ func (lc *LightningChannel) restoreStateLogs(
 
 	// If we didn't have a dangling (un-acked) commit for the remote party,
 	// then we can exit here.
-	if pendingRemoteCommit == nil {
-		return nil
-	}
+	if pendingRemoteCommit != nil {
 
-	pendingCommit := pendingRemoteCommitDiff.Commitment
-	pendingHeight := pendingCommit.CommitHeight
+		pendingCommit := pendingRemoteCommitDiff.Commitment
+		pendingHeight := pendingCommit.CommitHeight
 
-	// If we did have a dangling commit, then we'll examine which updates
-	// we included in that state and re-insert them into our update log.
-	for _, logUpdate := range pendingRemoteCommitDiff.LogUpdates {
-		payDesc, err := lc.logUpdateToPayDesc(
-			&logUpdate, lc.remoteUpdateLog, pendingHeight,
-			chainfee.SatPerKWeight(pendingCommit.FeePerKw),
-			pendingRemoteKeys,
-			lc.channelState.RemoteChanCfg.DustLimit,
-		)
-		if err != nil {
-			return err
-		}
-
-		// Earlier versions did not write the log index to disk for fee
-		// updates, so they will be unset. To account for this we set
-		// them to to current update log index.
-		if payDesc.EntryType == FeeUpdate && payDesc.LogIndex == 0 &&
-			lc.localUpdateLog.logIndex > 0 {
-
-			payDesc.LogIndex = lc.localUpdateLog.logIndex
-			lc.log.Debugf("Found FeeUpdate on "+
-				"pendingRemoteCommitDiff without logIndex, "+
-				"using %v", payDesc.LogIndex)
-		}
-
-		// At this point the restored update's logIndex must be equal
-		// to the update log, otherwise somthing is horribly wrong.
-		if payDesc.LogIndex != lc.localUpdateLog.logIndex {
-			panic(fmt.Sprintf("log index mismatch: "+
-				"%v vs %v", payDesc.LogIndex,
-				lc.localUpdateLog.logIndex))
-		}
-
-		switch payDesc.EntryType {
-		case Add:
-			// The HtlcIndex of the added HTLC _must_ be equal to
-			// the log's htlcCounter at this point. If it is not we
-			// panic to catch this.
-			// TODO(halseth): remove when cause of htlc entry bug
-			// is found.
-			if payDesc.HtlcIndex != lc.localUpdateLog.htlcCounter {
-				panic(fmt.Sprintf("htlc index mismatch: "+
-					"%v vs %v", payDesc.HtlcIndex,
-					lc.localUpdateLog.htlcCounter))
+		// If we did have a dangling commit, then we'll examine which updates
+		// we included in that state and re-insert them into our update log.
+		for _, logUpdate := range pendingRemoteCommitDiff.LogUpdates {
+			payDesc, err := lc.logUpdateToPayDesc(
+				&logUpdate, lc.remoteUpdateLog, pendingHeight,
+				chainfee.SatPerKWeight(pendingCommit.FeePerKw),
+				pendingRemoteKeys,
+				lc.channelState.RemoteChanCfg.DustLimit,
+			)
+			if err != nil {
+				return err
 			}
 
-			lc.localUpdateLog.appendHtlc(payDesc)
+			// Earlier versions did not write the log index to disk for fee
+			// updates, so they will be unset. To account for this we set
+			// them to to current update log index.
+			if payDesc.EntryType == FeeUpdate && payDesc.LogIndex == 0 &&
+				lc.localUpdateLog.logIndex > 0 {
 
-		case FeeUpdate:
-			lc.localUpdateLog.appendUpdate(payDesc)
+				payDesc.LogIndex = lc.localUpdateLog.logIndex
+				lc.log.Debugf("Found FeeUpdate on "+
+					"pendingRemoteCommitDiff without logIndex, "+
+					"using %v", payDesc.LogIndex)
+			}
 
-		default:
-			lc.localUpdateLog.appendUpdate(payDesc)
+			// At this point the restored update's logIndex must be equal
+			// to the update log, otherwise somthing is horribly wrong.
+			if payDesc.LogIndex != lc.localUpdateLog.logIndex {
+				panic(fmt.Sprintf("log index mismatch: "+
+					"%v vs %v", payDesc.LogIndex,
+					lc.localUpdateLog.logIndex))
+			}
 
-			lc.remoteUpdateLog.markHtlcModified(payDesc.ParentIndex)
+			switch payDesc.EntryType {
+			case Add:
+				// The HtlcIndex of the added HTLC _must_ be equal to
+				// the log's htlcCounter at this point. If it is not we
+				// panic to catch this.
+				// TODO(halseth): remove when cause of htlc entry bug
+				// is found.
+				if payDesc.HtlcIndex != lc.localUpdateLog.htlcCounter {
+					panic(fmt.Sprintf("htlc index mismatch: "+
+						"%v vs %v", payDesc.HtlcIndex,
+						lc.localUpdateLog.htlcCounter))
+				}
+
+				lc.localUpdateLog.appendHtlc(payDesc)
+
+			case FeeUpdate:
+				lc.localUpdateLog.appendUpdate(payDesc)
+
+			default:
+				lc.localUpdateLog.appendUpdate(payDesc)
+
+				lc.remoteUpdateLog.markHtlcModified(payDesc.ParentIndex)
+			}
+		}
+	}
+
+	// Restore dangling remote log updates that we haven't signed for yet.
+	if len(danglingRemoteUpdates) > 0 {
+		lastLogIndex := danglingRemoteUpdates[len(danglingRemoteUpdates)-1].LogIndex
+		if lastLogIndex != lc.remoteUpdateLog.logIndex-1 {
+			panic(fmt.Sprintf("log index mismatch: "+
+				"%v vs %v", lastLogIndex,
+				lc.remoteUpdateLog.logIndex))
+		}
+
+		for _, logUpdate := range danglingRemoteUpdates {
+			logUpdate := logUpdate
+
+			payDesc, err := lc.remoteLogUpdateToPayDesc(
+				&logUpdate, lc.localUpdateLog, localCommitment.height,
+			)
+			if err != nil {
+				return err
+			}
+
+			// At this point the restored update's logIndex must be equal
+			// to the update log, otherwise somthing is horribly wrong.
+			// if payDesc.LogIndex != lc.remoteUpdateLog.logIndex {
+			// 	panic(fmt.Sprintf("log index mismatch: "+
+			// 		"%v vs %v", payDesc.LogIndex,
+			// 		lc.remoteUpdateLog.logIndex))
+			// }
+
+			switch payDesc.EntryType {
+			case Add:
+				// The HtlcIndex of the added HTLC _must_ be equal to
+				// the log's htlcCounter at this point. If it is not we
+				// panic to catch this.
+				// TODO(halseth): remove when cause of htlc entry bug
+				// is found.
+				// if payDesc.HtlcIndex != lc.remoteUpdateLog.htlcCounter {
+				// 	panic(fmt.Sprintf("htlc index mismatch: "+
+				// 		"%v vs %v", payDesc.HtlcIndex,
+				// 		lc.remoteUpdateLog.htlcCounter))
+				// }
+
+				lc.remoteUpdateLog.appendHtlc(payDesc)
+
+			case FeeUpdate:
+				lc.remoteUpdateLog.appendUpdate(payDesc)
+
+			default:
+				lc.remoteUpdateLog.appendUpdate(payDesc)
+
+				lc.localUpdateLog.markHtlcModified(payDesc.ParentIndex)
+			}
 		}
 	}
 
@@ -3077,6 +3230,90 @@ func (lc *LightningChannel) createCommitDiff(
 	}, nil
 }
 
+func (lc *LightningChannel) getDanglingRemoteUpdates() ([]channeldb.LogUpdate, error) {
+	// First, we need to convert the funding outpoint into the ID that's
+	// used on the wire to identify this channel. We'll use this shortly
+	// when recording the exact CommitSig message that we'll be sending
+	// out.
+	chanID := lnwire.NewChanIDFromOutPoint(&lc.channelState.FundingOutpoint)
+
+	chainTail := lc.remoteCommitChain.tail()
+	lastCommited := chainTail.theirMessageIndex
+
+	var logUpdates []channeldb.LogUpdate
+	// We'll now run through our local update log to locate the items which
+	// were only just committed within this pending state. This will be the
+	// set of items we need to retransmit if we reconnect and find that
+	// they didn't process this new state fully.
+	for e := lc.remoteUpdateLog.Front(); e != nil; e = e.Next() {
+		pd := e.Value.(*PaymentDescriptor)
+
+		// Skip all remote updates that we have already included in our
+		// commit chain.
+		if pd.LogIndex < lastCommited {
+			continue
+		}
+
+		// Knowing that this update is a part of this new commitment,
+		// we'll create a log update and not its index in the log so
+		// we can later restore it properly if a restart occurs.
+		logUpdate := channeldb.LogUpdate{
+			LogIndex: pd.LogIndex,
+		}
+
+		// We'll map the type of the PaymentDescriptor to one of the
+		// four messages that it corresponds to. With this set of
+		// messages obtained, we can simply read from disk and re-send
+		// them in the case of a needed channel sync.
+		switch pd.EntryType {
+		case Add:
+			htlc := &lnwire.UpdateAddHTLC{
+				ChanID:      chanID,
+				ID:          pd.HtlcIndex,
+				Amount:      pd.Amount,
+				Expiry:      pd.Timeout,
+				PaymentHash: pd.RHash,
+			}
+			copy(htlc.OnionBlob[:], pd.OnionBlob)
+			logUpdate.UpdateMsg = htlc
+
+		case Settle:
+			logUpdate.UpdateMsg = &lnwire.UpdateFulfillHTLC{
+				ChanID:          chanID,
+				ID:              pd.ParentIndex,
+				PaymentPreimage: pd.RPreimage,
+			}
+
+		case Fail:
+			logUpdate.UpdateMsg = &lnwire.UpdateFailHTLC{
+				ChanID: chanID,
+				ID:     pd.ParentIndex,
+				Reason: pd.FailReason,
+			}
+
+		case MalformedFail:
+			logUpdate.UpdateMsg = &lnwire.UpdateFailMalformedHTLC{
+				ChanID:       chanID,
+				ID:           pd.ParentIndex,
+				ShaOnionBlob: pd.ShaOnionBlob,
+				FailureCode:  pd.FailCode,
+			}
+
+		case FeeUpdate:
+			// The Amount field holds the feerate denominated in
+			// msat. Since feerates are only denominated in sat/kw,
+			// we can convert it without loss of precision.
+			logUpdate.UpdateMsg = &lnwire.UpdateFee{
+				ChanID:   chanID,
+				FeePerKw: uint32(pd.Amount.ToSatoshis()),
+			}
+		}
+
+		logUpdates = append(logUpdates, logUpdate)
+	}
+	return logUpdates, nil
+}
+
 // validateCommitmentSanity is used to validate the current state of the
 // commitment transaction in terms of the ChannelConstraints that we and our
 // remote peer agreed upon during the funding workflow. The predictAdded
@@ -4265,7 +4502,18 @@ func (lc *LightningChannel) RevokeCurrentCommitment() (*lnwire.RevokeAndAck, []c
 	// persistent storage.
 	chainTail := lc.localCommitChain.tail()
 	newCommitment := chainTail.toDiskCommit(true)
-	err = lc.channelState.UpdateCommitment(newCommitment)
+
+	// Get all local updates that are currently in memory. We need them
+	// after a restart to sync our remote commitment with what is committed
+	// locally.
+	danglingRemoteUpdate, err := lc.getDanglingRemoteUpdates()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = lc.channelState.UpdateCommitment(
+		newCommitment, danglingRemoteUpdate,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
