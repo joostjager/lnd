@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	"github.com/lightningnetwork/lnd/lntypes"
+
 	"reflect"
 	"runtime"
 	"testing"
@@ -3066,62 +3068,74 @@ func TestChanSyncOweCommitmentPendingRemote(t *testing.T) {
 	var fakeOnionBlob [lnwire.OnionPacketSize]byte
 	copy(fakeOnionBlob[:], bytes.Repeat([]byte{0x05}, lnwire.OnionPacketSize))
 
-	// We'll start off the scenario with Bob an HTLC to Alice in a single
-	// state update.
-	htlcAmt := lnwire.NewMSatFromSatoshis(20000)
-	var bobPreimage [32]byte
-	copy(bobPreimage[:], bytes.Repeat([]byte{0xbb}, 32))
-	rHash := sha256.Sum256(bobPreimage[:])
-	h := &lnwire.UpdateAddHTLC{
-		PaymentHash: rHash,
-		Amount:      htlcAmt,
-		Expiry:      uint32(10),
-		OnionBlob:   fakeOnionBlob,
+	// We'll start off the scenario where Bob send two htlcs to Alice in a
+	// single state update.
+	var preimages []lntypes.Preimage
+	for id := byte(0); id <= 1; id++ {
+		htlcAmt := lnwire.NewMSatFromSatoshis(20000)
+		var bobPreimage [32]byte
+		copy(bobPreimage[:], bytes.Repeat([]byte{id}, 32))
+		rHash := sha256.Sum256(bobPreimage[:])
+		h := &lnwire.UpdateAddHTLC{
+			PaymentHash: rHash,
+			Amount:      htlcAmt,
+			Expiry:      uint32(10),
+			OnionBlob:   fakeOnionBlob,
+		}
+
+		htlcIndex, err := bobChannel.AddHTLC(h, nil)
+		if err != nil {
+			t.Fatalf("unable to add bob's htlc: %v", err)
+		}
+
+		h.ID = htlcIndex
+		if _, err := aliceChannel.ReceiveHTLC(h); err != nil {
+			t.Fatalf("unable to recv bob's htlc: %v", err)
+		}
+
+		preimages = append(preimages, bobPreimage)
 	}
 
-	htlcIndex, err := bobChannel.AddHTLC(h, nil)
-	if err != nil {
-		t.Fatalf("unable to add bob's htlc: %v", err)
-	}
-
-	h.ID = htlcIndex
-	if _, err := aliceChannel.ReceiveHTLC(h); err != nil {
-		t.Fatalf("unable to recv bob's htlc: %v", err)
-	}
-
-	// With the HTLC's applied to both update logs, we'll initiate a state
+	// With the HTLCs applied to both update logs, we'll initiate a state
 	// transition from Bob.
 	if err := ForceStateTransition(bobChannel, aliceChannel); err != nil {
 		t.Fatalf("unable to complete bob's state transition: %v", err)
 	}
 
-	// Next, Alice settles the HTLC from Bob.
-	err = aliceChannel.SettleHTLC(bobPreimage, 0, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("unable to settle htlc: %v", err)
-	}
-	err = bobChannel.ReceiveHTLCSettle(bobPreimage, 0)
-	if err != nil {
-		t.Fatalf("unable to settle htlc: %v", err)
-	}
+	// Next, Alice settles the HTLCs from Bob in distinct state updates.
+	for i := 0; i <= 1; i++ {
+		err = aliceChannel.SettleHTLC(preimages[i], uint64(i), nil, nil, nil)
+		if err != nil {
+			t.Fatalf("unable to settle htlc: %v", err)
+		}
+		err = bobChannel.ReceiveHTLCSettle(preimages[i], uint64(i))
+		if err != nil {
+			t.Fatalf("unable to settle htlc: %v", err)
+		}
 
-	aliceSig, aliceHtlcSigs, _, err := aliceChannel.SignNextCommitment()
-	if err != nil {
-		t.Fatalf("unable to sign commitment: %v", err)
-	}
+		aliceSig, aliceHtlcSigs, _, err := aliceChannel.SignNextCommitment()
+		if err != nil {
+			t.Fatalf("unable to sign commitment: %v", err)
+		}
 
-	err = bobChannel.ReceiveNewCommitment(aliceSig, aliceHtlcSigs)
-	if err != nil {
-		t.Fatalf("unable to receive commitment: %v", err)
-	}
+		err = bobChannel.ReceiveNewCommitment(aliceSig, aliceHtlcSigs)
+		if err != nil {
+			t.Fatalf("unable to receive commitment: %v", err)
+		}
 
-	// Bob revokes his current commitment. After this call completes, the
-	// htlc is settled on the local commitment transaction. Bob still owes
-	// Alice a signature to also settle the htlc on her local commitment
-	// transaction.
-	_, _, err = bobChannel.RevokeCurrentCommitment()
-	if err != nil {
-		t.Fatalf("unable to revoke commitment: %v", err)
+		// Bob revokes his current commitment. After this call
+		// completes, the htlc is settled on the local commitment
+		// transaction. Bob still owes Alice a signature to also settle
+		// the htlc on her local commitment transaction.
+		bobRevoke, _, err := bobChannel.RevokeCurrentCommitment()
+		if err != nil {
+			t.Fatalf("unable to revoke commitment: %v", err)
+		}
+
+		_, _, _, _, err = aliceChannel.ReceiveRevocation(bobRevoke)
+		if err != nil {
+			t.Fatalf("unable to revoke commitment: %v", err)
+		}
 	}
 
 	// We restart Bob. This should have no impact on further message that
@@ -3139,7 +3153,7 @@ func TestChanSyncOweCommitmentPendingRemote(t *testing.T) {
 
 	// This commitment is expected to contain no htlcs anymore, but because
 	// of a bug it is still present. THIS IS NOT CORRECT!
-	if len(bobHtlcSigs) != 1 {
+	if len(bobHtlcSigs) != 2 {
 		t.Fatal("expected htlc to still be pending")
 	}
 }
