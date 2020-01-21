@@ -33,7 +33,7 @@ var (
 const (
 	// DefaultHtlcHoldDuration defines the default for how long mpp htlcs
 	// are held while waiting for the other set members to arrive.
-	DefaultHtlcHoldDuration = 120 * time.Second
+	DefaultHtlcHoldDuration = 5 * time.Second
 )
 
 // HtlcResolution describes how an htlc should be resolved. If the preimage
@@ -105,7 +105,7 @@ type RegistryConfig struct {
 // mpp htlcs for which the complete set didn't arrive in time.
 type htlcReleaseEvent struct {
 	// hash is the payment hash of the htlc to release.
-	hash lntypes.Hash
+	invoiceHash, hash lntypes.Hash
 
 	// key is the circuit key of the htlc to release.
 	key channeldb.CircuitKey
@@ -357,7 +357,7 @@ func (i *InvoiceRegistry) invoiceEventLoop() {
 		case <-nextReleaseTick:
 			event := autoReleaseHeap.Pop().(*htlcReleaseEvent)
 			err := i.cancelSingleHtlc(
-				event.hash, event.key, ResultMppTimeout,
+				event.hash, event.invoiceHash, event.key, ResultMppTimeout,
 			)
 			if err != nil {
 				log.Errorf("HTLC timer: %v", err)
@@ -587,12 +587,13 @@ func (i *InvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (channeldb.Invoice,
 
 // startHtlcTimer starts a new timer via the invoice registry main loop that
 // cancels a single htlc on an invoice when the htlc hold duration has passed.
-func (i *InvoiceRegistry) startHtlcTimer(hash lntypes.Hash,
+func (i *InvoiceRegistry) startHtlcTimer(hash, invoiceHash lntypes.Hash,
 	key channeldb.CircuitKey, acceptTime time.Time) error {
 
 	releaseTime := acceptTime.Add(i.cfg.HtlcHoldDuration)
 	event := &htlcReleaseEvent{
 		hash:        hash,
+		invoiceHash: invoiceHash,
 		key:         key,
 		releaseTime: releaseTime,
 	}
@@ -609,7 +610,7 @@ func (i *InvoiceRegistry) startHtlcTimer(hash lntypes.Hash,
 // cancelSingleHtlc cancels a single accepted htlc on an invoice. It takes
 // a resolution result which will be used to notify subscribed links and
 // resolvers of the details of the htlc cancellation.
-func (i *InvoiceRegistry) cancelSingleHtlc(hash lntypes.Hash,
+func (i *InvoiceRegistry) cancelSingleHtlc(hash, invoiceHash lntypes.Hash,
 	key channeldb.CircuitKey, result ResolutionResult) error {
 
 	i.Lock()
@@ -659,7 +660,7 @@ func (i *InvoiceRegistry) cancelSingleHtlc(hash lntypes.Hash,
 	// Intercept the update descriptor to set the local updated variable. If
 	// no invoice update is performed, we can return early.
 	var updated bool
-	invoice, err := i.cdb.UpdateInvoice(hash,
+	invoice, err := i.cdb.UpdateInvoice(invoiceHash,
 		func(invoice *channeldb.Invoice) (
 			*channeldb.InvoiceUpdateDesc, error) {
 
@@ -816,6 +817,13 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 		}
 	}
 
+	// DEV: replace invoice hash.
+	htlcHash := rHash
+	invoiceHash, ok := updateCtx.customRecords[record.InvoiceHash]
+	if ok {
+		copy(rHash[:], invoiceHash)
+	}
+
 	i.Lock()
 	defer i.Unlock()
 
@@ -902,16 +910,25 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 			// resolution is set based on the outcome of the single
 			// htlc that we just settled, so may not be accurate
 			// for all htlcs.
+			preimage := invoice.Terms.PaymentPreimage
+			if preimageSlice, ok := htlc.CustomRecords[record.HtlcPreimage]; ok {
+				copy(preimage[:], preimageSlice)
+			}
+
 			resolution := *NewSettleResolution(
-				invoice.Terms.PaymentPreimage, key,
+				preimage, key,
 				acceptHeight, result,
 			)
 
 			i.notifyHodlSubscribers(resolution)
 		}
 
+		preimage := invoice.Terms.PaymentPreimage
+		if preimageSlice, ok := updateCtx.customRecords[record.HtlcPreimage]; ok {
+			copy(preimage[:], preimageSlice)
+		}
 		resolution := NewSettleResolution(
-			invoice.Terms.PaymentPreimage, circuitKey,
+			preimage, circuitKey,
 			acceptHeight, result,
 		)
 		return resolution, nil
@@ -922,7 +939,7 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 		// Accepted while the invoice is Open.
 		if invoice.State == channeldb.ContractOpen {
 			err := i.startHtlcTimer(
-				rHash, circuitKey,
+				htlcHash, rHash, circuitKey,
 				invoiceHtlc.AcceptTime,
 			)
 			if err != nil {
