@@ -32,7 +32,7 @@ var (
 const (
 	// DefaultHtlcHoldDuration defines the default for how long mpp htlcs
 	// are held while waiting for the other set members to arrive.
-	DefaultHtlcHoldDuration = 120 * time.Second
+	DefaultHtlcHoldDuration = 15 * time.Second
 )
 
 // RegistryConfig contains the configuration parameters for invoice registry.
