@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -113,6 +114,21 @@ func (m *mppExecutor) launch() error {
 	}
 
 	nextId := 0
+	inFlight := make(map[int]int64, 0)
+	inFlightStr := func() string {
+		var b bytes.Buffer
+		first := true
+		for id, amt := range inFlight {
+			if first {
+				first = false
+			} else {
+				fmt.Fprintf(&b, ", ")
+			}
+			fmt.Fprintf(&b, "%v:%v", id, amt)
+		}
+		return b.String()
+	}
+
 	for {
 		shardAmt := m.amt - amtPaid - amtInFlight
 		if shardAmt > maxAmt {
@@ -130,15 +146,17 @@ func (m *mppExecutor) launch() error {
 			}
 
 			if route != nil {
+				inFlight[id] = shardAmt
+				amtInFlight += shardAmt
+
 				path := route.Hops
 				pathText := fmt.Sprintf("%v", path[0].ChanId)
 				for _, h := range path[1:] {
 					pathText += fmt.Sprintf(" -> %v", h.ChanId)
 				}
-				fmt.Printf("%v: Launched shard for amt=%v, path=%v, timelock=%v\n",
-					id, shardAmt, pathText, route.TotalTimeLock)
+				fmt.Printf("%v: Launched shard for amt=%v, path=%v, timelock=%v (%v)\n",
+					id, shardAmt, pathText, route.TotalTimeLock, inFlightStr())
 
-				amtInFlight += shardAmt
 			} else {
 				fmt.Printf("%v: No route for amt=%v\n", id, shardAmt)
 				reduceMax(shardAmt)
@@ -153,19 +171,19 @@ func (m *mppExecutor) launch() error {
 			}
 
 			amtInFlight -= r.amt
+			delete(inFlight, r.id)
 			if r.failure == nil {
-				fmt.Printf("%v: Partial payment success for amt=%v\n", r.id, r.amt)
+				fmt.Printf("%v: Partial payment success for amt=%v (%v)\n", r.id, r.amt, inFlightStr())
 
 				amtPaid += r.amt
-				fmt.Printf("%v: Increasing amtPaid with %v to %v\n", r.id, r.amt, amtPaid)
 
 				if amtPaid == m.amt {
 					fmt.Printf("Payment complete\n")
 					return nil
 				}
 			} else {
-				fmt.Printf("%v: Partial payment failed for amt=%v: %v @ %v\n",
-					r.id, r.amt, r.failure.Code, r.failure.FailureSourceIndex)
+				fmt.Printf("%v: Partial payment failed for amt=%v: %v @ %v (%v)\n",
+					r.id, r.amt, r.failure.Code, r.failure.FailureSourceIndex, inFlightStr())
 
 				switch r.failure.Code {
 				case routerrpc.Failure_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS:
@@ -173,12 +191,11 @@ func (m *mppExecutor) launch() error {
 				case routerrpc.Failure_MPP_TIMEOUT:
 					// Just retry.
 				case routerrpc.Failure_TEMPORARY_CHANNEL_FAILURE:
-					reduceMax(r.amt)
+					// reduceMax(r.amt)
 				default:
 					// Just retry.
 				}
 			}
-			fmt.Printf("%v: Decreasing amtInFlight with %v to %v\n", r.id, r.amt, amtInFlight)
 
 		case <-time.After(time.Millisecond * 100):
 		}
