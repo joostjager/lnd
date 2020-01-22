@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"time"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -31,7 +30,7 @@ func mpp(ctx *cli.Context) error {
 		return nil
 	}
 
-	executor, err := newMppExecuter(ctx)
+	executor, err := newRouter(ctx)
 	if err != nil {
 		return err
 	}
@@ -45,17 +44,14 @@ func mpp(ctx *cli.Context) error {
 	return nil
 }
 
-type mppExecutor struct {
+type router struct {
 	conn         *grpc.ClientConn
-	mainClient   lnrpc.LightningClient
 	routerClient routerrpc.RouterClient
-	dest         string
 	amt          int64
-	invoiceHash  lntypes.Hash
-	paymentAddr  []byte
+	session      *paymentSession
 }
 
-func newMppExecuter(ctx *cli.Context) (*mppExecutor, error) {
+func newRouter(ctx *cli.Context) (*router, error) {
 	conn := getClientConn(ctx, false)
 
 	mainClient := lnrpc.NewLightningClient(conn)
@@ -74,18 +70,24 @@ func newMppExecuter(ctx *cli.Context) (*mppExecutor, error) {
 		return nil, err
 	}
 
-	return &mppExecutor{
-		mainClient:   mainClient,
+	session := &paymentSession{
+		invoiceHash: invoiceHash,
+		dest:        payReq.Destination,
+		mainClient:  mainClient,
+		totalAmt:    payReq.NumSatoshis,
+		paymentAddr: payReq.PaymentAddr,
+		maxAmt:      math.MaxInt64,
+	}
+
+	return &router{
 		routerClient: routerClient,
-		dest:         payReq.Destination,
 		amt:          payReq.NumSatoshis,
 		conn:         conn,
-		invoiceHash:  invoiceHash,
-		paymentAddr:  payReq.PaymentAddr,
+		session:      session,
 	}, nil
 }
 
-func (m *mppExecutor) closeConnection() {
+func (m *router) closeConnection() {
 	m.conn.Close()
 }
 
@@ -100,21 +102,15 @@ const (
 	minAmt = 5000
 )
 
-func (m *mppExecutor) launch() error {
+func (m *router) launch() error {
 	resultChan := make(chan launchResult, 0)
 
-	var amtPaid, amtInFlight int64
-	maxAmt := int64(math.MaxInt64)
+	var (
+		amtPaid, amtInFlight int64
+		nextId               int
+		inFlight             = make(map[int]int64, 0)
+	)
 
-	reduceMax := func(failedAmt int64) {
-		newMax := failedAmt / 2
-		if newMax < maxAmt {
-			maxAmt = newMax
-		}
-	}
-
-	nextId := 0
-	inFlight := make(map[int]int64, 0)
 	inFlightStr := func() string {
 		var b bytes.Buffer
 		first := true
@@ -130,40 +126,12 @@ func (m *mppExecutor) launch() error {
 	}
 
 	for {
-		shardAmt := m.amt - amtPaid - amtInFlight
-		if shardAmt > maxAmt {
-			shardAmt = maxAmt
-		}
+		remainingAmt := m.amt - amtPaid - amtInFlight
 
-		// Launch shard
-		if shardAmt > minAmt {
-			id := nextId
-			nextId++
+		// Kick off pathfinding for the currently remaining amt.
+		routeChan := m.session.prepareRoute(remainingAmt)
 
-			route, err := m.launchShard(id, shardAmt, resultChan)
-			if err != nil {
-				return err
-			}
-
-			if route != nil {
-				inFlight[id] = shardAmt
-				amtInFlight += shardAmt
-
-				path := route.Hops
-				pathText := fmt.Sprintf("%v", path[0].ChanId)
-				for _, h := range path[1:] {
-					pathText += fmt.Sprintf(" -> %v", h.ChanId)
-				}
-				fmt.Printf("%v: Launched shard for amt=%v, path=%v, timelock=%v (%v)\n",
-					id, shardAmt, pathText, route.TotalTimeLock, inFlightStr())
-
-			} else {
-				fmt.Printf("%v: No route for amt=%v\n", id, shardAmt)
-				reduceMax(shardAmt)
-			}
-		}
-
-		// Wait for a result to become available.
+		// Wait for a result or route to become available.
 		select {
 		case r := <-resultChan:
 			if r.err != nil {
@@ -197,37 +165,147 @@ func (m *mppExecutor) launch() error {
 				}
 			}
 
-		case <-time.After(time.Millisecond * 100):
+		case htlc := <-routeChan:
+			if htlc.err != nil {
+				return htlc.err
+			}
+			route := htlc.route
+			if route == nil {
+				if amtInFlight == 0 {
+					return errors.New("no more routes")
+				}
+
+				// Otherwise wait for results to come in.
+				break
+			}
+
+			id := nextId
+			nextId++
+
+			go func() {
+				resultChan <- m.launchShard(id, htlc.hash, route)
+			}()
+
+			amt := route.Hops[len(route.Hops)-1].AmtToForward
+
+			inFlight[id] = amt
+			amtInFlight += amt
+
+			path := route.Hops
+			pathText := fmt.Sprintf("%v", path[0].ChanId)
+			for _, h := range path[1:] {
+				pathText += fmt.Sprintf(" -> %v", h.ChanId)
+			}
+			fmt.Printf("%v: Launched shard for amt=%v, path=%v, timelock=%v (%v)\n",
+				id, amt, pathText, route.TotalTimeLock, inFlightStr())
+
 		}
+
+		// Close the channel to prevent losing routes in the send to
+		// route case.
+		close(routeChan)
 	}
 }
 
-func (m *mppExecutor) launchShard(id int, amt int64, resultChan chan launchResult) (
-	*lnrpc.Route, error) {
+func (m *router) launchShard(id int, hash lntypes.Hash, route *lnrpc.Route) launchResult {
+	ctxb := context.Background()
 
+	amt := route.Hops[len(route.Hops)-1].AmtToForward
+
+	sendReq := &routerrpc.SendToRouteRequest{
+		PaymentHash: hash[:],
+		Route:       route,
+	}
+
+	resp, err := m.routerClient.SendToRoute(ctxb, sendReq)
+	if err != nil {
+		return launchResult{id: id, err: err}
+	}
+
+	if len(resp.Preimage) > 0 {
+		return launchResult{id: id, amt: amt}
+	}
+
+	return launchResult{id: id, failure: resp.Failure, amt: amt}
+}
+
+type htlc struct {
+	route *lnrpc.Route
+	hash  lntypes.Hash
+	err   error
+}
+
+type paymentSession struct {
+	invoiceHash lntypes.Hash
+	dest        string
+	mainClient  lnrpc.LightningClient
+	totalAmt    int64
+	paymentAddr []byte
+	maxAmt      int64
+}
+
+func (p *paymentSession) prepareRoute(amt int64) chan *htlc {
+	c := make(chan *htlc)
+
+	go func() {
+		var route *htlc
+		for {
+			// Todo: lock p.maxAmt
+			if amt > p.maxAmt {
+				amt = p.maxAmt
+			}
+
+			// No routes below min amt.
+			if amt < minAmt {
+				route = &htlc{}
+				break
+			}
+
+			route = p.queryRoute(amt)
+			if route.err != nil {
+				break
+			}
+			if route.route != nil {
+				break
+			}
+
+			// No route found, reduce max and retry.
+			newMax := amt / 2
+			if newMax < p.maxAmt {
+				p.maxAmt = newMax
+				fmt.Printf("Lowering max amt to %v\n", p.maxAmt)
+			}
+		}
+		c <- route
+	}()
+
+	return c
+}
+
+func (p *paymentSession) queryRoute(amt int64) *htlc {
 	ctxb := context.Background()
 
 	var preimage lntypes.Preimage
 	if _, err := rand.Read(preimage[:]); err != nil {
-		return nil, err
+		return &htlc{err: err}
 	}
 
 	customRecords := map[uint64][]byte{
 		record.HtlcPreimage: preimage[:],
-		record.InvoiceHash:  m.invoiceHash[:],
+		record.InvoiceHash:  p.invoiceHash[:],
 	}
 
-	routeResp, err := m.mainClient.QueryRoutes(ctxb, &lnrpc.QueryRoutesRequest{
+	routeResp, err := p.mainClient.QueryRoutes(ctxb, &lnrpc.QueryRoutesRequest{
 		Amt:               amt,
 		FinalCltvDelta:    40,
-		PubKey:            m.dest,
+		PubKey:            p.dest,
 		UseMissionControl: true,
 		DestCustomRecords: customRecords,
 		DestFeatures:      []lnrpc.FeatureBit{lnrpc.FeatureBit_MPP_OPT, lnrpc.FeatureBit_TLV_ONION_OPT, lnrpc.FeatureBit_PAYMENT_ADDR_OPT},
 	})
 	if err != nil {
-		fmt.Printf("%v: query routes for amt %v: %v\n", id, amt, err)
-		return nil, nil
+		// fmt.Printf("%v: query routes for amt %v: %v\n", id, amt, err)
+		return &htlc{}
 	}
 	route := routeResp.Routes[0]
 
@@ -236,30 +314,12 @@ func (m *mppExecutor) launchShard(id int, amt int64, resultChan chan launchResul
 	finalHop := route.Hops[len(route.Hops)-1]
 
 	finalHop.MppRecord = &lnrpc.MPPRecord{
-		TotalAmtMsat: m.amt * 1000,
-		PaymentAddr:  m.paymentAddr,
+		TotalAmtMsat: p.totalAmt * 1000,
+		PaymentAddr:  p.paymentAddr,
 	}
 
-	sendReq := &routerrpc.SendToRouteRequest{
-		PaymentHash: hash[:],
-		Route:       route,
+	return &htlc{
+		route: route,
+		hash:  hash,
 	}
-
-	go func() {
-		resp, err := m.routerClient.SendToRoute(ctxb, sendReq)
-		if err != nil {
-			resultChan <- launchResult{id: id, err: err}
-			return
-		}
-
-		if len(resp.Preimage) > 0 {
-
-			resultChan <- launchResult{id: id, amt: amt}
-			return
-		}
-
-		resultChan <- launchResult{id: id, failure: resp.Failure, amt: amt}
-	}()
-
-	return route, nil
 }
