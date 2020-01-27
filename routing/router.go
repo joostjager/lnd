@@ -2311,6 +2311,17 @@ func (r *ChannelRouter) BuildRoute(amt *lnwire.MilliSatoshi,
 		return nil, err
 	}
 
+	routingTx, err := newDbRoutingTx(r.cfg.Graph)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err := routingTx.close()
+		if err != nil {
+			log.Errorf("Error closing db tx: %v", err)
+		}
+	}()
+
 	// Allocate a list that will contain the unified policies for this
 	// route.
 	edges := make([]*unifiedPolicy, len(hops))
@@ -2346,7 +2357,7 @@ func (r *ChannelRouter) BuildRoute(amt *lnwire.MilliSatoshi,
 		// known in the graph.
 		u := newUnifiedPolicies(source, toNode, outgoingChan)
 
-		err := u.addGraphPolicies(r.cfg.Graph, nil)
+		err := u.addGraphPolicies(routingTx)
 		if err != nil {
 			return nil, err
 		}
