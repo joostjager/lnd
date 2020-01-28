@@ -2376,7 +2376,14 @@ func (l *channelLink) canSendHtlc(policy ForwardingPolicy,
 	}
 
 	// Check to see if there is enough balance in this channel.
-	if amt > l.Bandwidth() {
+	bandwidth := l.Bandwidth()
+	if amt > bandwidth {
+		// Log a warning because pathfinding should have avoided this
+		// link. Only in case of concurrent payments, this can still
+		// happen.
+		l.log.Warnf("outgoing htlc(%x) requires %v bandwidth, but "+
+			"only %v is available", payHash[:], amt, bandwidth)
+
 		failure := l.createFailureWithUpdate(
 			func(upd *lnwire.ChannelUpdate) lnwire.FailureMessage {
 				return lnwire.NewTemporaryChannelFailure(upd)
