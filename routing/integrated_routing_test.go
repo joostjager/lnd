@@ -2,6 +2,8 @@ package routing
 
 import (
 	"testing"
+
+	"github.com/lightningnetwork/lnd/lnwire"
 )
 
 // TestProbabilityExtrapolation tests that probabilities for tried channels are
@@ -54,4 +56,35 @@ func TestProbabilityExtrapolation(t *testing.T) {
 	// first before switching to the paid channel.
 	ctx.mcCfg.AprioriWeight = 1
 	ctx.testPayment(11)
+}
+
+// TestMppSend tests that a payment can be completed using multiple shards.
+func TestMppSend(t *testing.T) {
+	ctx := newIntegratedRoutingContext(t)
+
+	// Create the following network of nodes:
+	// source -> intermediate1 -> target
+	// source -> intermediate2 -> target
+	g := ctx.graph
+
+	intermediate1 := newMockNode()
+	g.addNode(intermediate1)
+
+	intermediate2 := newMockNode()
+	g.addNode(intermediate2)
+
+	g.addChannel(ctx.source, intermediate1, 200000)
+	g.addChannel(ctx.source, intermediate2, 200000)
+	g.addChannel(ctx.target, intermediate1, 100000)
+	g.addChannel(ctx.target, intermediate2, 100000)
+
+	// It is expected that pathfinding will try first try to send the full
+	// amount via the two available routes. When that fails, it will half
+	// the amount to 35k sat and retry. That attempt reaches the target
+	// successfully. Then the same route is tried again. Because the channel
+	// only had 50k sat, it will fail. Finally the second route is tried for
+	// 35k and it succeeds too. Mpp payment complete.
+	ctx.amt = lnwire.NewMSatFromSatoshis(70000)
+
+	ctx.testPayment(5)
 }

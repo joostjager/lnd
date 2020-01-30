@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/coreos/bbolt"
+	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing/route"
 )
@@ -59,6 +60,7 @@ func newIntegratedRoutingContext(t *testing.T) *integratedRoutingContext {
 
 		pathFindingCfg: PathFindingConfig{
 			PaymentAttemptPenalty: 1000,
+			MinProbability:        0.01,
 		},
 
 		source: source,
@@ -103,6 +105,10 @@ func (c *integratedRoutingContext) testPayment(expectedNofAttempts int) {
 
 	// Now the payment control loop starts. It will keep trying routes until
 	// the payment succeeds.
+	var (
+		amtRemaining = c.amt
+		maxAmt       = lnwire.MaxMilliSatoshi
+	)
 	for {
 		// Create bandwidth hints based on local channel balances.
 		bandwidthHints := map[uint64]lnwire.MilliSatoshi{}
@@ -110,20 +116,44 @@ func (c *integratedRoutingContext) testPayment(expectedNofAttempts int) {
 			bandwidthHints[ch.id] = ch.balance
 		}
 
-		// Find a route.
-		path, err := findPathInternal(
-			nil, bandwidthHints, c.graph,
-			&restrictParams,
-			&c.pathFindingCfg,
-			c.source.pubkey, c.target.pubkey,
-			c.amt, c.finalExpiry,
+		var (
+			path     []*channeldb.ChannelEdgePolicy
+			shardAmt lnwire.MilliSatoshi
 		)
-		if err != nil {
-			c.t.Fatal(err)
+	findLoop:
+		for {
+			shardAmt = amtRemaining
+			if shardAmt > maxAmt {
+				shardAmt = maxAmt
+			}
+
+			// Find a route.
+			log.Debugf("Finding path to destination for %v",
+				shardAmt)
+
+			var err error
+			path, err = findPathInternal(
+				nil, bandwidthHints, c.graph,
+				&restrictParams,
+				&c.pathFindingCfg,
+				c.source.pubkey, c.target.pubkey,
+				shardAmt, c.finalExpiry,
+			)
+			switch err {
+			case errInsufficientBalance, errNoPathFound:
+				maxAmt = shardAmt / 2
+				if maxAmt < 10 {
+					c.t.Fatal("no route")
+				}
+			case nil:
+				break findLoop
+			default:
+				c.t.Fatal(err)
+			}
 		}
 
 		finalHop := finalHopParams{
-			amt:       c.amt,
+			amt:       shardAmt,
 			cltvDelta: uint16(c.finalExpiry),
 		}
 
@@ -147,9 +177,16 @@ func (c *integratedRoutingContext) testPayment(expectedNofAttempts int) {
 				c.t.Fatal(err)
 			}
 
-			// If the payment is successful, the control loop can be
-			// broken out of.
-			break
+			amtRemaining -= shardAmt
+
+			// If the full amount has been paid, the payment is
+			// successful and the control loop can be terminated.
+			if amtRemaining == 0 {
+				break
+			}
+
+			// Otherwise try to send the remaining amount.
+			continue
 		}
 
 		// Failure, update mission control and retry.
