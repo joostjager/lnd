@@ -13,7 +13,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
 	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -920,44 +919,6 @@ func MarshalTimeNano(t time.Time) int64 {
 		return 0
 	}
 	return t.UnixNano()
-}
-
-// marshallError marshall an error as received from the switch to rpc structs
-// suitable for returning to the caller of an rpc method.
-//
-// Because of difficulties with using protobuf oneof constructs in some
-// languages, the decision was made here to use a single message format for all
-// failure messages with some fields left empty depending on the failure type.
-func marshallError(sendError error) (*lnrpc.Failure, error) {
-	response := &lnrpc.Failure{}
-
-	if sendError == htlcswitch.ErrUnreadableFailureMessage {
-		response.Code = lnrpc.Failure_UNREADABLE_FAILURE
-		return response, nil
-	}
-
-	rtErr, ok := sendError.(htlcswitch.ClearTextError)
-	if !ok {
-		return nil, sendError
-	}
-
-	err := marshallWireError(rtErr.WireMessage(), response)
-	if err != nil {
-		return nil, err
-	}
-
-	// If the ClearTextError received is a ForwardingError, the error
-	// originated from a node along the route, not locally on our outgoing
-	// link. We set failureSourceIdx to the index of the node where the
-	// failure occurred. If the error is not a ForwardingError, the failure
-	// occurred at our node, so we leave the index as 0 to indicate that
-	// we failed locally.
-	fErr, ok := rtErr.(*htlcswitch.ForwardingError)
-	if ok {
-		response.FailureSourceIndex = uint32(fErr.FailureSourceIdx)
-	}
-
-	return response, nil
 }
 
 // marshallError marshall an error as received from the switch to rpc structs

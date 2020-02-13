@@ -1704,7 +1704,7 @@ func (r *ChannelRouter) preparePayment(payment *LightningPayment) (
 // provided route. This function is blocking and will return the obtained
 // preimage if the payment is successful or the full error in case of a failure.
 func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, route *route.Route) (
-	lntypes.Preimage, error) {
+	lntypes.Preimage, *channeldb.HTLCFailInfo, error) {
 
 	// Create a payment session for just this route.
 	paySession := r.cfg.SessionSource.NewPaymentSessionForRoute(route)
@@ -1723,7 +1723,7 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, route *route.Route) (
 
 	err := r.cfg.Control.InitPayment(hash, info)
 	if err != nil {
-		return [32]byte{}, err
+		return [32]byte{}, nil, err
 	}
 
 	// Create a (mostly) dummy payment, as the created payment session is
@@ -1746,17 +1746,19 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, route *route.Route) (
 		// noRouteError with the structured error embedded.
 		if noRouteError, ok := err.(errNoRoute); ok {
 			if noRouteError.lastError == nil {
-				return lntypes.Preimage{},
+				return lntypes.Preimage{}, nil,
 					errors.New("failure message missing")
 			}
 
-			return lntypes.Preimage{}, noRouteError.lastError
+			err = noRouteError.lastError
 		}
 
-		return lntypes.Preimage{}, err
+		failInfo := marshallError(err, time.Now())
+
+		return lntypes.Preimage{}, failInfo, nil
 	}
 
-	return preimage, nil
+	return preimage, nil, nil
 }
 
 // sendPayment attempts to send a payment as described within the passed

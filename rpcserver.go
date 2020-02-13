@@ -3650,9 +3650,18 @@ func (r *rpcServer) dispatchPaymentIntent(
 			payment,
 		)
 	} else {
-		preImage, routerErr = r.server.chanRouter.SendToRoute(
+		var failInfo *channeldb.HTLCFailInfo
+		preImage, failInfo, routerErr = r.server.chanRouter.SendToRoute(
 			payIntent.rHash, payIntent.route,
 		)
+
+		// Map fail info to a string-based error for backwards
+		// compatibility.
+		if failInfo != nil {
+			// TODO: Convert more fields to string.
+			routerErr = fmt.Errorf("htlc failed: %v",
+				failInfo.Message)
+		}
 
 		route = payIntent.route
 	}

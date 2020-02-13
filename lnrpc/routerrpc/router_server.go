@@ -290,24 +290,27 @@ func (s *Server) SendToRoute(ctx context.Context,
 		return nil, err
 	}
 
-	preimage, err := s.cfg.Router.SendToRoute(hash, route)
-
-	// In the success case, return the preimage.
-	if err == nil {
-		return &SendToRouteResponse{
-			Preimage: preimage[:],
-		}, nil
-	}
-
-	// In the failure case, marshall the failure message to the rpc format
-	// before returning it to the caller.
-	rpcErr, err := marshallError(err)
+	preimage, failInfo, err := s.cfg.Router.SendToRoute(hash, route)
 	if err != nil {
 		return nil, err
 	}
 
+	// In the failure case, marshall the failure message to the rpc format
+	// before returning it to the caller.
+	if failInfo != nil {
+		rpcFailure, err := marshallHtlcFailure(failInfo)
+		if err != nil {
+			return nil, err
+		}
+
+		return &SendToRouteResponse{
+			Failure: rpcFailure,
+		}, nil
+	}
+
+	// In the success case, return the preimage.
 	return &SendToRouteResponse{
-		Failure: rpcErr,
+		Preimage: preimage[:],
 	}, nil
 }
 
