@@ -810,6 +810,9 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB,
 		return nil, err
 	}
 
+	// Pass wallet to allow channel to get utxo.
+	lnwallet.ChanWallet = cc.wallet
+
 	s.sweeper = sweep.New(&sweep.UtxoSweeperConfig{
 		FeeEstimator:   cc.feeEstimator,
 		GenSweepScript: newSweepPkScriptGen(cc.wallet),

@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"container/list"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"sync"
+
+	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/prometheus/common/log"
 
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcec"
@@ -5495,6 +5499,271 @@ func newIncomingHtlcResolution(signer input.Signer,
 	}, nil
 }
 
+var ChanWallet *LightningWallet
+
+func newMergedIncomingSuccessTx(signer input.Signer,
+	localChanCfg *channeldb.ChannelConfig, commitHash chainhash.Hash,
+	htlc1, htlc2 *channeldb.HTLC, keyRing *CommitmentKeyRing,
+	feePerKw chainfee.SatPerKWeight, csvDelay uint32, localCommit bool,
+	chanType channeldb.ChannelType) (*wire.MsgTx, error) {
+
+	op1 := wire.OutPoint{
+		Hash:  commitHash,
+		Index: uint32(htlc1.OutputIndex),
+	}
+
+	op2 := wire.OutPoint{
+		Hash:  commitHash,
+		Index: uint32(htlc2.OutputIndex),
+	}
+
+	// First, we'll re-generate the script the remote party used to
+	// send the HTLC to us in their commitment transaction.
+	pkscript1, htlcScript1, err := genHtlcScript(
+		chanType, true, localCommit, htlc1.RefundTimeout, htlc1.RHash,
+		keyRing,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	pkscript2, htlcScript2, err := genHtlcScript(
+		chanType, true, localCommit, htlc2.RefundTimeout, htlc2.RHash,
+		keyRing,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only supported for local commits
+	if !localCommit {
+		panic("expected local commit")
+	}
+
+	htlcFee := htlcSuccessFee(feePerKw)
+	secondLevelOutputAmt1 := htlc1.Amt.ToSatoshis() - htlcFee
+	successTx1, err := createHtlcSuccessTx(
+		chanType, op1, secondLevelOutputAmt1, csvDelay,
+		keyRing.RevocationKey, keyRing.ToLocalKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	secondLevelOutputAmt2 := htlc2.Amt.ToSatoshis() - htlcFee
+	successTx2, err := createHtlcSuccessTx(
+		chanType, op2, secondLevelOutputAmt2, csvDelay,
+		keyRing.RevocationKey, keyRing.ToLocalKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create tx that contains both 2nd level tx inputs and outputs.
+	successTxMerged := successTx1
+	successTxMerged.AddTxIn(successTx2.TxIn[0])
+	successTxMerged.AddTxOut(successTx2.TxOut[0])
+
+	// Also attach a utxo for fees.
+	utxos, err := ChanWallet.ListUnspentWitness(1, math.MaxInt32)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(utxos) == 0 {
+		panic("no utxos")
+	}
+
+	inp, err := createWalletTxInput(utxos[0])
+	if err != nil {
+		return nil, err
+	}
+	successTxMerged.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: *inp.OutPoint(),
+		Sequence:         inp.BlocksToMaturity(),
+	})
+
+	// Send back change to same address.
+	successTxMerged.AddTxOut(&wire.TxOut{
+		PkScript: inp.SignDesc().Output.PkScript,
+		// Spend 100k sats on (extra) miner fee
+		Value: inp.SignDesc().Output.Value - 100000,
+	})
+
+	inputScript, err := inp.CraftInputScript(
+		signer, successTxMerged, txscript.NewTxSigHashes(successTxMerged), 2,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	successTxMerged.TxIn[2].Witness = inputScript.Witness
+
+	if len(inputScript.SigScript) != 0 {
+		successTxMerged.TxIn[2].SignatureScript = inputScript.SigScript
+	}
+
+	successSignDesc1 := input.SignDescriptor{
+		KeyDesc:       localChanCfg.HtlcBasePoint,
+		SingleTweak:   keyRing.LocalHtlcKeyTweak,
+		WitnessScript: htlcScript1,
+		Output: &wire.TxOut{
+			Value: int64(htlc1.Amt.ToSatoshis()),
+		},
+		HashType:   txscript.SigHashAll,
+		SigHashes:  txscript.NewTxSigHashes(successTxMerged),
+		InputIndex: 0,
+	}
+
+	// Hacks to get hardcoded preimages in.
+	// hashes:
+	// 19486eaf24b5c8852420c586be86fa8024c7e0327ecb7b9c6da0382c14f71fca
+	// ae64f4a409ae61f91edd7c0c2e228a2b7d34f7aab1098d3689ac5a35a35fdf93
+	preimage1Bytes, err := hex.DecodeString("1635edabb11c6eda511d8729fd5b17a886228da5a4b8c059364a993ca256ab1c")
+	if err != nil {
+		return nil, err
+	}
+	preimage1, err := lntypes.MakePreimage(preimage1Bytes)
+	if err != nil {
+		return nil, err
+	}
+	preimage2Bytes, err := hex.DecodeString("c387ba7cc9872f01e0de2b428b053521d8ae24e5a39f6ddfbf85434e641f430b")
+	if err != nil {
+		return nil, err
+	}
+	preimage2, err := lntypes.MakePreimage(preimage2Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	var htlc1preimage lntypes.Preimage
+	if htlc1.RHash == preimage1.Hash() {
+		htlc1preimage = preimage1
+	} else if htlc1.RHash == preimage2.Hash() {
+		htlc1preimage = preimage2
+	} else {
+		panic("unknown preimage for htlc 1")
+	}
+
+	sigHashType := HtlcSigHashType(chanType)
+	successWitness1, err := input.ReceiverHtlcSpendRedeem(
+		htlc1.Signature, sigHashType, htlc1preimage[:], signer, &successSignDesc1,
+		successTxMerged,
+	)
+	if err != nil {
+		return nil, err
+	}
+	successTxMerged.TxIn[0].Witness = successWitness1
+
+	successSignDesc2 := input.SignDescriptor{
+		KeyDesc:       localChanCfg.HtlcBasePoint,
+		SingleTweak:   keyRing.LocalHtlcKeyTweak,
+		WitnessScript: htlcScript2,
+		Output: &wire.TxOut{
+			Value: int64(htlc2.Amt.ToSatoshis()),
+		},
+		HashType:   txscript.SigHashAll,
+		SigHashes:  txscript.NewTxSigHashes(successTxMerged),
+		InputIndex: 1,
+	}
+
+	// Next, we'll construct the full witness needed to satisfy the input of
+	// the success transaction. Don't specify the preimage yet. The preimage
+	// will be supplied by the contract resolver, either directly or when it
+	// becomes known.
+	var htlc2preimage lntypes.Preimage
+	if htlc2.RHash == preimage1.Hash() {
+		htlc2preimage = preimage1
+	} else if htlc2.RHash == preimage2.Hash() {
+		htlc2preimage = preimage2
+	} else {
+		panic("unknown preimage for htlc 2")
+	}
+
+	successWitness2, err := input.ReceiverHtlcSpendRedeem(
+		htlc2.Signature, sigHashType, htlc2preimage[:], signer, &successSignDesc2,
+		successTxMerged,
+	)
+	if err != nil {
+		return nil, err
+	}
+	successTxMerged.TxIn[0].Witness = successWitness1
+	successTxMerged.TxIn[1].Witness = successWitness2
+
+	var b bytes.Buffer
+	err = successTxMerged.BtcEncode(&b, 0, wire.WitnessEncoding)
+	if err != nil {
+		return nil, err
+	}
+
+	// Print hex tx to be used with bitcoin-cli sendrawtransaction.
+	fmt.Printf("Merged tx: %v\n", hex.EncodeToString(b.Bytes()))
+
+	// Verify htlc spends with VM.
+	vm, err := txscript.NewEngine(pkscript1,
+		successTxMerged, 0, txscript.StandardVerifyFlags, nil,
+		nil, int64(htlc1.Amt.ToSatoshis()))
+	if err != nil {
+		return nil, err
+	}
+
+	vmErr := vm.Execute()
+	if vmErr != nil {
+		log.Errorf("VM ERROR: %v", vmErr)
+		return nil, vmErr
+	} else {
+		log.Errorf("VM OK!")
+	}
+
+	vm, err = txscript.NewEngine(pkscript2,
+		successTxMerged, 1, txscript.StandardVerifyFlags, nil,
+		nil, int64(htlc2.Amt.ToSatoshis()))
+	if err != nil {
+		return nil, err
+	}
+
+	vmErr = vm.Execute()
+	if vmErr != nil {
+		log.Errorf("VM ERROR: %v", vmErr)
+		return nil, vmErr
+	} else {
+		log.Errorf("VM OK!")
+	}
+
+	return successTxMerged, nil
+}
+
+// createWalletTxInput converts a wallet utxo into an object that can be added
+// to the other inputs to sweep.
+func createWalletTxInput(utxo *Utxo) (input.Input, error) {
+	var witnessType input.WitnessType
+	switch utxo.AddressType {
+	case WitnessPubKey:
+		witnessType = input.WitnessKeyHash
+	case NestedWitnessPubKey:
+		witnessType = input.NestedWitnessKeyHash
+	default:
+		return nil, fmt.Errorf("unknown address type %v",
+			utxo.AddressType)
+	}
+
+	signDesc := &input.SignDescriptor{
+		Output: &wire.TxOut{
+			PkScript: utxo.PkScript,
+			Value:    int64(utxo.Value),
+		},
+		HashType: txscript.SigHashAll,
+	}
+
+	// A height hint doesn't need to be set, because we don't monitor these
+	// inputs for spend.
+	heightHint := uint32(0)
+
+	return input.NewBaseInput(
+		&utxo.OutPoint, witnessType, signDesc, heightHint,
+	), nil
+}
+
 // HtlcPoint returns the htlc's outpoint on the commitment tx.
 func (r *IncomingHtlcResolution) HtlcPoint() wire.OutPoint {
 	// If we have a success transaction, then the htlc's outpoint
@@ -5576,6 +5845,16 @@ func extractHtlcResolutions(feePerKw chainfee.SatPerKWeight, ourCommit bool,
 		}
 
 		outgoingResolutions = append(outgoingResolutions, *ohr)
+	}
+
+	// Print out PoC aggregated 2nd level tx.
+	_, err := newMergedIncomingSuccessTx(
+		signer, localChanCfg, commitHash, &htlcs[0], &htlcs[1],
+		keyRing, feePerKw, uint32(csvDelay), ourCommit,
+		chanType,
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	return &HtlcResolutions{
