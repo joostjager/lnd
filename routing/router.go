@@ -537,7 +537,13 @@ func (r *ChannelRouter) Start() error {
 				PaymentHash: payment.Info.PaymentHash,
 			}
 
-			_, _, err := r.sendPayment(payment.Attempt, lPayment, paySession)
+			// TODO(joostjager): Only resume non-final attempts
+			var attempt *channeldb.HTLCAttemptInfo
+			if len(payment.Attempts) > 0 {
+				attempt = payment.Attempts[0]
+			}
+
+			_, _, err := r.sendPayment(attempt, lPayment, paySession)
 			if err != nil {
 				log.Errorf("Resuming payment with hash %v "+
 					"failed: %v.", payment.Info.PaymentHash, err)

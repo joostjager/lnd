@@ -3,6 +3,7 @@ package channeldb
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -51,7 +52,7 @@ func genInfo() (*PaymentCreationInfo, *HTLCAttemptInfo,
 	return &PaymentCreationInfo{
 			PaymentHash:    rhash,
 			Value:          1,
-			CreationDate:   time.Unix(time.Now().Unix(), 0),
+			CreationTime:   time.Unix(time.Now().Unix(), 0),
 			PaymentRequest: []byte("hola"),
 		},
 		&HTLCAttemptInfo{
@@ -445,8 +446,39 @@ func checkPaymentCreationInfo(bucket *bbolt.Bucket, c *PaymentCreationInfo) erro
 	return nil
 }
 
-func checkHTLCAttemptInfo(bucket *bbolt.Bucket, a *HTLCAttemptInfo) error {
-	b := bucket.Get(paymentAttemptInfoKey)
+func checkHTLCAttemptInfo(bucket *bbolt.Bucket, a *HTLCAttemptInfo,
+	preimg lntypes.Preimage) error {
+
+	htlcsBucket := bucket.Bucket(paymentHtlcsBucket)
+	switch {
+	case htlcsBucket == nil && a == nil:
+		return nil
+
+	case htlcsBucket == nil && a != nil:
+		return fmt.Errorf("hltc attempts bucket not found")
+	}
+
+	cnt := 0
+	if err := htlcsBucket.ForEach(func(k, _ []byte) error {
+		cnt++
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if cnt != 0 && a == nil {
+		return fmt.Errorf("expected no attempts, found %d", cnt)
+	}
+
+	htlcIDBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(htlcIDBytes, a.AttemptID)
+
+	htlcBucket := htlcsBucket.Bucket(htlcIDBytes)
+	if htlcBucket == nil && a != nil {
+		return fmt.Errorf("attempt not found")
+	}
+
+	b := htlcBucket.Get(htlcAttemptInfoKey)
 	switch {
 	case b == nil && a == nil:
 		return nil
@@ -462,12 +494,16 @@ func checkHTLCAttemptInfo(bucket *bbolt.Bucket, a *HTLCAttemptInfo) error {
 		return err
 	}
 
+	if err := checkSettleInfo(htlcBucket, preimg); err != nil {
+		return err
+	}
+
 	return assertRouteEqual(&a.Route, &a2.Route)
 }
 
 func checkSettleInfo(bucket *bbolt.Bucket, preimg lntypes.Preimage) error {
 	zero := lntypes.Preimage{}
-	b := bucket.Get(paymentSettleInfoKey)
+	b := bucket.Get(htlcSettleInfoKey)
 	switch {
 	case b == nil && preimg == zero:
 		return nil
@@ -535,11 +571,7 @@ func assertPaymentInfo(t *testing.T, db *DB, hash lntypes.Hash,
 			return err
 		}
 
-		if err := checkHTLCAttemptInfo(bucket, a); err != nil {
-			return err
-		}
-
-		if err := checkSettleInfo(bucket, s); err != nil {
+		if err := checkHTLCAttemptInfo(bucket, a, s); err != nil {
 			return err
 		}
 
