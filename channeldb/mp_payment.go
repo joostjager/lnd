@@ -80,7 +80,7 @@ type MPPayment struct {
 
 	// HTLCs holds the information about individual HTLCs that we send in
 	// order to make the payment.
-	HTLCs []HTLCAttempt
+	HTLCs []*HTLCAttempt
 
 	// FailureReason is the failure reason code indicating the reason the
 	// payment failed.
