@@ -286,10 +286,10 @@ func (p *Payment) ToMPPayment() *MPPayment {
 
 	return &MPPayment{
 		sequenceNum: p.sequenceNum,
-		Info: &MPPaymentCreationInfo{
+		Info: &PaymentCreationInfo{
 			PaymentHash:    p.Info.PaymentHash,
 			Value:          p.Info.Value,
-			CreationTime:   p.Info.CreationDate,
+			CreationDate:   p.Info.CreationDate,
 			PaymentRequest: p.Info.PaymentRequest,
 		},
 		HTLCs:         htlcs,
