@@ -4932,13 +4932,13 @@ func (r *rpcServer) ListPayments(ctx context.Context,
 		}
 
 		paymentHash := payment.Info.PaymentHash
-		creationTimeNS := routerrpc.MarshalTimeNano(payment.Info.CreationTime)
+		creationTimeNS := routerrpc.MarshalTimeNano(payment.Info.CreationDate)
 		paymentsResp.Payments = append(paymentsResp.Payments, &lnrpc.Payment{
 			PaymentHash:     hex.EncodeToString(paymentHash[:]),
 			Value:           satValue,
 			ValueMsat:       msatValue,
 			ValueSat:        satValue,
-			CreationDate:    payment.Info.CreationTime.Unix(),
+			CreationDate:    payment.Info.CreationDate.Unix(),
 			CreationTimeNs:  creationTimeNS,
 			Path:            path,
 			Fee:             int64(route.TotalFees().ToSatoshis()),
