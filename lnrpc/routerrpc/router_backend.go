@@ -846,6 +846,7 @@ func (r *RouterBackend) MarshalHTLCAttempt(
 	var (
 		status      lnrpc.HTLCAttempt_HTLCStatus
 		resolveTime int64
+		failure     *lnrpc.Failure
 	)
 
 	switch {
@@ -857,6 +858,15 @@ func (r *RouterBackend) MarshalHTLCAttempt(
 		status = lnrpc.HTLCAttempt_FAILED
 		resolveTime = MarshalTimeNano(htlc.Failure.FailTime)
 
+		// TODO(joostjager): Marshall failure reason
+
+		failure = &lnrpc.Failure{
+			FailureSourceIndex: htlc.Failure.FailureSourceIndex,
+		}
+		err := marshallWireError(htlc.Failure.Message, failure)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		status = lnrpc.HTLCAttempt_IN_FLIGHT
 	}
@@ -871,6 +881,7 @@ func (r *RouterBackend) MarshalHTLCAttempt(
 		Route:         route,
 		AttemptTimeNs: MarshalTimeNano(htlc.AttemptTime),
 		ResolveTimeNs: resolveTime,
+		Failure:       failure,
 	}, nil
 }
 
