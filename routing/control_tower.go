@@ -61,7 +61,7 @@ type PaymentResult struct {
 
 	// HTLCs is a list of HTLCs that have been attempted in order to settle
 	// the payment.
-	HTLCs []channeldb.HTLCAttempt
+	HTLCs []*channeldb.HTLCAttempt
 }
 
 // controlTower is persistent implementation of ControlTower to restrict
@@ -120,7 +120,7 @@ func (p *controlTower) Success(paymentHash lntypes.Hash,
 }
 
 // createSuccessResult creates a success result to send to subscribers.
-func createSuccessResult(htlcs []channeldb.HTLCAttempt) *PaymentResult {
+func createSuccessResult(htlcs []*channeldb.HTLCAttempt) *PaymentResult {
 	// Extract any preimage from the list of HTLCs.
 	var preimage lntypes.Preimage
 	for _, htlc := range htlcs {
@@ -138,7 +138,7 @@ func createSuccessResult(htlcs []channeldb.HTLCAttempt) *PaymentResult {
 }
 
 // createFailResult creates a failed result to send to subscribers.
-func createFailedResult(htlcs []channeldb.HTLCAttempt,
+func createFailedResult(htlcs []*channeldb.HTLCAttempt,
 	reason channeldb.FailureReason) *PaymentResult {
 
 	return &PaymentResult{

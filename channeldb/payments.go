@@ -244,7 +244,7 @@ type Payment struct {
 // ToMPPayment converts a legacy payment into an MPPayment.
 func (p *Payment) ToMPPayment() *MPPayment {
 	var (
-		htlcs   []HTLCAttempt
+		htlcs   []*HTLCAttempt
 		reason  *FailureReason
 		settle  *HTLCSettleInfo
 		failure *HTLCFailInfo
@@ -275,7 +275,7 @@ func (p *Payment) ToMPPayment() *MPPayment {
 	// since we cannot recover it.
 	if p.Attempt != nil {
 		// NOTE: AttemptTime is not set for legacy payments.
-		htlcs = []HTLCAttempt{
+		htlcs = []*HTLCAttempt{
 			{
 				HTLCAttemptInfo: p.Attempt,
 				Settle:          settle,
