@@ -69,8 +69,9 @@ func makeFakeInfo() (*PaymentCreationInfo, *HTLCAttemptInfo) {
 	a := &HTLCAttemptInfo{
 		ID: 44,
 		HTLCWireInfo: HTLCWireInfo{
-			SessionKey: priv,
-			Route:      testRoute,
+			SessionKey:  priv,
+			Route:       testRoute,
+			AttemptTime: time.Unix(100, 0),
 		},
 	}
 	return c, a
@@ -111,33 +112,33 @@ func TestSentPaymentSerialization(t *testing.T) {
 	}
 
 	b.Reset()
-	if err := serializeHTLCAttemptInfo(&b, s); err != nil {
+	if err := serializeHTLCWireInfo(&b, &s.HTLCWireInfo); err != nil {
 		t.Fatalf("unable to serialize info: %v", err)
 	}
 
-	newAttemptInfo, err := deserializeHTLCAttemptInfo(&b)
+	newWireInfo, err := deserializeHTLCWireInfo(&b)
 	if err != nil {
 		t.Fatalf("unable to deserialize info: %v", err)
 	}
 
 	// First we verify all the records match up porperly, as they aren't
 	// able to be properly compared using reflect.DeepEqual.
-	err = assertRouteEqual(&s.Route, &newAttemptInfo.Route)
+	err = assertRouteEqual(&s.Route, &newWireInfo.Route)
 	if err != nil {
 		t.Fatalf("Routes do not match after "+
 			"serialization/deserialization: %v", err)
 	}
 
 	// Clear routes to allow DeepEqual to compare the remaining fields.
-	newAttemptInfo.Route = route.Route{}
+	newWireInfo.Route = route.Route{}
 	s.Route = route.Route{}
 
-	if !reflect.DeepEqual(s, newAttemptInfo) {
+	if !reflect.DeepEqual(&s.HTLCWireInfo, newWireInfo) {
 		s.SessionKey.Curve = nil
-		newAttemptInfo.SessionKey.Curve = nil
+		newWireInfo.SessionKey.Curve = nil
 		t.Fatalf("Payments do not match after "+
 			"serialization/deserialization %v vs %v",
-			spew.Sdump(s), spew.Sdump(newAttemptInfo),
+			spew.Sdump(s.HTLCWireInfo), spew.Sdump(newWireInfo),
 		)
 	}
 }

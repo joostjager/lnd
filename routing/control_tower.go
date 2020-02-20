@@ -3,8 +3,10 @@ package routing
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
@@ -14,25 +16,35 @@ import (
 // restarts. Payments are transitioned through various payment states, and the
 // ControlTower interface provides access to driving the state transitions.
 type ControlTower interface {
-	// InitPayment atomically moves the payment into the InFlight state.
 	// This method checks that no suceeded payment exist for this payment
 	// hash.
 	InitPayment(lntypes.Hash, *channeldb.PaymentCreationInfo) error
 
 	// RegisterAttempt atomically records the provided HTLCAttemptInfo.
+	//
+	// TODO: should it check that the total value is not exceeded? Use case
+	// is send to route where too much is sent.
 	RegisterAttempt(lntypes.Hash, *channeldb.HTLCAttemptInfo) error
 
-	// Success transitions a payment into the Succeeded state. After
-	// invoking this method, InitPayment should always return an error to
-	// prevent us from making duplicate payments to the same payment hash.
-	// The provided preimage is atomically saved to the DB for record
-	// keeping.
-	Success(lntypes.Hash, lntypes.Preimage) error
+	// SettleAttempt marks the given attempt settled with the preimage. If
+	// this is a multi shard payment, this might implicitly mean the the
+	// full payment succeeded.
+	//
+	// After invoking this method, InitPayment should always return an
+	// error to prevent us from making duplicate payments to the same
+	// payment hash. The provided preimage is atomically saved to the DB
+	// for record keeping.
+	SettleAttempt(lntypes.Hash, uint64, lntypes.Preimage) error
+
+	// FailAttempt marks the given payment attempt failed.
+	FailAttempt(lntypes.Hash, uint64, error) error
 
 	// Fail transitions a payment into the Failed state, and records the
-	// reason the payment failed. After invoking this method, InitPayment
-	// should return nil on its next call for this payment hash, allowing
-	// the switch to make a subsequent payment.
+	// ultimate reason the payment failed. Note that this should only be
+	// called when all active active attempts are already failed. After
+	// invoking this method, InitPayment should return nil on its next call
+	// for this payment hash, allowing the user to make a subsequent
+	// payment.
 	Fail(lntypes.Hash, channeldb.FailureReason) error
 
 	// FetchInFlightPayments returns all payments with status InFlight.
@@ -99,14 +111,18 @@ func (p *controlTower) RegisterAttempt(paymentHash lntypes.Hash,
 	return p.db.RegisterAttempt(paymentHash, attempt)
 }
 
-// Success transitions a payment into the Succeeded state. After invoking this
-// method, InitPayment should always return an error to prevent us from making
-// duplicate payments to the same payment hash. The provided preimage is
-// atomically saved to the DB for record keeping.
-func (p *controlTower) Success(paymentHash lntypes.Hash,
-	preimage lntypes.Preimage) error {
+// SettleAttempt marks the given attempt settled with the preimage. If
+// this is a multi shard payment, this might implicitly mean the the
+// full payment succeeded.
+func (p *controlTower) SettleAttempt(paymentHash lntypes.Hash,
+	attemptID uint64, preimg lntypes.Preimage) error {
 
-	payment, err := p.db.Success(paymentHash, preimage)
+	settleInfo := &channeldb.HTLCSettleInfo{
+		Preimage:   preimg,
+		SettleTime: time.Now(),
+	}
+
+	payment, err := p.db.SettleAttempt(paymentHash, attemptID, settleInfo)
 	if err != nil {
 		return err
 	}
@@ -117,6 +133,15 @@ func (p *controlTower) Success(paymentHash lntypes.Hash,
 	)
 
 	return nil
+}
+
+// FailAttempt marks the given payment attempt failed.
+func (p *controlTower) FailAttempt(paymentHash lntypes.Hash,
+	attemptID uint64, reason error) error {
+
+	failInfo := marshallError(reason, time.Now())
+
+	return p.db.FailAttempt(paymentHash, attemptID, failInfo)
 }
 
 // createSuccessResult creates a success result to send to subscribers.
@@ -259,4 +284,50 @@ func (p *controlTower) notifyFinalEvent(paymentHash lntypes.Hash,
 		subscriber <- *event
 		close(subscriber)
 	}
+}
+
+// marshallError marshall an error as received from the switch to a structure
+// that is suitable for database storage.
+func marshallError(sendError error, time time.Time) *channeldb.HTLCFailInfo {
+	response := &channeldb.HTLCFailInfo{
+		FailTime: time,
+	}
+
+	switch sendError {
+
+	case htlcswitch.ErrPaymentIDNotFound:
+		response.Reason = channeldb.HTLCFailInternal
+		return response
+
+	case htlcswitch.ErrUnreadableFailureMessage:
+		response.Reason = channeldb.HTLCFailUnreadble
+		return response
+	}
+
+	rtErr, ok := sendError.(htlcswitch.ClearTextError)
+	if !ok {
+		response.Reason = channeldb.HTLCFailInternal
+		return response
+	}
+
+	message := rtErr.WireMessage()
+	if message != nil {
+		response.Reason = channeldb.HTLCFailMessage
+		response.Message = message
+	} else {
+		response.Reason = channeldb.HTLCFailUnknown
+	}
+
+	// If the ClearTextError received is a ForwardingError, the error
+	// originated from a node along the route, not locally on our outgoing
+	// link. We set failureSourceIdx to the index of the node where the
+	// failure occurred. If the error is not a ForwardingError, the failure
+	// occurred at our node, so we leave the index as 0 to indicate that
+	// we failed locally.
+	fErr, ok := rtErr.(*htlcswitch.ForwardingError)
+	if ok {
+		response.FailureSourceIndex = uint32(fErr.FailureSourceIdx)
+	}
+
+	return response
 }
