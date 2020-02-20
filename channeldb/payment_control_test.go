@@ -53,9 +53,11 @@ func genInfo() (*PaymentCreationInfo, *HTLCAttemptInfo,
 			PaymentRequest: []byte("hola"),
 		},
 		&HTLCAttemptInfo{
-			AttemptID:  1,
-			SessionKey: priv,
-			Route:      testRoute,
+			ID: 1,
+			HTLCWireInfo: HTLCWireInfo{
+				SessionKey: priv,
+				Route:      testRoute,
+			},
 		}, preimage, nil
 }
 
@@ -118,14 +120,14 @@ func TestPaymentControlSwitchFail(t *testing.T) {
 
 	// Record a new attempt. The attempt is supposed to fail, but this
 	// doesn't need to be communicated to control tower.
-	attempt.AttemptID = 2
+	attempt.ID = 2
 	err = pControl.RegisterAttempt(info.PaymentHash, attempt)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Record another attempt.
-	attempt.AttemptID = 3
+	attempt.ID = 3
 	err = pControl.RegisterAttempt(info.PaymentHash, attempt)
 	if err != nil {
 		t.Fatalf("unable to send htlc message: %v", err)
@@ -148,11 +150,11 @@ func TestPaymentControlSwitchFail(t *testing.T) {
 			len(payment.HTLCs))
 	}
 
-	err = assertRouteEqual(&payment.HTLCs[0].Route, &attempt.Route)
+	err = assertRouteEqual(&payment.HTLCs[3].Route, &attempt.Route)
 	if err != nil {
 		t.Fatalf("unexpected route returned: %v vs %v: %v",
 			spew.Sdump(attempt.Route),
-			spew.Sdump(payment.HTLCs[0].Route), err)
+			spew.Sdump(payment.HTLCs[3].Route), err)
 	}
 
 	assertPaymentStatus(t, pControl, info.PaymentHash, StatusSucceeded)
@@ -445,7 +447,7 @@ func assertPaymentInfo(t *testing.T, p *PaymentControl, hash lntypes.Hash,
 		return
 	}
 
-	htlc := payment.HTLCs[0]
+	htlc := payment.HTLCs[a.ID]
 	if err := assertRouteEqual(&htlc.Route, &a.Route); err != nil {
 		t.Fatal("routes do not match")
 	}

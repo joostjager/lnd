@@ -8,14 +8,11 @@ import (
 	"github.com/lightningnetwork/lnd/routing/route"
 )
 
-// HTLCAttemptInfo contains static information about a specific HTLC attempt
+// HTLCWireInfo contains static information about a specific HTLC attempt
 // for a payment. This information is used by the router to handle any errors
 // coming back after an attempt is made, and to query the switch about the
 // status of the attempt.
-type HTLCAttemptInfo struct {
-	// AttemptID is the unique ID used for this attempt.
-	AttemptID uint64
-
+type HTLCWireInfo struct {
 	// SessionKey is the ephemeral key used for this attempt.
 	SessionKey *btcec.PrivateKey
 
@@ -23,11 +20,20 @@ type HTLCAttemptInfo struct {
 	Route route.Route
 }
 
+// HTLCAttemptInfo contains the wire info for the htlc and a unique identifier
+// for this attempt.
+type HTLCAttemptInfo struct {
+	HTLCWireInfo
+
+	// ID is the unique ID used for this attempt.
+	ID uint64
+}
+
 // HTLCAttempt contains information about a specific HTLC attempt for a given
-// payment. It contains the HTLCAttemptInfo used to send the HTLC, as well
+// payment. It contains the HTLCWireInfo used to send the HTLC, as well
 // as a timestamp and any known outcome of the attempt.
 type HTLCAttempt struct {
-	*HTLCAttemptInfo
+	*HTLCWireInfo
 
 	// AttemptTime is the time at which this HTLC was attempted.
 	AttemptTime time.Time
@@ -80,7 +86,7 @@ type MPPayment struct {
 
 	// HTLCs holds the information about individual HTLCs that we send in
 	// order to make the payment.
-	HTLCs []*HTLCAttempt
+	HTLCs map[uint64]*HTLCAttempt
 
 	// FailureReason is the failure reason code indicating the reason the
 	// payment failed.

@@ -126,6 +126,7 @@ func fetchDuplicatePayment(bucket *bbolt.Bucket) (*MPPayment, error) {
 		Info:          creationInfo,
 		FailureReason: failureReason,
 		Status:        paymentStatus,
+		HTLCs:         make(map[uint64]*HTLCAttempt),
 	}
 
 	// Get the HTLCAttemptInfo. It can be absent.
@@ -138,8 +139,7 @@ func fetchDuplicatePayment(bucket *bbolt.Bucket) (*MPPayment, error) {
 		}
 
 		htlc := &HTLCAttempt{
-			HTLCAttemptInfo: &HTLCAttemptInfo{
-				AttemptID:  attempt.attemptID,
+			HTLCWireInfo: &HTLCWireInfo{
 				Route:      attempt.route,
 				SessionKey: attempt.sessionKey,
 			},
@@ -163,7 +163,7 @@ func fetchDuplicatePayment(bucket *bbolt.Bucket) (*MPPayment, error) {
 			}
 		}
 
-		payment.HTLCs = []*HTLCAttempt{htlc}
+		payment.HTLCs[attempt.attemptID] = htlc
 	}
 
 	return payment, nil
