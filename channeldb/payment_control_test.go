@@ -116,8 +116,16 @@ func TestPaymentControlSwitchFail(t *testing.T) {
 		nil,
 	)
 
-	// Record a new attempt.
+	// Record a new attempt. The attempt is supposed to fail, but this
+	// doesn't need to be communicated to control tower.
 	attempt.AttemptID = 2
+	err = pControl.RegisterAttempt(info.PaymentHash, attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Record another attempt.
+	attempt.AttemptID = 3
 	err = pControl.RegisterAttempt(info.PaymentHash, attempt)
 	if err != nil {
 		t.Fatalf("unable to send htlc message: %v", err)
@@ -128,7 +136,7 @@ func TestPaymentControlSwitchFail(t *testing.T) {
 		nil,
 	)
 
-	// Verifies that status was changed to StatusSucceeded.
+	// Settle the attempt and verify that status was changed to StatusSucceeded.
 	var payment *MPPayment
 	payment, err = pControl.Success(info.PaymentHash, preimg)
 	if err != nil {
