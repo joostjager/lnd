@@ -67,9 +67,11 @@ func makeFakeInfo() (*PaymentCreationInfo, *HTLCAttemptInfo) {
 	}
 
 	a := &HTLCAttemptInfo{
-		AttemptID:  44,
-		SessionKey: priv,
-		Route:      testRoute,
+		ID: 44,
+		HTLCWireInfo: HTLCWireInfo{
+			SessionKey: priv,
+			Route:      testRoute,
+		},
 	}
 	return c, a
 }
@@ -144,7 +146,7 @@ func TestSentPaymentSerialization(t *testing.T) {
 // they are not equal.
 func assertRouteEqual(a, b *route.Route) error {
 	if !reflect.DeepEqual(a, b) {
-		return fmt.Errorf("HTLCAttemptInfos don't match: %v vs %v",
+		return fmt.Errorf("HTLCWireInfos don't match: %v vs %v",
 			spew.Sdump(a), spew.Sdump(b))
 	}
 

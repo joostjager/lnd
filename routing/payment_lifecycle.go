@@ -97,7 +97,7 @@ func (p *paymentLifecycle) resumePayment() ([32]byte, *route.Route, error) {
 		// Now ask the switch to return the result of the payment when
 		// available.
 		resultChan, err := p.router.cfg.Payer.GetPaymentResult(
-			p.attempt.AttemptID, p.payment.PaymentHash, errorDecryptor,
+			p.attempt.ID, p.payment.PaymentHash, errorDecryptor,
 		)
 		switch {
 
@@ -107,7 +107,7 @@ func (p *paymentLifecycle) resumePayment() ([32]byte, *route.Route, error) {
 		// attempt, and wait for its result to be available.
 		case err == htlcswitch.ErrPaymentIDNotFound:
 			log.Debugf("Payment ID %v for hash %x not found in "+
-				"the Switch, retrying.", p.attempt.AttemptID,
+				"the Switch, retrying.", p.attempt.ID,
 				p.payment.PaymentHash)
 
 			// Reset the attempt to indicate we want to make a new
@@ -118,7 +118,7 @@ func (p *paymentLifecycle) resumePayment() ([32]byte, *route.Route, error) {
 		// A critical, unexpected error was encountered.
 		case err != nil:
 			log.Errorf("Failed getting result for attemptID %d "+
-				"from switch: %v", p.attempt.AttemptID, err)
+				"from switch: %v", p.attempt.ID, err)
 
 			return [32]byte{}, nil, err
 		}
@@ -161,11 +161,11 @@ func (p *paymentLifecycle) resumePayment() ([32]byte, *route.Route, error) {
 
 		// We successfully got a payment result back from the switch.
 		log.Debugf("Payment %x succeeded with pid=%v",
-			p.payment.PaymentHash, p.attempt.AttemptID)
+			p.payment.PaymentHash, p.attempt.ID)
 
 		// Report success to mission control.
 		err = p.router.cfg.MissionControl.ReportPaymentSuccess(
-			p.attempt.AttemptID, &p.attempt.Route,
+			p.attempt.ID, &p.attempt.Route,
 		)
 		if err != nil {
 			log.Errorf("Error reporting payment success to mc: %v",
@@ -339,9 +339,11 @@ func (p *paymentLifecycle) createNewPaymentAttempt() (lnwire.ShortChannelID,
 	// We now have all the information needed to populate
 	// the current attempt information.
 	p.attempt = &channeldb.HTLCAttemptInfo{
-		AttemptID:  attemptID,
-		SessionKey: sessionKey,
-		Route:      *rt,
+		HTLCWireInfo: channeldb.HTLCWireInfo{
+			SessionKey: sessionKey,
+			Route:      *rt,
+		},
+		ID: attemptID,
 	}
 
 	// Before sending this HTLC to the switch, we checkpoint the
@@ -363,7 +365,7 @@ func (p *paymentLifecycle) sendPaymentAttempt(firstHop lnwire.ShortChannelID,
 	htlcAdd *lnwire.UpdateAddHTLC) error {
 
 	log.Tracef("Attempting to send payment %x (pid=%v), "+
-		"using route: %v", p.payment.PaymentHash, p.attempt.AttemptID,
+		"using route: %v", p.payment.PaymentHash, p.attempt.ID,
 		newLogClosure(func() string {
 			return spew.Sdump(p.attempt.Route)
 		}),
@@ -374,17 +376,17 @@ func (p *paymentLifecycle) sendPaymentAttempt(firstHop lnwire.ShortChannelID,
 	// such that we can resume waiting for the result after a
 	// restart.
 	err := p.router.cfg.Payer.SendHTLC(
-		firstHop, p.attempt.AttemptID, htlcAdd,
+		firstHop, p.attempt.ID, htlcAdd,
 	)
 	if err != nil {
 		log.Errorf("Failed sending attempt %d for payment "+
-			"%x to switch: %v", p.attempt.AttemptID,
+			"%x to switch: %v", p.attempt.ID,
 			p.payment.PaymentHash, err)
 		return err
 	}
 
 	log.Debugf("Payment %x (pid=%v) successfully sent to switch, route: %v",
-		p.payment.PaymentHash, p.attempt.AttemptID, &p.attempt.Route)
+		p.payment.PaymentHash, p.attempt.ID, &p.attempt.Route)
 
 	return nil
 }
@@ -394,7 +396,7 @@ func (p *paymentLifecycle) sendPaymentAttempt(firstHop lnwire.ShortChannelID,
 func (p *paymentLifecycle) handleSendError(sendErr error) error {
 
 	reason := p.router.processSendError(
-		p.attempt.AttemptID, &p.attempt.Route, sendErr,
+		p.attempt.ID, &p.attempt.Route, sendErr,
 	)
 	if reason == nil {
 		// Save the forwarding error so it can be returned if

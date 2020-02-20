@@ -215,7 +215,7 @@ type Payment struct {
 // ToMPPayment converts a legacy payment into an MPPayment.
 func (p *Payment) ToMPPayment() *MPPayment {
 	var (
-		htlcs   []*HTLCAttempt
+		htlcs   = make(map[uint64]*HTLCAttempt)
 		reason  *FailureReason
 		settle  *HTLCSettleInfo
 		failure *HTLCFailInfo
@@ -246,12 +246,10 @@ func (p *Payment) ToMPPayment() *MPPayment {
 	// since we cannot recover it.
 	if p.Attempt != nil {
 		// NOTE: AttemptTime is not set for legacy payments.
-		htlcs = []*HTLCAttempt{
-			{
-				HTLCAttemptInfo: p.Attempt,
-				Settle:          settle,
-				Failure:         failure,
-			},
+		htlcs[p.Attempt.ID] = &HTLCAttempt{
+			HTLCWireInfo: &p.Attempt.HTLCWireInfo,
+			Settle:       settle,
+			Failure:      failure,
 		}
 	}
 
@@ -491,7 +489,7 @@ func deserializePaymentCreationInfo(r io.Reader) (*PaymentCreationInfo, error) {
 }
 
 func serializeHTLCAttemptInfo(w io.Writer, a *HTLCAttemptInfo) error {
-	if err := WriteElements(w, a.AttemptID, a.SessionKey); err != nil {
+	if err := WriteElements(w, a.ID, a.HTLCWireInfo.SessionKey); err != nil {
 		return err
 	}
 
@@ -504,7 +502,7 @@ func serializeHTLCAttemptInfo(w io.Writer, a *HTLCAttemptInfo) error {
 
 func deserializeHTLCAttemptInfo(r io.Reader) (*HTLCAttemptInfo, error) {
 	a := &HTLCAttemptInfo{}
-	err := ReadElements(r, &a.AttemptID, &a.SessionKey)
+	err := ReadElements(r, &a.ID, &a.HTLCWireInfo.SessionKey)
 	if err != nil {
 		return nil, err
 	}

@@ -147,7 +147,7 @@ func TestControlTowerSubscribeSuccess(t *testing.T) {
 		if len(result.HTLCs) != 1 {
 			t.Fatalf("expected one htlc, got %d", len(result.HTLCs))
 		}
-		htlc := result.HTLCs[0]
+		htlc := result.HTLCs[attempt.ID]
 		if !reflect.DeepEqual(htlc.Route, attempt.Route) {
 			t.Fatalf("unexpected htlc route: %v vs %v",
 				spew.Sdump(htlc.Route),
@@ -257,7 +257,7 @@ func testPaymentControlSubscribeFail(t *testing.T, registerAttempt bool) {
 					len(result.HTLCs))
 			}
 
-			htlc := result.HTLCs[0]
+			htlc := result.HTLCs[attempt.ID]
 			if !reflect.DeepEqual(htlc.Route, testRoute) {
 				t.Fatalf("unexpected htlc route: %v vs %v",
 					spew.Sdump(htlc.Route),
@@ -315,9 +315,11 @@ func genInfo() (*channeldb.PaymentCreationInfo, *channeldb.HTLCAttemptInfo,
 			PaymentRequest: []byte("hola"),
 		},
 		&channeldb.HTLCAttemptInfo{
-			AttemptID:  1,
-			SessionKey: priv,
-			Route:      testRoute,
+			ID: 1,
+			HTLCWireInfo: channeldb.HTLCWireInfo{
+				SessionKey: priv,
+				Route:      testRoute,
+			},
 		}, preimage, nil
 }
 
