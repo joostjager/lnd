@@ -111,7 +111,8 @@ func TestControlTowerSubscribeSuccess(t *testing.T) {
 	}
 
 	// Mark the payment as successful.
-	if err := pControl.Success(info.PaymentHash, preimg); err != nil {
+	err = pControl.SettleAttempt(info.PaymentHash, attempt.ID, preimg)
+	if err != nil {
 		t.Fatal(err)
 	}
 

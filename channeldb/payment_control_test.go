@@ -126,6 +126,15 @@ func TestPaymentControlSwitchFail(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	err = pControl.FailAttempt(
+		info.PaymentHash, 2, &HTLCFailInfo{
+			Reason: HTLCFailUnreadble,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// Record another attempt.
 	attempt.ID = 3
 	err = pControl.RegisterAttempt(info.PaymentHash, attempt)
@@ -140,13 +149,18 @@ func TestPaymentControlSwitchFail(t *testing.T) {
 
 	// Settle the attempt and verify that status was changed to StatusSucceeded.
 	var payment *MPPayment
-	payment, err = pControl.Success(info.PaymentHash, preimg)
+	payment, err = pControl.SettleAttempt(
+		info.PaymentHash, 3,
+		&HTLCSettleInfo{
+			Preimage: preimg,
+		},
+	)
 	if err != nil {
 		t.Fatalf("error shouldn't have been received, got: %v", err)
 	}
 
-	if len(payment.HTLCs) != 1 {
-		t.Fatalf("payment should have one htlc, got: %d",
+	if len(payment.HTLCs) != 2 {
+		t.Fatalf("payment should have two htlcs, got: %d",
 			len(payment.HTLCs))
 	}
 
@@ -226,7 +240,13 @@ func TestPaymentControlSwitchDoubleSend(t *testing.T) {
 	}
 
 	// After settling, the error should be ErrAlreadyPaid.
-	if _, err := pControl.Success(info.PaymentHash, preimg); err != nil {
+	_, err = pControl.SettleAttempt(
+		info.PaymentHash, 1,
+		&HTLCSettleInfo{
+			Preimage: preimg,
+		},
+	)
+	if err != nil {
 		t.Fatalf("error shouldn't have been received, got: %v", err)
 	}
 	assertPaymentStatus(t, pControl, info.PaymentHash, StatusSucceeded)
@@ -256,7 +276,12 @@ func TestPaymentControlSuccessesWithoutInFlight(t *testing.T) {
 	}
 
 	// Attempt to complete the payment should fail.
-	_, err = pControl.Success(info.PaymentHash, preimg)
+	_, err = pControl.SettleAttempt(
+		info.PaymentHash, 0,
+		&HTLCSettleInfo{
+			Preimage: preimg,
+		},
+	)
 	if err != ErrPaymentNotInitiated {
 		t.Fatalf("expected ErrPaymentNotInitiated, got %v", err)
 	}
@@ -352,7 +377,12 @@ func TestPaymentControlDeleteNonInFligt(t *testing.T) {
 			)
 		} else if p.success {
 			// Verifies that status was changed to StatusSucceeded.
-			_, err := pControl.Success(info.PaymentHash, preimg)
+			_, err := pControl.SettleAttempt(
+				info.PaymentHash, 1,
+				&HTLCSettleInfo{
+					Preimage: preimg,
+				},
+			)
 			if err != nil {
 				t.Fatalf("error shouldn't have been received, got: %v", err)
 			}
