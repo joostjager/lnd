@@ -46,6 +46,13 @@ func MigrateMPP(tx *bbolt.Tx) error {
 		return nil
 	}
 
+	if err := migtest.DumpDB(tx, paymentsRootBucket); err != nil {
+		return err
+	}
+	fmt.Printf("\n\n\n")
+
+	defer migtest.DumpDB(tx, paymentsRootBucket)
+
 	return paymentsBucket.ForEach(func(k, v []byte) error {
 		bucket := paymentsBucket.Bucket(k)
 
