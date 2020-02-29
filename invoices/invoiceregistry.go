@@ -695,6 +695,8 @@ func (i *InvoiceRegistry) cancelSingleHtlc(hash lntypes.Hash,
 	return nil
 }
 
+var TlvShopType uint64 = 98117121
+
 // processKeySend just-in-time inserts an invoice if this htlc is a keysend
 // htlc.
 func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx,
@@ -725,6 +727,24 @@ func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx,
 
 	// Create an invoice for the htlc amount.
 	amt := ctx.amtPaid
+
+	// TLV shop checks
+	shopData, ok := ctx.customRecords[TlvShopType]
+	if !ok {
+		log.Errorf("Key send payment %v is not a shop order", hash)
+		return nil
+	}
+
+	if len(shopData) < 20 {
+		log.Errorf("Key send shop order %v contains too short details (%v chars)", hash, len(shopData))
+		return nil
+	}
+
+	const stickerPrice = 50000 * 1000
+	if amt < stickerPrice {
+		log.Errorf("Key send shop order %v amount too low (%v < %v)", hash, amt, stickerPrice)
+		return nil
+	}
 
 	// Set tlv optional feature vector on the invoice. Otherwise we wouldn't
 	// be able to pay to it with keysend.
