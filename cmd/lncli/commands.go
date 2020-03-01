@@ -18,11 +18,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lightningnetwork/lnd/lnwire"
+
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/protobuf-hex-display/json"
 	"github.com/lightninglabs/protobuf-hex-display/jsonpb"
 	"github.com/lightninglabs/protobuf-hex-display/proto"
+	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -2872,6 +2875,49 @@ func listInvoices(ctx *cli.Context) error {
 	}
 
 	printRespJSON(invoices)
+
+	return nil
+}
+
+var ordersCommand = cli.Command{
+	Name:     "orders",
+	Category: "Payments",
+	Action:   actionDecorator(orders),
+}
+
+func orders(ctx *cli.Context) error {
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	req := &lnrpc.ListInvoiceRequest{}
+
+	invoicesResp, err := client.ListInvoices(context.Background(), req)
+	if err != nil {
+		return err
+	}
+
+	for _, invoice := range invoicesResp.Invoices {
+		if invoice.State != lnrpc.Invoice_SETTLED {
+			continue
+		}
+
+		for _, htlc := range invoice.Htlcs {
+			if htlc.State != lnrpc.InvoiceHTLCState_SETTLED {
+				continue
+			}
+
+			order, ok := htlc.CustomRecords[invoices.TlvShopType]
+			if !ok {
+				continue
+			}
+
+			fmt.Printf("Order %x\n", invoice.RHash)
+			fmt.Printf("Date settled: %v\n", time.Unix(htlc.ResolveTime, 0))
+			fmt.Printf("Amount: %v\n", uint64(lnwire.MilliSatoshi(htlc.AmtMsat).ToSatoshis()))
+			fmt.Printf("Address: %v\n", string(order))
+			fmt.Println()
+		}
+	}
 
 	return nil
 }
