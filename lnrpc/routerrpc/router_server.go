@@ -92,6 +92,8 @@ var (
 // allows clients to route arbitrary payment through the Lightning Network.
 type Server struct {
 	cfg *Config
+
+	quit chan struct{}
 }
 
 // A compile time check to ensure that Server fully implements the RouterServer
@@ -151,7 +153,8 @@ func New(cfg *Config) (*Server, lnrpc.MacaroonPerms, error) {
 	}
 
 	routerServer := &Server{
-		cfg: cfg,
+		cfg:  cfg,
+		quit: make(chan struct{}),
 	}
 
 	return routerServer, macPermissions, nil
@@ -168,6 +171,7 @@ func (s *Server) Start() error {
 //
 // NOTE: This is part of the lnrpc.SubServer interface.
 func (s *Server) Stop() error {
+	close(s.quit)
 	return nil
 }
 
