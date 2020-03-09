@@ -219,8 +219,31 @@ type ForwardingEvent struct {
 	// receive, or as part of a forward.
 	HtlcEventType
 
-	// Timestamp is the time when this htlc was forwarded.
-	Timestamp time.Time
+	// timestamp is the time when this htlc was forwarded.
+	timestamp time.Time
+}
+
+// Timestamp returns the time that the event occurred.
+//
+// Note: part of the HtlcEvent interface.
+func (e *ForwardingEvent) Timestamp() time.Time {
+	return e.timestamp
+}
+
+// Key returns the htlc key which identifies the htlc that
+// the event is associated with.
+//
+// Note: part of the HtlcEvent interface.
+func (e *ForwardingEvent) Key() HtlcKey {
+	return e.HtlcKey
+}
+
+// EventType returns the type of event the htlc is associated with,
+// a local send or receive, or a forward.
+//
+// Note: part of the HtlcEvent interface.
+func (e *ForwardingEvent) EventType() HtlcEventType {
+	return e.HtlcEventType
 }
 
 // LinkFailEvent describes a htlc that failed on our incoming or outgoing
@@ -248,7 +271,30 @@ type LinkFailEvent struct {
 	Incoming bool
 
 	// Timestamp is the time when the link failure occurred.
-	Timestamp time.Time
+	timestamp time.Time
+}
+
+// Timestamp returns the time that the event occurred.
+//
+// Note: part of the HtlcEvent interface.
+func (e *LinkFailEvent) Timestamp() time.Time {
+	return e.timestamp
+}
+
+// Key returns the htlc key which identifies the htlc that
+// the event is associated with.
+//
+// Note: part of the HtlcEvent interface.
+func (e *LinkFailEvent) Key() HtlcKey {
+	return e.HtlcKey
+}
+
+// EventType returns the type of event the htlc is associated with,
+// a local send or receive, or a forward.
+//
+// Note: part of the HtlcEvent interface.
+func (e *LinkFailEvent) EventType() HtlcEventType {
+	return e.HtlcEventType
 }
 
 // ForwardingFailEvent represents a htlc failure which occurred down the line
@@ -266,8 +312,31 @@ type ForwardingFailEvent struct {
 	// receive, or as part of a forward.
 	HtlcEventType
 
-	// Timestamp is the time when the forwarding failure was received.
-	Timestamp time.Time
+	// timestamp is the time when the forwarding failure was received.
+	timestamp time.Time
+}
+
+// Timestamp returns the time that the event occurred.
+//
+// Note: part of the HtlcEvent interface.
+func (e *ForwardingFailEvent) Timestamp() time.Time {
+	return e.timestamp
+}
+
+// Key returns the htlc key which identifies the htlc that
+// the event is associated with.
+//
+// Note: part of the HtlcEvent interface.
+func (e *ForwardingFailEvent) Key() HtlcKey {
+	return e.HtlcKey
+}
+
+// EventType returns the type of event the htlc is associated with,
+// a local send or receive, or a forward.
+//
+// Note: part of the HtlcEvent interface.
+func (e *ForwardingFailEvent) EventType() HtlcEventType {
+	return e.HtlcEventType
 }
 
 // SettleEvent represents a htlc that was settled. HtlcInfo is not reliably
@@ -283,8 +352,31 @@ type SettleEvent struct {
 	// receive, or as part of a forward.
 	HtlcEventType
 
-	// Timestamp is the time when this htlc was settled.
-	Timestamp time.Time
+	// timestamp is the time when this htlc was settled.
+	timestamp time.Time
+}
+
+// Timestamp returns the time that the event occurred.
+//
+// Note: part of the HtlcEvent interface.
+func (e *SettleEvent) Timestamp() time.Time {
+	return e.timestamp
+}
+
+// Key returns the htlc key which identifies the htlc that
+// the event is associated with.
+//
+// Note: part of the HtlcEvent interface.
+func (e *SettleEvent) Key() HtlcKey {
+	return e.HtlcKey
+}
+
+// EventType returns the type of event the htlc is associated with,
+// a local send or receive, or a forward.
+//
+// Note: part of the HtlcEvent interface.
+func (e *SettleEvent) EventType() HtlcEventType {
+	return e.HtlcEventType
 }
 
 // NotifyForwardingEvent notifies the HtlcNotifier than a htlc has been
@@ -298,7 +390,7 @@ func (h *HtlcNotifier) NotifyForwardingEvent(key HtlcKey, info HtlcInfo,
 		HtlcKey:       key,
 		HtlcInfo:      info,
 		HtlcEventType: eventType,
-		Timestamp:     h.now(),
+		timestamp:     h.now(),
 	}
 
 	log.Tracef("Notifying forward event: %v over %v, %v", eventType, key,
@@ -322,7 +414,7 @@ func (h *HtlcNotifier) NotifyLinkFailEvent(key HtlcKey, info HtlcInfo,
 		HtlcEventType: eventType,
 		LinkError:     linkErr,
 		Incoming:      incoming,
-		Timestamp:     h.now(),
+		timestamp:     h.now(),
 	}
 
 	log.Tracef("Notifying link failure event: %v over %v, %v", eventType,
@@ -343,7 +435,7 @@ func (h *HtlcNotifier) NotifyForwardingFailEvent(key HtlcKey,
 	event := &ForwardingFailEvent{
 		HtlcKey:       key,
 		HtlcEventType: eventType,
-		Timestamp:     h.now(),
+		timestamp:     h.now(),
 	}
 
 	log.Tracef("Notifying forwarding failure event: %v over %v", eventType,
@@ -362,7 +454,7 @@ func (h *HtlcNotifier) NotifySettleEvent(key HtlcKey, eventType HtlcEventType) {
 	event := &SettleEvent{
 		HtlcKey:       key,
 		HtlcEventType: eventType,
-		Timestamp:     h.now(),
+		timestamp:     h.now(),
 	}
 
 	log.Tracef("Notifying settle event: %v over %v", eventType, key)

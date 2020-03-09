@@ -2708,7 +2708,7 @@ func TestInvalidFailure(t *testing.T) {
 // these tests.
 type htlcNotifierEvents func(channels *clusterChannels, htlcID uint64,
 	ts time.Time, htlc *lnwire.UpdateAddHTLC,
-	hops []*hop.Payload) ([]interface{}, []interface{}, []interface{})
+	hops []*hop.Payload) ([]HtlcEvent, []HtlcEvent, []HtlcEvent)
 
 // TestHtlcNotifier tests the notifying of htlc events that are routed over a
 // three hop network. It sets up an Alice -> Bob -> Carol network and routes
@@ -2739,8 +2739,8 @@ func TestHtlcNotifier(t *testing.T) {
 			expectedEvents: func(channels *clusterChannels,
 				htlcID uint64, ts time.Time,
 				htlc *lnwire.UpdateAddHTLC,
-				hops []*hop.Payload) ([]interface{},
-				[]interface{}, []interface{}) {
+				hops []*hop.Payload) ([]HtlcEvent,
+				[]HtlcEvent, []HtlcEvent) {
 
 				return getThreeHopEvents(
 					channels, htlcID, ts, htlc, hops, nil,
@@ -2758,8 +2758,8 @@ func TestHtlcNotifier(t *testing.T) {
 			expectedEvents: func(channels *clusterChannels,
 				htlcID uint64, ts time.Time,
 				htlc *lnwire.UpdateAddHTLC,
-				hops []*hop.Payload) ([]interface{},
-				[]interface{}, []interface{}) {
+				hops []*hop.Payload) ([]HtlcEvent,
+				[]HtlcEvent, []HtlcEvent) {
 
 				return getThreeHopEvents(
 					channels, htlcID, ts, htlc, hops,
@@ -2893,7 +2893,7 @@ func testHtcNotifier(t *testing.T, testOpts []serverOption, iterations int,
 // checkHtlcEvents checks that a subscription has the set of htlc events
 // we expect it to have.
 func checkHtlcEvents(t *testing.T, events <-chan interface{},
-	expectedEvents []interface{}) {
+	expectedEvents []HtlcEvent) {
 
 	for _, expected := range expectedEvents {
 		select {
@@ -2949,7 +2949,7 @@ func (n *threeHopNetwork) sendThreeHopPayment(t *testing.T) (*lnwire.UpdateAddHT
 // of events will fail on Bob's outgoing link.
 func getThreeHopEvents(channels *clusterChannels, htlcID uint64,
 	ts time.Time, htlc *lnwire.UpdateAddHTLC, hops []*hop.Payload,
-	linkError *LinkError) ([]interface{}, []interface{}, []interface{}) {
+	linkError *LinkError) ([]HtlcEvent, []HtlcEvent, []HtlcEvent) {
 
 	aliceKey := HtlcKey{
 		IncomingCircuit: zeroCircuit,
@@ -2961,7 +2961,7 @@ func getThreeHopEvents(channels *clusterChannels, htlcID uint64,
 
 	// Alice always needs a forwarding event because she initiates the
 	// send.
-	aliceEvents := []interface{}{
+	aliceEvents := []HtlcEvent{
 		&ForwardingEvent{
 			HtlcKey: aliceKey,
 			HtlcInfo: HtlcInfo{
@@ -2969,7 +2969,7 @@ func getThreeHopEvents(channels *clusterChannels, htlcID uint64,
 				OutgoingAmt:      htlc.Amount,
 			},
 			HtlcEventType: HtlcEventTypeSend,
-			Timestamp:     ts,
+			timestamp:     ts,
 		},
 	}
 
@@ -2998,18 +2998,18 @@ func getThreeHopEvents(channels *clusterChannels, htlcID uint64,
 			&ForwardingFailEvent{
 				HtlcKey:       aliceKey,
 				HtlcEventType: HtlcEventTypeSend,
-				Timestamp:     ts,
+				timestamp:     ts,
 			},
 		)
 
-		bobEvents := []interface{}{
+		bobEvents := []HtlcEvent{
 			&LinkFailEvent{
 				HtlcKey:       bobKey,
 				HtlcInfo:      bobInfo,
 				HtlcEventType: HtlcEventTypeForward,
 				LinkError:     linkError,
 				Incoming:      false,
-				Timestamp:     ts,
+				timestamp:     ts,
 			},
 		}
 
@@ -3024,25 +3024,25 @@ func getThreeHopEvents(channels *clusterChannels, htlcID uint64,
 		&SettleEvent{
 			HtlcKey:       aliceKey,
 			HtlcEventType: HtlcEventTypeSend,
-			Timestamp:     ts,
+			timestamp:     ts,
 		},
 	)
 
-	bobEvents := []interface{}{
+	bobEvents := []HtlcEvent{
 		&ForwardingEvent{
 			HtlcKey:       bobKey,
 			HtlcInfo:      bobInfo,
 			HtlcEventType: HtlcEventTypeForward,
-			Timestamp:     ts,
+			timestamp:     ts,
 		},
 		&SettleEvent{
 			HtlcKey:       bobKey,
 			HtlcEventType: HtlcEventTypeForward,
-			Timestamp:     ts,
+			timestamp:     ts,
 		},
 	}
 
-	carolEvents := []interface{}{
+	carolEvents := []HtlcEvent{
 		&SettleEvent{
 			HtlcKey: HtlcKey{
 				IncomingCircuit: channeldb.CircuitKey{
@@ -3052,7 +3052,7 @@ func getThreeHopEvents(channels *clusterChannels, htlcID uint64,
 				OutgoingCircuit: zeroCircuit,
 			},
 			HtlcEventType: HtlcEventTypeReceive,
-			Timestamp:     ts,
+			timestamp:     ts,
 		},
 	}
 
