@@ -1,8 +1,6 @@
 package htlcswitch
 
 import (
-	"time"
-
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/invoices"
@@ -207,18 +205,4 @@ type htlcNotifier interface {
 	// committed to as part of a forward or a receive to our node has been
 	// settled.
 	NotifySettleEvent(key HtlcKey, eventType HtlcEventType)
-}
-
-// HtlcEvent is an interface that is implemented by all htlc events.
-type HtlcEvent interface {
-	// Key returns the htlc key which identifies the htlc that
-	// the event is associated with.
-	Key() HtlcKey
-
-	// Timestamp returns the time that the event occurred.
-	Timestamp() time.Time
-
-	// EventType returns the type of event the htlc is associated with,
-	// a local send or receive, or a forward.
-	EventType() HtlcEventType
 }

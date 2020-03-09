@@ -766,13 +766,7 @@ func (s *Server) SubscribeHtlcEvents(req *SubscribeHtlcEventsRequest,
 	for {
 		select {
 		case event := <-htlcClient.Updates():
-			htlcEvent, ok := event.(htlcswitch.HtlcEvent)
-			if !ok {
-				return fmt.Errorf("unexpected event type: %T",
-					event)
-			}
-
-			rpcEvent, err := rpcHtlcEvent(htlcEvent)
+			rpcEvent, err := rpcHtlcEvent(event)
 			if err != nil {
 				return err
 			}

@@ -223,29 +223,6 @@ type ForwardingEvent struct {
 	timestamp time.Time
 }
 
-// Timestamp returns the time that the event occurred.
-//
-// Note: part of the HtlcEvent interface.
-func (e *ForwardingEvent) Timestamp() time.Time {
-	return e.timestamp
-}
-
-// Key returns the htlc key which identifies the htlc that
-// the event is associated with.
-//
-// Note: part of the HtlcEvent interface.
-func (e *ForwardingEvent) Key() HtlcKey {
-	return e.HtlcKey
-}
-
-// EventType returns the type of event the htlc is associated with,
-// a local send or receive, or a forward.
-//
-// Note: part of the HtlcEvent interface.
-func (e *ForwardingEvent) EventType() HtlcEventType {
-	return e.HtlcEventType
-}
-
 // LinkFailEvent describes a htlc that failed on our incoming or outgoing
 // link. The incoming bool is true for failures on incoming links, and false
 // for failures on outgoing links. The failure reason is provided by a lnwire
@@ -274,29 +251,6 @@ type LinkFailEvent struct {
 	timestamp time.Time
 }
 
-// Timestamp returns the time that the event occurred.
-//
-// Note: part of the HtlcEvent interface.
-func (e *LinkFailEvent) Timestamp() time.Time {
-	return e.timestamp
-}
-
-// Key returns the htlc key which identifies the htlc that
-// the event is associated with.
-//
-// Note: part of the HtlcEvent interface.
-func (e *LinkFailEvent) Key() HtlcKey {
-	return e.HtlcKey
-}
-
-// EventType returns the type of event the htlc is associated with,
-// a local send or receive, or a forward.
-//
-// Note: part of the HtlcEvent interface.
-func (e *LinkFailEvent) EventType() HtlcEventType {
-	return e.HtlcEventType
-}
-
 // ForwardingFailEvent represents a htlc failure which occurred down the line
 // after we forwarded a htlc onwards. An error is not included in this event
 // because errors returned down the route are encrypted. HtlcInfo is not
@@ -316,29 +270,6 @@ type ForwardingFailEvent struct {
 	timestamp time.Time
 }
 
-// Timestamp returns the time that the event occurred.
-//
-// Note: part of the HtlcEvent interface.
-func (e *ForwardingFailEvent) Timestamp() time.Time {
-	return e.timestamp
-}
-
-// Key returns the htlc key which identifies the htlc that
-// the event is associated with.
-//
-// Note: part of the HtlcEvent interface.
-func (e *ForwardingFailEvent) Key() HtlcKey {
-	return e.HtlcKey
-}
-
-// EventType returns the type of event the htlc is associated with,
-// a local send or receive, or a forward.
-//
-// Note: part of the HtlcEvent interface.
-func (e *ForwardingFailEvent) EventType() HtlcEventType {
-	return e.HtlcEventType
-}
-
 // SettleEvent represents a htlc that was settled. HtlcInfo is not reliably
 // available for forwarding failures, so it is omitted. These events should
 // be matched with corresponding forward events or invoices (for receives)
@@ -354,29 +285,6 @@ type SettleEvent struct {
 
 	// timestamp is the time when this htlc was settled.
 	timestamp time.Time
-}
-
-// Timestamp returns the time that the event occurred.
-//
-// Note: part of the HtlcEvent interface.
-func (e *SettleEvent) Timestamp() time.Time {
-	return e.timestamp
-}
-
-// Key returns the htlc key which identifies the htlc that
-// the event is associated with.
-//
-// Note: part of the HtlcEvent interface.
-func (e *SettleEvent) Key() HtlcKey {
-	return e.HtlcKey
-}
-
-// EventType returns the type of event the htlc is associated with,
-// a local send or receive, or a forward.
-//
-// Note: part of the HtlcEvent interface.
-func (e *SettleEvent) EventType() HtlcEventType {
-	return e.HtlcEventType
 }
 
 // NotifyForwardingEvent notifies the HtlcNotifier than a htlc has been

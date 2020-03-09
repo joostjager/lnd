@@ -4,35 +4,39 @@ package routerrpc
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/invoices"
 )
 
 // rpcHtlcEvent returns a rpc htlc event from a htlcswitch event.
-func rpcHtlcEvent(htlcEvent htlcswitch.HtlcEvent) (*HtlcEvent, error) {
-	key := htlcEvent.Key()
-
-	rpcEvent := &HtlcEvent{
-		IncomingChannelId: key.IncomingCircuit.ChanID.ToUint64(),
-		OutgoingChannelId: key.OutgoingCircuit.ChanID.ToUint64(),
-		IncomingHtlcId:    key.IncomingCircuit.HtlcID,
-		OutgoingHtlcId:    key.OutgoingCircuit.HtlcID,
-		Timestamp:         uint64(htlcEvent.Timestamp().Unix()),
-	}
+func rpcHtlcEvent(htlcEvent interface{}) (*HtlcEvent, error) {
+	var (
+		key       htlcswitch.HtlcKey
+		event     isHtlcEvent_Event
+		timestamp time.Time
+		eventType htlcswitch.HtlcEventType
+	)
 
 	switch e := htlcEvent.(type) {
 	case *htlcswitch.ForwardingEvent:
-		rpcEvent.Event = &HtlcEvent_ForwardEvent{
+		event = &HtlcEvent_ForwardEvent{
 			ForwardEvent: &ForwardEvent{
 				Info: rpcInfo(e.HtlcInfo),
 			},
 		}
+		key = e.HtlcKey
+		//timestamp = e.timestamp	// TODO: export
+		eventType = e.HtlcEventType
 
 	case *htlcswitch.ForwardingFailEvent:
-		rpcEvent.Event = &HtlcEvent_ForwardFailEvent{
+		event = &HtlcEvent_ForwardFailEvent{
 			ForwardFailEvent: &ForwardFailEvent{},
 		}
+		key = e.HtlcKey
+		//timestamp = e.timestamp
+		eventType = e.HtlcEventType
 
 	case *htlcswitch.LinkFailEvent:
 		failureCode, failReason, err := rpcFailReason(
@@ -42,7 +46,7 @@ func rpcHtlcEvent(htlcEvent htlcswitch.HtlcEvent) (*HtlcEvent, error) {
 			return nil, err
 		}
 
-		rpcEvent.Event = &HtlcEvent_LinkFailEvent{
+		event = &HtlcEvent_LinkFailEvent{
 			LinkFailEvent: &LinkFailEvent{
 				Info:          rpcInfo(e.HtlcInfo),
 				WireFailure:   failureCode,
@@ -50,18 +54,33 @@ func rpcHtlcEvent(htlcEvent htlcswitch.HtlcEvent) (*HtlcEvent, error) {
 				FailureString: e.LinkError.Error(),
 			},
 		}
+		key = e.HtlcKey
+		//timestamp = e.timestamp
+		eventType = e.HtlcEventType
 
 	case *htlcswitch.SettleEvent:
-		rpcEvent.Event = &HtlcEvent_SettleEvent{
+		event = &HtlcEvent_SettleEvent{
 			SettleEvent: &SettleEvent{},
 		}
+		key = e.HtlcKey
+		//timestamp = e.timestamp
+		eventType = e.HtlcEventType
 
 	default:
 		return nil, fmt.Errorf("unknown event type: %T", e)
 	}
 
+	rpcEvent := &HtlcEvent{
+		IncomingChannelId: key.IncomingCircuit.ChanID.ToUint64(),
+		OutgoingChannelId: key.OutgoingCircuit.ChanID.ToUint64(),
+		IncomingHtlcId:    key.IncomingCircuit.HtlcID,
+		OutgoingHtlcId:    key.OutgoingCircuit.HtlcID,
+		Timestamp:         uint64(timestamp.Unix()),
+		Event:             event,
+	}
+
 	// Convert the htlc event type to a rpc event.
-	switch htlcEvent.EventType() {
+	switch eventType {
 	case htlcswitch.HtlcEventTypeSend:
 		rpcEvent.EventType = HtlcEvent_SEND
 
@@ -73,7 +92,7 @@ func rpcHtlcEvent(htlcEvent htlcswitch.HtlcEvent) (*HtlcEvent, error) {
 
 	default:
 		return nil, fmt.Errorf("unknown event type: %v",
-			htlcEvent.EventType())
+			eventType)
 	}
 
 	return rpcEvent, nil
