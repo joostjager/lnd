@@ -342,8 +342,8 @@ type PathFindingConfig struct {
 	MinProbability float64
 }
 
-// getMaxOutgoingAmt returns the maximum available balance in any of the
-// channels of the given node.
+// getMaxOutgoingAmt returns the sum of the available balance in all channels of
+// the given node.
 func getMaxOutgoingAmt(node route.Vertex, outgoingChan *uint64,
 	bandwidthHints map[uint64]lnwire.MilliSatoshi,
 	g routingGraph) (lnwire.MilliSatoshi, error) {
@@ -372,9 +372,7 @@ func getMaxOutgoingAmt(node route.Vertex, outgoingChan *uint64,
 			return nil
 		}
 
-		if bandwidth > max {
-			max = bandwidth
-		}
+		max += bandwidth
 
 		return nil
 	}
