@@ -7,7 +7,6 @@ import (
 	"image/color"
 	"math"
 	"math/rand"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -793,8 +792,8 @@ func TestSendPaymentErrorPathPruning(t *testing.T) {
 	// The final error returned should also indicate that the peer wasn't
 	// online (the last error we returned).
 	// TODO: proper err code
-	if !strings.Contains(err.Error(), "unable to find") {
-		t.Fatalf("expected UnknownNextPeer instead got: %v", err)
+	if err != channeldb.FailureReasonNoRoute {
+		t.Fatalf("expected no route instead got: %v", err)
 	}
 
 	// Inspect the two attempts that were made before the payment failed.
