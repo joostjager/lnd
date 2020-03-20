@@ -241,10 +241,7 @@ func (p *PaymentControl) updateHtlcKey(paymentHash lntypes.Hash,
 			return err
 		}
 
-		// We can only update keys of in-flight payments.
-		if err := ensureInFlight(bucket); err != nil {
-			return err
-		}
+		// TODO: ensure shard not settled/failed before.
 
 		htlcsBucket := bucket.NestedReadWriteBucket(paymentHtlcsBucket)
 		if htlcsBucket == nil {
@@ -299,8 +296,10 @@ func (p *PaymentControl) Fail(paymentHash lntypes.Hash,
 			return err
 		}
 
-		// We can only mark in-flight payments as failed.
-		if err := ensureInFlight(bucket); err != nil {
+		// We can only mark in-flight or already failed payments as
+		// failed.
+		err = ensureStatus(bucket, StatusInFlight, StatusFailed)
+		if err != nil {
 			updateErr = err
 			return nil
 		}
@@ -486,6 +485,21 @@ func ensureInFlight(bucket kvdb.ReadBucket) error {
 	default:
 		return ErrUnknownPaymentStatus
 	}
+}
+
+func ensureStatus(bucket kvdb.ReadBucket, states ...PaymentStatus) error {
+	paymentStatus, err := fetchPaymentStatus(bucket)
+	if err != nil {
+		return err
+	}
+
+	for _, s := range states {
+		if s == paymentStatus {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("Payment had status %v", paymentStatus)
 }
 
 // InFlightPayment is a wrapper around a payment that has status InFlight.
