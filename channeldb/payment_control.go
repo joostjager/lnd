@@ -260,6 +260,14 @@ func (p *PaymentControl) updateHtlcKey(paymentHash lntypes.Hash,
 			return err
 		}
 
+		// TODO: hack, maybe we don't even need it.
+		if bytes.Equal(key, htlcSettleInfoKey) {
+			err := bucket.Delete(paymentFailInfoKey)
+			if err != nil {
+				return err
+			}
+		}
+
 		// Retrieve attempt info for the notification.
 		payment, err = fetchPayment(bucket)
 		return err
