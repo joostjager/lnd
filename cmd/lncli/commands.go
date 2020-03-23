@@ -3004,6 +3004,124 @@ func listPayments(ctx *cli.Context) error {
 	return nil
 }
 
+var paymentTimingCommand = cli.Command{
+	Name:     "paymenttiming",
+	Category: "Payments",
+	Action:   actionDecorator(paymentTiming),
+}
+
+func paymentTiming(ctx *cli.Context) error {
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	hash := ctx.Args().First()
+	if hash == "" {
+		return errors.New("no payment hash given")
+	}
+
+	req := &lnrpc.ListPaymentsRequest{
+		IncludeIncomplete: true,
+	}
+
+	payments, err := client.ListPayments(context.Background(), req)
+	if err != nil {
+		return err
+	}
+
+	for _, payment := range payments.Payments {
+		if payment.PaymentHash == hash {
+			return paymentTimingDiagram(payment)
+		}
+	}
+
+	return nil
+}
+
+func paymentTimingDiagram(payment *lnrpc.Payment) error {
+	fmt.Println(`
+	<html>
+
+	<head>
+		<link href='http://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet' type='text/css'>
+		<style>
+			html {
+				width: 10000px;
+				font-family: Open Sans; 
+			}
+
+			.container {
+				height: 25px;
+				flex-direction: row;
+				display: flex;
+				margin-bottom: 5px;
+				align-content: center;
+			}
+	
+			.htlc {
+			}
+	
+			.text {
+				margin-left:10px;
+				display: flex;
+				align-content: center;
+				white-space: nowrap;
+			}
+	
+			p { margin: auto; }
+		</style>
+	</head>
+	
+	<body>
+`)
+
+	const scale = 2000000
+
+	timeStart := payment.Htlcs[0].AttemptTimeNs
+	timeEnd := timeStart
+	for _, h := range payment.Htlcs {
+		if h.ResolveTimeNs != 0 && h.ResolveTimeNs > timeEnd {
+			timeEnd = h.ResolveTimeNs
+		}
+	}
+
+	for _, h := range payment.Htlcs {
+		text := fmt.Sprintf("%v sat", h.Route.TotalAmt)
+
+		var start, end int64
+		start = (h.AttemptTimeNs - timeStart) / scale
+		if h.ResolveTimeNs != 0 {
+			end = (h.ResolveTimeNs - timeStart) / scale
+		} else {
+			end = (timeEnd - timeStart) / scale
+		}
+
+		var background string
+		switch h.Status {
+		case lnrpc.HTLCAttempt_SUCCEEDED:
+			background = "green"
+		case lnrpc.HTLCAttempt_FAILED:
+			background = "red"
+			text += fmt.Sprintf(": %v @ %v", h.Failure.Code.String(), h.Failure.FailureSourceIndex)
+		default:
+			background = "grey"
+		}
+
+		fmt.Printf("<div class=\"container\">")
+		fmt.Printf("<div style=\"width:%vpx;\"></div>", start)
+		fmt.Printf("<div class=\"htlc\" style=\"width:%vpx;background-color:%v;\"></div>", end-start, background)
+		fmt.Printf("<div class=\"text\"><p>%v</p></div></div>\n", text)
+		//fmt.Printf("{ \"name\": \"%v sat\", \"wave\": \"%v\" },\n", h.Route.TotalAmt, wave)
+
+	}
+
+	fmt.Println(`
+	</body>
+
+	</html>`)
+
+	return nil
+}
+
 var getChanInfoCommand = cli.Command{
 	Name:     "getchaninfo",
 	Category: "Channels",
