@@ -121,6 +121,8 @@ func (p *paymentSession) RequestRoute(amt, feeLimit lnwire.MilliSatoshi,
 		return nil, err
 	}
 
+	// TODO: move out?
+
 	// With the next candidate path found, we'll attempt to turn this into
 	// a route by applying the time-lock and fee requirements.
 	sourceVertex := route.Vertex(ss.SelfNode.PubKeyBytes)
