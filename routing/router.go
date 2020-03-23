@@ -1730,6 +1730,10 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, rt *route.Route) (
 		amt = mpp.TotalMsat()
 	}
 
+	// sendtoroute:
+	// init, register attempt, fail attemot, fail payment
+	// init (already in flight allowed), fail attempt, fail payemnt (must allow failing already failed payment)
+	//
 	// Record this payment hash with the ControlTower, ensuring it is not
 	// already in-flight.
 	info := &channeldb.PaymentCreationInfo{
