@@ -87,6 +87,8 @@ func (p *controlTower) InitPayment(paymentHash lntypes.Hash,
 func (p *controlTower) RegisterAttempt(paymentHash lntypes.Hash,
 	attempt *channeldb.HTLCAttemptInfo) error {
 
+	// TODO: Notify subscribers
+
 	return p.db.RegisterAttempt(paymentHash, attempt)
 }
 
@@ -95,6 +97,8 @@ func (p *controlTower) RegisterAttempt(paymentHash lntypes.Hash,
 // full payment succeeded.
 func (p *controlTower) SettleAttempt(paymentHash lntypes.Hash,
 	attemptID uint64, settleInfo *channeldb.HTLCSettleInfo) error {
+
+	// TODO: Enter lock already here.
 
 	payment, err := p.db.SettleAttempt(paymentHash, attemptID, settleInfo)
 	if err != nil {
@@ -110,6 +114,8 @@ func (p *controlTower) SettleAttempt(paymentHash lntypes.Hash,
 // FailAttempt marks the given payment attempt failed.
 func (p *controlTower) FailAttempt(paymentHash lntypes.Hash,
 	attemptID uint64, failInfo *channeldb.HTLCFailInfo) error {
+
+	// TODO: Notify subscribers
 
 	return p.db.FailAttempt(paymentHash, attemptID, failInfo)
 }
@@ -127,6 +133,8 @@ func (p *controlTower) FetchPayment(paymentHash lntypes.Hash) (
 // subsequent payment.
 func (p *controlTower) Fail(paymentHash lntypes.Hash,
 	reason channeldb.FailureReason) error {
+
+	// TODO: Enter lock already here.
 
 	payment, err := p.db.Fail(paymentHash, reason)
 	if err != nil {
