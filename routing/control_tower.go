@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"errors"
 	"sync"
 
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -52,27 +51,8 @@ type ControlTower interface {
 	// SubscribePayment subscribes to updates for the payment with the given
 	// hash. It returns a boolean indicating whether the payment is still in
 	// flight and a channel that provides the final outcome of the payment.
-	SubscribePayment(paymentHash lntypes.Hash) (bool, chan PaymentResult,
+	SubscribePayment(paymentHash lntypes.Hash) (chan *channeldb.MPPayment,
 		error)
-}
-
-// PaymentResult is the struct describing the events received by payment
-// subscribers.
-type PaymentResult struct {
-	// Success indicates whether the payment was successful.
-	Success bool
-
-	// Preimage is the preimage of a successful payment. This serves as a
-	// proof of payment. It is only set for successful payments.
-	Preimage lntypes.Preimage
-
-	// FailureReason is a failure reason code indicating the reason the
-	// payment failed. It is only set for failed payments.
-	FailureReason channeldb.FailureReason
-
-	// HTLCs is a list of HTLCs that have been attempted in order to settle
-	// the payment.
-	HTLCs []channeldb.HTLCAttempt
 }
 
 // controlTower is persistent implementation of ControlTower to restrict
@@ -80,7 +60,7 @@ type PaymentResult struct {
 type controlTower struct {
 	db *channeldb.PaymentControl
 
-	subscribers    map[lntypes.Hash][]chan PaymentResult
+	subscribers    map[lntypes.Hash][]chan *channeldb.MPPayment
 	subscribersMtx sync.Mutex
 }
 
@@ -88,7 +68,7 @@ type controlTower struct {
 func NewControlTower(db *channeldb.PaymentControl) ControlTower {
 	return &controlTower{
 		db:          db,
-		subscribers: make(map[lntypes.Hash][]chan PaymentResult),
+		subscribers: make(map[lntypes.Hash][]chan *channeldb.MPPayment),
 	}
 }
 
@@ -122,9 +102,7 @@ func (p *controlTower) SettleAttempt(paymentHash lntypes.Hash,
 	}
 
 	// Notify subscribers of success event.
-	p.notifyFinalEvent(
-		paymentHash, createSuccessResult(payment.HTLCs),
-	)
+	p.notifyFinalEvent(paymentHash, payment)
 
 	return nil
 }
@@ -143,35 +121,6 @@ func (p *controlTower) FetchPayment(paymentHash lntypes.Hash) (
 	return p.db.FetchPayment(paymentHash)
 }
 
-// createSuccessResult creates a success result to send to subscribers.
-func createSuccessResult(htlcs []channeldb.HTLCAttempt) *PaymentResult {
-	// Extract any preimage from the list of HTLCs.
-	var preimage lntypes.Preimage
-	for _, htlc := range htlcs {
-		if htlc.Settle != nil {
-			preimage = htlc.Settle.Preimage
-			break
-		}
-	}
-
-	return &PaymentResult{
-		Success:  true,
-		Preimage: preimage,
-		HTLCs:    htlcs,
-	}
-}
-
-// createFailResult creates a failed result to send to subscribers.
-func createFailedResult(htlcs []channeldb.HTLCAttempt,
-	reason channeldb.FailureReason) *PaymentResult {
-
-	return &PaymentResult{
-		Success:       false,
-		FailureReason: reason,
-		HTLCs:         htlcs,
-	}
-}
-
 // Fail transitions a payment into the Failed state, and records the reason the
 // payment failed. After invoking this method, InitPayment should return nil on
 // its next call for this payment hash, allowing the switch to make a
@@ -185,11 +134,7 @@ func (p *controlTower) Fail(paymentHash lntypes.Hash,
 	}
 
 	// Notify subscribers of fail event.
-	p.notifyFinalEvent(
-		paymentHash, createFailedResult(
-			payment.HTLCs, reason,
-		),
-	)
+	p.notifyFinalEvent(paymentHash, payment)
 
 	return nil
 }
@@ -203,11 +148,11 @@ func (p *controlTower) FetchInFlightPayments() ([]*channeldb.InFlightPayment, er
 // It returns a boolean indicating whether the payment is still in flight and a
 // channel that provides the final outcome of the payment.
 func (p *controlTower) SubscribePayment(paymentHash lntypes.Hash) (
-	bool, chan PaymentResult, error) {
+	chan *channeldb.MPPayment, error) {
 
 	// Create a channel with buffer size 1. For every payment there will be
 	// exactly one event sent.
-	c := make(chan PaymentResult, 1)
+	c := make(chan *channeldb.MPPayment, 1)
 
 	// Take lock before querying the db to prevent this scenario:
 	// FetchPayment returns us an in-flight state -> payment succeeds, but
@@ -218,51 +163,30 @@ func (p *controlTower) SubscribePayment(paymentHash lntypes.Hash) (
 
 	payment, err := p.db.FetchPayment(paymentHash)
 	if err != nil {
-		return false, nil, err
+		return nil, err
 	}
-
-	var event PaymentResult
-
-	switch payment.Status {
 
 	// Payment is currently in flight. Register this subscriber and
 	// return without writing a result to the channel yet.
-	case channeldb.StatusInFlight:
+	if payment.Status == channeldb.StatusInFlight {
 		p.subscribers[paymentHash] = append(
 			p.subscribers[paymentHash], c,
 		)
 
-		return true, c, nil
-
-	// Payment already succeeded. It is not necessary to register as
-	// a subscriber, because we can send the result on the channel
-	// immediately.
-	case channeldb.StatusSucceeded:
-		event = *createSuccessResult(payment.HTLCs)
-
-	// Payment already failed. It is not necessary to register as a
-	// subscriber, because we can send the result on the channel
-	// immediately.
-	case channeldb.StatusFailed:
-		event = *createFailedResult(
-			payment.HTLCs, *payment.FailureReason,
-		)
-
-	default:
-		return false, nil, errors.New("unknown payment status")
+		return c, nil
 	}
 
 	// Write immediate result to the channel.
-	c <- event
+	c <- payment
 	close(c)
 
-	return false, c, nil
+	return c, nil
 }
 
 // notifyFinalEvent sends a final payment event to all subscribers of this
 // payment. The channel will be closed after this.
 func (p *controlTower) notifyFinalEvent(paymentHash lntypes.Hash,
-	event *PaymentResult) {
+	event *channeldb.MPPayment) {
 
 	// Get all subscribers for this hash. As there is only a single outcome,
 	// the subscriber list can be cleared.
@@ -278,7 +202,7 @@ func (p *controlTower) notifyFinalEvent(paymentHash lntypes.Hash,
 	// Notify all subscribers of the event. The subscriber channel is
 	// buffered, so it cannot block here.
 	for _, subscriber := range list {
-		subscriber <- *event
+		subscriber <- event
 		close(subscriber)
 	}
 }

@@ -160,23 +160,6 @@ enum PaymentState {
     FAILED_INSUFFICIENT_BALANCE = 6;
 }
 
-message PaymentStatus {
-    /// Current state the payment is in.
-    PaymentState state = 1;
-
-    /**
-    The pre-image of the payment when state is SUCCEEDED.
-    */
-    bytes preimage = 2;
-
-    reserved 3;
-
-    /**
-    The HTLCs made in attempt to settle the payment.
-    */
-    repeated lnrpc.HTLCAttempt htlcs = 4;
-}
-
 message RouteFeeRequest {
     /**
     The destination once wishes to obtain a routing fee quote to.
@@ -467,13 +450,13 @@ service Router {
     PaymentRequest to the final destination. The call returns a stream of
     payment status updates.
     */
-    rpc SendPayment (SendPaymentRequest) returns (stream PaymentStatus);
+    rpc SendPayment (SendPaymentRequest) returns (stream lnrpc.Payment);
 
     /**
     TrackPayment returns an update stream for the payment identified by the
     payment hash.
     */
-    rpc TrackPayment (TrackPaymentRequest) returns (stream PaymentStatus);
+    rpc TrackPayment (TrackPaymentRequest) returns (stream lnrpc.Payment);
 
     /**
     EstimateRouteFee allows callers to obtain a lower bound w.r.t how much it

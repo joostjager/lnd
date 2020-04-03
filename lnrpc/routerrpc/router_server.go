@@ -441,7 +441,7 @@ func (s *Server) trackPayment(paymentHash lntypes.Hash,
 	router := s.cfg.RouterBackend
 
 	// Subscribe to the outcome of this payment.
-	inFlight, resultChan, err := router.Tower.SubscribePayment(
+	resultChan, err := router.Tower.SubscribePayment(
 		paymentHash,
 	)
 	switch {
@@ -451,55 +451,17 @@ func (s *Server) trackPayment(paymentHash lntypes.Hash,
 		return err
 	}
 
-	// If it is in flight, send a state update to the client. Payment status
-	// update streams are expected to always send the current payment state
-	// immediately.
-	if inFlight {
-		err = stream.Send(&PaymentStatus{
-			State: PaymentState_IN_FLIGHT,
-		})
-		if err != nil {
-			return err
-		}
-	}
-
 	// Wait for the outcome of the payment. For payments that have
 	// completed, the result should already be waiting on the channel.
 	select {
 	case result := <-resultChan:
-		// Marshall result to rpc type.
-		var status PaymentStatus
-		if result.Success {
-			log.Debugf("Payment %v successfully completed",
-				paymentHash)
-
-			status.State = PaymentState_SUCCEEDED
-			status.Preimage = result.Preimage[:]
-		} else {
-			state, err := marshallFailureReason(
-				result.FailureReason,
-			)
-			if err != nil {
-				return err
-			}
-			status.State = state
+		rpcPayment, err := router.MarshallPayment(result)
+		if err != nil {
+			return err
 		}
-
-		// Marshal our list of HTLCs that have been tried for this
-		// payment.
-		htlcs := make([]*lnrpc.HTLCAttempt, 0, len(result.HTLCs))
-		for _, dbHtlc := range result.HTLCs {
-			htlc, err := router.MarshalHTLCAttempt(dbHtlc)
-			if err != nil {
-				return err
-			}
-
-			htlcs = append(htlcs, htlc)
-		}
-		status.Htlcs = htlcs
 
 		// Send event to the client.
-		err = stream.Send(&status)
+		err = stream.Send(rpcPayment)
 		if err != nil {
 			return err
 		}
