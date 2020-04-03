@@ -500,11 +500,21 @@ service Router {
     rpc EstimateRouteFee (RouteFeeRequest) returns (RouteFeeResponse);
 
     /**
-    SendToRoute attempts to make a payment via the specified route. This method
+    Deprecated, use SendToRouteV2. SendToRoute attempts to make a payment via
+    the specified route. This method differs from SendPayment in that it
+    allows users to specify a full route manually. This can be used for
+    things like rebalancing, and atomic swaps.
+    */
+    rpc SendToRoute (SendToRouteRequest) returns (SendToRouteResponse) {
+        option deprecated = true;
+    }
+
+    /**
+    SendToRouteV2 attempts to make a payment via the specified route. This method
     differs from SendPayment in that it allows users to specify a full route
     manually. This can be used for things like rebalancing, and atomic swaps.
     */
-    rpc SendToRoute (SendToRouteRequest) returns (SendToRouteResponse);
+    rpc SendToRouteV2 (SendToRouteRequest) returns (lnrpc.HTLCAttempt);
 
     /**
     ResetMissionControl clears all mission control state and starts with a clean
