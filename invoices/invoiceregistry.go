@@ -662,12 +662,6 @@ func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx) error {
 		return errors.New("invalid keysend preimage")
 	}
 
-	// Don't accept zero preimages as those have a special meaning in our
-	// database for hodl invoices.
-	if preimage == channeldb.UnknownPreimage {
-		return errors.New("invalid keysend preimage")
-	}
-
 	// Only allow keysend for non-mpp payments.
 	if ctx.mpp != nil {
 		return errors.New("no mpp keysend supported")
@@ -698,7 +692,7 @@ func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx) error {
 		Terms: channeldb.ContractTerm{
 			FinalCltvDelta:  finalCltvDelta,
 			Value:           amt,
-			PaymentPreimage: preimage,
+			PaymentPreimage: &preimage,
 			Features:        features,
 		},
 	}
@@ -958,7 +952,7 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 		return &channeldb.InvoiceUpdateDesc{
 			State: &channeldb.InvoiceStateUpdateDesc{
 				NewState: channeldb.ContractSettled,
-				Preimage: preimage,
+				Preimage: &preimage,
 			},
 		}, nil
 	}

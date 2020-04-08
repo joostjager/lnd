@@ -71,7 +71,7 @@ func updateInvoice(ctx *invoiceUpdateCtx, inv *channeldb.Invoice) (
 
 		case channeldb.HtlcStateSettled:
 			return nil, ctx.settleRes(
-				inv.Terms.PaymentPreimage,
+				*inv.Terms.PaymentPreimage,
 				ResultReplayToSettled,
 			), nil
 
@@ -177,8 +177,7 @@ func updateMpp(ctx *invoiceUpdateCtx,
 
 	// Check to see if we can settle or this is an hold invoice and
 	// we need to wait for the preimage.
-	holdInvoice := inv.Terms.PaymentPreimage == channeldb.UnknownPreimage
-	if holdInvoice {
+	if inv.HodlInvoice {
 		update.State = &channeldb.InvoiceStateUpdateDesc{
 			NewState: channeldb.ContractAccepted,
 		}
@@ -191,7 +190,7 @@ func updateMpp(ctx *invoiceUpdateCtx,
 	}
 
 	return &update, ctx.settleRes(
-		inv.Terms.PaymentPreimage, ResultSettled,
+		*inv.Terms.PaymentPreimage, ResultSettled,
 	), nil
 }
 
@@ -259,14 +258,13 @@ func updateLegacy(ctx *invoiceUpdateCtx,
 
 	case channeldb.ContractSettled:
 		return &update, ctx.settleRes(
-			inv.Terms.PaymentPreimage, ResultDuplicateToSettled,
+			*inv.Terms.PaymentPreimage, ResultDuplicateToSettled,
 		), nil
 	}
 
 	// Check to see if we can settle or this is an hold invoice and we need
 	// to wait for the preimage.
-	holdInvoice := inv.Terms.PaymentPreimage == channeldb.UnknownPreimage
-	if holdInvoice {
+	if inv.HodlInvoice {
 		update.State = &channeldb.InvoiceStateUpdateDesc{
 			NewState: channeldb.ContractAccepted,
 		}
@@ -280,6 +278,6 @@ func updateLegacy(ctx *invoiceUpdateCtx,
 	}
 
 	return &update, ctx.settleRes(
-		inv.Terms.PaymentPreimage, ResultSettled,
+		*inv.Terms.PaymentPreimage, ResultSettled,
 	), nil
 }

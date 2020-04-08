@@ -548,7 +548,7 @@ func getChanID(msg lnwire.Message) (lnwire.ChannelID, error) {
 // invoice which should be added by destination peer.
 func generatePaymentWithPreimage(invoiceAmt, htlcAmt lnwire.MilliSatoshi,
 	timelock uint32, blob [lnwire.OnionPacketSize]byte,
-	preimage, rhash [32]byte) (*channeldb.Invoice, *lnwire.UpdateAddHTLC,
+	preimage *lntypes.Preimage, rhash [32]byte) (*channeldb.Invoice, *lnwire.UpdateAddHTLC,
 	uint64, error) {
 
 	// Create the db invoice. Normally the payment requests needs to be set,
@@ -557,16 +557,18 @@ func generatePaymentWithPreimage(invoiceAmt, htlcAmt lnwire.MilliSatoshi,
 	// step and always returning the value of testInvoiceCltvExpiry, we
 	// don't need to bother here with creating and signing a payment
 	// request.
+
 	invoice := &channeldb.Invoice{
 		CreationDate: time.Now(),
 		Terms: channeldb.ContractTerm{
-			FinalCltvDelta:  testInvoiceCltvExpiry,
-			Value:           invoiceAmt,
-			PaymentPreimage: preimage,
+			FinalCltvDelta: testInvoiceCltvExpiry,
+			Value:          invoiceAmt,
 			Features: lnwire.NewFeatureVector(
 				nil, lnwire.Features,
 			),
+			PaymentPreimage: preimage,
 		},
+		HodlInvoice: preimage == nil,
 	}
 
 	htlc := &lnwire.UpdateAddHTLC{
@@ -591,7 +593,7 @@ func generatePayment(invoiceAmt, htlcAmt lnwire.MilliSatoshi, timelock uint32,
 	blob [lnwire.OnionPacketSize]byte) (*channeldb.Invoice,
 	*lnwire.UpdateAddHTLC, uint64, error) {
 
-	var preimage [sha256.Size]byte
+	var preimage lntypes.Preimage
 	r, err := generateRandomBytes(sha256.Size)
 	if err != nil {
 		return nil, nil, 0, err
@@ -600,7 +602,7 @@ func generatePayment(invoiceAmt, htlcAmt lnwire.MilliSatoshi, timelock uint32,
 
 	rhash := fastsha256.Sum256(preimage[:])
 	return generatePaymentWithPreimage(
-		invoiceAmt, htlcAmt, timelock, blob, preimage, rhash,
+		invoiceAmt, htlcAmt, timelock, blob, &preimage, rhash,
 	)
 }
 
@@ -1332,7 +1334,7 @@ func (n *twoHopNetwork) makeHoldPayment(sendingPeer, receivingPeer lnpeer.Peer,
 	// Generate payment: invoice and htlc.
 	invoice, htlc, pid, err := generatePaymentWithPreimage(
 		invoiceAmt, htlcAmt, timelock, blob,
-		channeldb.UnknownPreimage, rhash,
+		nil, rhash,
 	)
 	if err != nil {
 		paymentErr <- err

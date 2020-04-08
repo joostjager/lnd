@@ -19,7 +19,7 @@ var (
 )
 
 func randInvoice(value lnwire.MilliSatoshi) (*Invoice, error) {
-	var pre [32]byte
+	var pre lntypes.Preimage
 	if _, err := rand.Read(pre[:]); err != nil {
 		return nil, err
 	}
@@ -28,7 +28,7 @@ func randInvoice(value lnwire.MilliSatoshi) (*Invoice, error) {
 		CreationDate: testNow,
 		Terms: ContractTerm{
 			Expiry:          4000,
-			PaymentPreimage: pre,
+			PaymentPreimage: &pre,
 			Value:           value,
 			Features:        emptyFeatures,
 		},
@@ -107,7 +107,8 @@ func TestInvoiceWorkflow(t *testing.T) {
 	}
 	fakeInvoice.Memo = []byte("memo")
 	fakeInvoice.PaymentRequest = []byte("")
-	copy(fakeInvoice.Terms.PaymentPreimage[:], rev[:])
+	preimage := lntypes.Preimage(rev)
+	fakeInvoice.Terms.PaymentPreimage = &preimage
 	fakeInvoice.Terms.Value = lnwire.NewMSatFromSatoshis(10000)
 	fakeInvoice.Terms.Features = emptyFeatures
 
@@ -239,13 +240,18 @@ func TestInvoiceCancelSingleHtlc(t *testing.T) {
 		t.Fatalf("unable to make test db: %v", err)
 	}
 
+	preimage := lntypes.Preimage{1}
+	paymentHash := preimage.Hash()
+
 	testInvoice := &Invoice{
 		Htlcs: map[CircuitKey]*InvoiceHTLC{},
+		Terms: ContractTerm{
+			Value:           lnwire.NewMSatFromSatoshis(10000),
+			Features:        emptyFeatures,
+			PaymentPreimage: &preimage,
+		},
 	}
-	testInvoice.Terms.Value = lnwire.NewMSatFromSatoshis(10000)
-	testInvoice.Terms.Features = emptyFeatures
 
-	var paymentHash lntypes.Hash
 	if _, err := db.AddInvoice(testInvoice, paymentHash); err != nil {
 		t.Fatalf("unable to find invoice: %v", err)
 	}
@@ -932,15 +938,20 @@ func TestCustomRecords(t *testing.T) {
 		t.Fatalf("unable to make test db: %v", err)
 	}
 
+	preimage := lntypes.Preimage{1}
+	paymentHash := preimage.Hash()
+
 	testInvoice := &Invoice{
 		Htlcs: map[CircuitKey]*InvoiceHTLC{},
+		Terms: ContractTerm{
+			Value:           lnwire.NewMSatFromSatoshis(10000),
+			Features:        emptyFeatures,
+			PaymentPreimage: &preimage,
+		},
 	}
-	testInvoice.Terms.Value = lnwire.NewMSatFromSatoshis(10000)
-	testInvoice.Terms.Features = emptyFeatures
 
-	var paymentHash lntypes.Hash
 	if _, err := db.AddInvoice(testInvoice, paymentHash); err != nil {
-		t.Fatalf("unable to find invoice: %v", err)
+		t.Fatalf("unable to add invoice: %v", err)
 	}
 
 	// Accept an htlc with custom records on this invoice.
