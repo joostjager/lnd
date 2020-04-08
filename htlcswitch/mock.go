@@ -810,8 +810,10 @@ func (i *mockInvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (
 	return i.registry.LookupInvoice(rHash)
 }
 
-func (i *mockInvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
-	return i.registry.SettleHodlInvoice(preimage)
+func (i *mockInvoiceRegistry) SettleHodlInvoice(hash lntypes.Hash,
+	preimage *lntypes.Preimage) error {
+
+	return i.registry.SettleHodlInvoice(hash, preimage)
 }
 
 func (i *mockInvoiceRegistry) NotifyExitHopHtlc(rhash lntypes.Hash,

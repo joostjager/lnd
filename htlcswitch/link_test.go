@@ -483,7 +483,9 @@ func TestChannelLinkCancelFullCommitment(t *testing.T) {
 		// invoice registry at this point, so we poll until we are able
 		// to settle.
 		err = wait.NoError(func() error {
-			return n.bobServer.registry.SettleHodlInvoice(preimage)
+			return n.bobServer.registry.SettleHodlInvoice(
+				preimage.Hash(), &preimage,
+			)
 		}, time.Minute)
 		if err != nil {
 			t.Fatal(err)
@@ -5676,7 +5678,9 @@ func TestChannelLinkHoldInvoiceSettle(t *testing.T) {
 	}
 	defer ctx.cleanUp()
 
-	err = ctx.n.bobServer.registry.SettleHodlInvoice(ctx.preimage)
+	err = ctx.n.bobServer.registry.SettleHodlInvoice(
+		ctx.preimage.Hash(), &ctx.preimage,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5815,7 +5819,7 @@ func TestChannelLinkHoldInvoiceRestart(t *testing.T) {
 	<-registry.settleChan
 
 	// Settle the invoice with the preimage.
-	err = registry.SettleHodlInvoice(*preimage)
+	err = registry.SettleHodlInvoice(preimage.Hash(), preimage)
 	if err != nil {
 		t.Fatalf("settle hodl invoice: %v", err)
 	}
@@ -6015,7 +6019,7 @@ func TestChannelLinkRevocationWindowHodl(t *testing.T) {
 	}
 
 	// Settle invoice 1 with the preimage.
-	err = registry.SettleHodlInvoice(*preimage1)
+	err = registry.SettleHodlInvoice(preimage1.Hash(), preimage1)
 	if err != nil {
 		t.Fatalf("settle hodl invoice: %v", err)
 	}
@@ -6026,7 +6030,7 @@ func TestChannelLinkRevocationWindowHodl(t *testing.T) {
 	ctx.receiveCommitSigAliceToBob(1)
 
 	// Settle invoice 2 with the preimage.
-	err = registry.SettleHodlInvoice(*preimage2)
+	err = registry.SettleHodlInvoice(preimage2.Hash(), preimage2)
 	if err != nil {
 		t.Fatalf("settle hodl invoice: %v", err)
 	}

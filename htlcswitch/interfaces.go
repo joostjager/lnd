@@ -33,8 +33,9 @@ type InvoiceDatabase interface {
 	// passed payment hash.
 	CancelInvoice(payHash lntypes.Hash) error
 
-	// SettleHodlInvoice settles a hold invoice.
-	SettleHodlInvoice(preimage lntypes.Preimage) error
+	// SettleHodlInvoice settles a hold invoice. If the preimage isn't known
+	// yet, it can be passed in to this call.
+	SettleHodlInvoice(hash lntypes.Hash, preimage *lntypes.Preimage) error
 
 	// HodlUnsubscribeAll unsubscribes from all htlc resolutions.
 	HodlUnsubscribeAll(subscriber chan<- interface{})

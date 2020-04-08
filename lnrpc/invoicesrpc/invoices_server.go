@@ -4,6 +4,7 @@ package invoicesrpc
 
 import (
 	"context"
+	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -205,12 +206,32 @@ func (s *Server) SubscribeSingleInvoice(req *SubscribeSingleInvoiceRequest,
 func (s *Server) SettleInvoice(ctx context.Context,
 	in *SettleInvoiceMsg) (*SettleInvoiceResp, error) {
 
-	preimage, err := lntypes.MakePreimage(in.Preimage)
-	if err != nil {
-		return nil, err
+	var preimage *lntypes.Preimage
+	if in.Preimage != nil {
+		pre, err := lntypes.MakePreimage(in.Preimage)
+		if err != nil {
+			return nil, err
+		}
+		preimage = &pre
 	}
 
-	err = s.cfg.InvoiceRegistry.SettleHodlInvoice(preimage)
+	var hash lntypes.Hash
+	switch {
+	case in.Hash != nil:
+		var err error
+		hash, err = lntypes.MakeHash(in.Hash)
+		if err != nil {
+			return nil, err
+		}
+
+	case preimage != nil:
+		hash = preimage.Hash()
+
+	default:
+		return nil, errors.New("hash or preimage must be specified")
+	}
+
+	err := s.cfg.InvoiceRegistry.SettleHodlInvoice(hash, preimage)
 	if err != nil && err != channeldb.ErrInvoiceAlreadySettled {
 		return nil, err
 	}
@@ -255,11 +276,6 @@ func (s *Server) AddHoldInvoice(ctx context.Context,
 		GenInvoiceFeatures: s.cfg.GenInvoiceFeatures,
 	}
 
-	hash, err := lntypes.MakeHash(invoice.Hash)
-	if err != nil {
-		return nil, err
-	}
-
 	value, err := lnrpc.UnmarshallAmt(invoice.Value, invoice.ValueMsat)
 	if err != nil {
 		return nil, err
@@ -267,7 +283,6 @@ func (s *Server) AddHoldInvoice(ctx context.Context,
 
 	addInvoiceData := &AddInvoiceData{
 		Memo:            invoice.Memo,
-		Hash:            &hash,
 		Value:           value,
 		DescriptionHash: invoice.DescriptionHash,
 		Expiry:          invoice.Expiry,
@@ -276,6 +291,21 @@ func (s *Server) AddHoldInvoice(ctx context.Context,
 		Private:         invoice.Private,
 		HodlInvoice:     true,
 		Preimage:        nil,
+	}
+
+	if invoice.Hash != nil {
+		hash, err := lntypes.MakeHash(invoice.Hash)
+		if err != nil {
+			return nil, err
+		}
+		addInvoiceData.Hash = &hash
+	}
+	if invoice.Preimage != nil {
+		preimage, err := lntypes.MakePreimage(invoice.Preimage)
+		if err != nil {
+			return nil, err
+		}
+		addInvoiceData.Preimage = &preimage
 	}
 
 	_, dbInvoice, err := AddInvoice(ctx, addInvoiceCfg, addInvoiceData)

@@ -461,7 +461,9 @@ func TestSettleHoldInvoice(t *testing.T) {
 	}
 
 	// Settling with preimage should succeed.
-	err = registry.SettleHodlInvoice(testInvoicePreimage)
+	err = registry.SettleHodlInvoice(
+		testInvoicePaymentHash, &testInvoicePreimage,
+	)
 	if err != nil {
 		t.Fatal("expected set preimage to succeed")
 	}
@@ -503,7 +505,9 @@ func TestSettleHoldInvoice(t *testing.T) {
 	}
 
 	// Idempotency.
-	err = registry.SettleHodlInvoice(testInvoicePreimage)
+	err = registry.SettleHodlInvoice(
+		testInvoicePaymentHash, &testInvoicePreimage,
+	)
 	if err != channeldb.ErrInvoiceAlreadySettled {
 		t.Fatalf("expected ErrInvoiceAlreadySettled but got %v", err)
 	}

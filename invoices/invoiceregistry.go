@@ -932,8 +932,11 @@ func (i *InvoiceRegistry) notifyExitHopHtlcLocked(
 	}
 }
 
-// SettleHodlInvoice sets the preimage of a hodl invoice.
-func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
+// SettleHodlInvoice settles a hold invoice. If the preimage isn't known yet, it
+// can be passed in to this call.
+func (i *InvoiceRegistry) SettleHodlInvoice(hash lntypes.Hash,
+	preimage *lntypes.Preimage) error {
+
 	i.Lock()
 	defer i.Unlock()
 
@@ -952,12 +955,11 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 		return &channeldb.InvoiceUpdateDesc{
 			State: &channeldb.InvoiceStateUpdateDesc{
 				NewState: channeldb.ContractSettled,
-				Preimage: &preimage,
+				Preimage: preimage,
 			},
 		}, nil
 	}
 
-	hash := preimage.Hash()
 	invoice, err := i.cdb.UpdateInvoice(hash, updateInvoice)
 	if err != nil {
 		log.Errorf("SettleHodlInvoice with preimage %v: %v",
@@ -981,7 +983,8 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 		}
 
 		resolution := NewSettleResolution(
-			preimage, key, int32(htlc.AcceptHeight), ResultSettled,
+			*invoice.Terms.PaymentPreimage,
+			key, int32(htlc.AcceptHeight), ResultSettled,
 		)
 
 		i.notifyHodlSubscribers(resolution)

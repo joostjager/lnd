@@ -54,8 +54,18 @@ message AddHoldInvoiceRequest {
     */
     string memo = 1;
 
-    /// The hash of the preimage
+    /**
+    The hash of the preimage. The fields hash and preimage are mutually
+    exclusive. If neither field is specified, a random preimage will be
+    generated.
+    */
     bytes hash = 2;
+
+    /**
+    The preimage for the invoice. The fields hash and preimage are mutually
+    exclusive.
+    */
+    bytes preimage = 11;
 
     /**
     The value of this invoice in satoshis
@@ -110,6 +120,12 @@ message SettleInvoiceMsg {
     /// Externally discovered pre-image that should be used to settle the hold
     /// invoice.
     bytes preimage = 1;
+
+    /**
+    Hash of the invoice to settle. This field and preimage are mutually
+    exclusive.
+    */
+    bytes hash = 2;
 }
 
 message SettleInvoiceResp {
