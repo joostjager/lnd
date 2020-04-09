@@ -637,23 +637,32 @@ func TestUnknownInvoice(t *testing.T) {
 // TestKeySend tests receiving a spontaneous payment with and without keysend
 // enabled.
 func TestKeySend(t *testing.T) {
+	t.Run("enabled hold settle", func(t *testing.T) {
+		testKeySend(t, true, time.Minute, false)
+	})
+	t.Run("enabled hold timeout", func(t *testing.T) {
+		testKeySend(t, true, time.Minute, true)
+	})
 	t.Run("enabled", func(t *testing.T) {
-		testKeySend(t, true)
+		testKeySend(t, true, 0, false)
 	})
 	t.Run("disabled", func(t *testing.T) {
-		testKeySend(t, false)
+		testKeySend(t, false, 0, false)
 	})
 }
 
 // testKeySend is the inner test function that tests keysend for a particular
 // enabled state on the receiver end.
-func testKeySend(t *testing.T, keySendEnabled bool) {
+func testKeySend(t *testing.T, enabled bool,
+	holdDuration time.Duration, timeoutKeysend bool) {
+
 	defer timeout()()
 
 	ctx := newTestContext(t)
 	defer ctx.cleanup()
 
-	ctx.registry.cfg.AcceptKeySend = keySendEnabled
+	ctx.registry.cfg.AcceptKeySend = enabled
+	ctx.registry.cfg.KeySendHoldTime = holdDuration
 
 	allSubscriptions := ctx.registry.SubscribeNotifications(0, 0)
 	defer allSubscriptions.Cancel()
@@ -689,10 +698,10 @@ func testKeySend(t *testing.T, keySendEnabled bool) {
 	}
 
 	switch {
-	case !keySendEnabled && failResolution.Outcome != ResultInvoiceNotFound:
+	case !enabled && failResolution.Outcome != ResultInvoiceNotFound:
 		t.Fatal("expected invoice not found outcome")
 
-	case keySendEnabled && failResolution.Outcome != ResultKeySendError:
+	case enabled && failResolution.Outcome != ResultKeySendError:
 		t.Fatal("expected keysend error")
 	}
 
@@ -712,7 +721,7 @@ func testKeySend(t *testing.T, keySendEnabled bool) {
 	}
 
 	// Expect a cancel resolution if keysend is disabled.
-	if !keySendEnabled {
+	if !enabled {
 		failResolution, ok = resolution.(*HtlcFailResolution)
 		if !ok {
 			t.Fatalf("expected fail resolution, got: %T",
@@ -724,21 +733,66 @@ func testKeySend(t *testing.T, keySendEnabled bool) {
 		return
 	}
 
-	// Otherwise we expect no error and a settle resolution for the htlc.
-	settleResolution, ok := resolution.(*HtlcSettleResolution)
-	if !ok {
-		t.Fatalf("expected settle resolution, got: %T",
-			resolution)
-	}
-	if settleResolution.Preimage != preimage {
-		t.Fatalf("expected settle with matching preimage")
-	}
-
 	// We expect a new invoice notification to be sent out.
 	newInvoice := <-allSubscriptions.NewInvoices
 	if newInvoice.State != channeldb.ContractOpen {
 		t.Fatalf("expected state ContractOpen, but got %v",
 			newInvoice.State)
+	}
+
+	if holdDuration != 0 {
+		// If the keysend is to be held, we expect no immediate
+		// resolution.
+		if resolution != nil {
+			t.Fatalf("expected hold resolution")
+		}
+
+		// We expect no invoice notification (on the all invoices
+		// subscription).
+		select {
+		case <-allSubscriptions.NewInvoices:
+			t.Fatalf("no invoice update expected")
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		if timeoutKeysend {
+			// Advance the clock to just past the hold duration.
+			ctx.clock.SetTime(ctx.clock.Now().Add(
+				holdDuration + time.Millisecond),
+			)
+
+			// Expect the keysend payment to be failed.
+			res := <-hodlChan
+			failResolution, ok = res.(*HtlcFailResolution)
+			if !ok {
+				t.Fatalf("expected fail resolution, got: %T",
+					resolution)
+			}
+			if failResolution.Outcome != ResultCanceled {
+				t.Fatal("expected keysend payment to be failed")
+			}
+
+			return
+		}
+
+		// Settle keysend payment manually.
+		err := ctx.registry.SettleHodlInvoice(hash, nil)
+		if err != nil {
+			t.Fatalf("error settling keysend payment: %v",
+				err)
+		}
+	} else {
+		// Otherwise we expect no error and a settle resolution for the
+		// htlc.
+		settleResolution, ok := resolution.(*HtlcSettleResolution)
+		if !ok {
+			t.Fatalf("expected settle resolution, got: %T",
+				resolution)
+		}
+		if settleResolution.Preimage != preimage {
+			t.Fatalf("expected settle with matching preimage")
+		}
+
 	}
 
 	// We expect a settled notification to be sent out.

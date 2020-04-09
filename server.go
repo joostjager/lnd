@@ -403,6 +403,7 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB,
 		HtlcHoldDuration:     invoices.DefaultHtlcHoldDuration,
 		Clock:                clock.NewDefaultClock(),
 		AcceptKeySend:        cfg.AcceptKeySend,
+		KeySendHoldTime:      cfg.KeySendHoldTime,
 	}
 
 	s := &server{
