@@ -318,25 +318,24 @@ func (s *Server) SendToRoute(ctx context.Context,
 		return nil, err
 	}
 
-	preimage, err := s.cfg.Router.SendToRoute(hash, route)
+	attempt, err := s.cfg.Router.SendToRoute(hash, route)
+	if attempt != nil {
+		rpcAttempt, err := s.cfg.RouterBackend.MarshalHTLCAttempt(
+			*attempt,
+		)
+		if err != nil {
+			return nil, err
+		}
 
-	// In the success case, return the preimage.
-	if err == nil {
-		return &SendToRouteResponse{
-			Preimage: preimage[:],
-		}, nil
+		resp := &SendToRouteResponse{
+			Preimage: rpcAttempt.Preimage,
+			Failure:  rpcAttempt.Failure,
+		}
+
+		return resp, nil
 	}
 
-	// In the failure case, marshall the failure message to the rpc format
-	// before returning it to the caller.
-	rpcErr, err := marshallError(err)
-	if err != nil {
-		return nil, err
-	}
-
-	return &SendToRouteResponse{
-		Failure: rpcErr,
-	}, nil
+	return nil, err
 }
 
 // ResetMissionControl clears all mission control state and starts with a clean

@@ -1744,7 +1744,7 @@ func (r *ChannelRouter) preparePayment(payment *LightningPayment) (
 // provided route. This function is blocking and will return the obtained
 // preimage if the payment is successful or the full error in case of a failure.
 func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, rt *route.Route) (
-	lntypes.Preimage, error) {
+	*channeldb.HTLCAttempt, error) {
 
 	// Calculate amount paid to receiver.
 	amt := rt.ReceiverAmt()
@@ -1774,7 +1774,7 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, rt *route.Route) (
 
 	// Any other error is not tolerated.
 	case err != nil:
-		return [32]byte{}, err
+		return nil, err
 	}
 
 	log.Tracef("Dispatching SendToRoute for hash %v: %v",
@@ -1804,34 +1804,37 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, rt *route.Route) (
 			hash, channeldb.FailureReasonError,
 		)
 		if controlErr != nil {
-			return [32]byte{}, controlErr
+			return nil, controlErr
 		}
 	}
 
 	// In any case, don't continue if there is an error.
 	if err != nil {
-		return lntypes.Preimage{}, err
+		return nil, err
 	}
 
+	var htlcAttempt *channeldb.HTLCAttempt
 	switch {
 	// Failed to launch shard.
 	case outcome.err != nil:
 		shardError = outcome.err
+		htlcAttempt = outcome.attempt
 
 	// Shard successfully launched, wait for the result to be available.
 	default:
 		result, err := sh.collectResult(attempt)
 		if err != nil {
-			return lntypes.Preimage{}, err
+			return nil, err
 		}
 
 		// We got a successful result.
 		if result.err == nil {
-			return result.attempt.Settle.Preimage, nil
+			return result.attempt, nil
 		}
 
 		// The shard failed, break switch to handle it.
 		shardError = result.err
+		htlcAttempt = result.attempt
 	}
 
 	// Since for SendToRoute we won't retry in case the shard fails, we'll
@@ -1848,10 +1851,10 @@ func (r *ChannelRouter) SendToRoute(hash lntypes.Hash, rt *route.Route) (
 
 	err = r.cfg.Control.Fail(hash, *reason)
 	if err != nil {
-		return lntypes.Preimage{}, err
+		return nil, err
 	}
 
-	return lntypes.Preimage{}, shardError
+	return htlcAttempt, shardError
 }
 
 // sendPayment attempts to send a payment to the passed payment hash. This
