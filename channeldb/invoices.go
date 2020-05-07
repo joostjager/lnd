@@ -1305,12 +1305,25 @@ func copyInvoiceHTLC(src *InvoiceHTLC) *InvoiceHTLC {
 
 // copyInvoice makes a deep copy of the supplied invoice.
 func copyInvoice(src *Invoice) *Invoice {
+	terms := ContractTerm{
+		FinalCltvDelta:  src.Terms.FinalCltvDelta,
+		Expiry:          src.Terms.Expiry,
+		PaymentPreimage: src.Terms.PaymentPreimage,
+		Value:           src.Terms.Value,
+		PaymentAddr:     src.Terms.PaymentAddr,
+	}
+
+	if src.Terms.Features != nil {
+		features := *src.Terms.Features
+		terms.Features = &features
+	}
+
 	dest := Invoice{
 		Memo:           copySlice(src.Memo),
 		PaymentRequest: copySlice(src.PaymentRequest),
 		CreationDate:   src.CreationDate,
 		SettleDate:     src.SettleDate,
-		Terms:          src.Terms,
+		Terms:          terms,
 		AddIndex:       src.AddIndex,
 		SettleIndex:    src.SettleIndex,
 		State:          src.State,
