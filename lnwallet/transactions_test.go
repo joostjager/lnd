@@ -100,7 +100,9 @@ func (tc *testContext) getHTLC(index int, desc *htlcDesc) (channeldb.HTLC, error
 // newTestContext populates a new testContext struct with the constant
 // parameters defined in the BOLT 03 spec. This may return an error if any of
 // the serialized parameters cannot be parsed.
-func newTestContext(t *testing.T) (tc *testContext, err error) {
+func newTestContext(t *testing.T, commitType CommitmentType) (tc *testContext,
+	err error) {
+
 	tc = new(testContext)
 
 	const genesisHash = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
@@ -306,8 +308,21 @@ func newTestContext(t *testing.T) (tc *testContext, err error) {
 	}
 
 	// Manually construct a new LightningChannel.
+
+	var chanType channeldb.ChannelType
+	switch commitType {
+	case CommitmentTypeLegacy:
+		chanType = channeldb.SingleFunderBit
+	case CommitmentTypeTweakless:
+		chanType = channeldb.SingleFunderTweaklessBit
+	case CommitmentTypeAnchors:
+		chanType = channeldb.SingleFunderTweaklessBit | channeldb.AnchorOutputsBit
+	default:
+		t.Fatalf("unsupported commit type %v", commitType)
+	}
+
 	tc.channelState = &channeldb.OpenChannel{
-		ChanType:        channeldb.SingleFunderTweaklessBit,
+		ChanType:        chanType,
 		ChainHash:       *tc.netParams.GenesisHash,
 		FundingOutpoint: tc.fundingOutpoint,
 		ShortChannelID:  tc.shortChanID,
@@ -808,7 +823,7 @@ func TestCommitmentAndHTLCTransactions(t *testing.T) {
 }
 
 func testCommitmentAndHTLCTransactions(t *testing.T, test testCase) {
-	tc, err := newTestContext(t)
+	tc, err := newTestContext(t, CommitmentTypeTweakless)
 	if err != nil {
 		t.Fatal(err)
 	}
