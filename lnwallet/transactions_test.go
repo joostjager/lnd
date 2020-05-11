@@ -61,6 +61,11 @@ type testContext struct {
 	fundingAmount btcutil.Amount
 	dustLimit     btcutil.Amount
 	feePerKW      btcutil.Amount
+
+	keys         *CommitmentKeyRing
+	channel      *LightningChannel
+	channelState *channeldb.OpenChannel
+	signer       *input.MockSigner
 }
 
 // htlcDesc is a description used to construct each HTLC in each test case.
@@ -94,7 +99,7 @@ func (tc *testContext) getHTLC(index int, desc *htlcDesc) (channeldb.HTLC, error
 // newTestContext populates a new testContext struct with the constant
 // parameters defined in the BOLT 03 spec. This may return an error if any of
 // the serialized parameters cannot be parsed.
-func newTestContext() (tc *testContext, err error) {
+func newTestContext(t *testing.T) (tc *testContext, err error) {
 	tc = new(testContext)
 
 	const genesisHash = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
@@ -278,6 +283,98 @@ func newTestContext() (tc *testContext, err error) {
 	tc.fundingAmount = 10000000
 	tc.dustLimit = 546
 	tc.feePerKW = 15000
+
+	// Generate random some keys that don't actually matter but need to be set.
+	var (
+		identityKey         *btcec.PublicKey
+		localDelayBasePoint *btcec.PublicKey
+	)
+	generateKeys := []**btcec.PublicKey{
+		&identityKey,
+		&localDelayBasePoint,
+	}
+	for _, keyRef := range generateKeys {
+		privkey, err := btcec.NewPrivateKey(btcec.S256())
+		if err != nil {
+			t.Fatalf("Failed to generate new key: %v", err)
+		}
+		*keyRef = privkey.PubKey()
+	}
+
+	// Manually construct a new LightningChannel.
+	tc.channelState = &channeldb.OpenChannel{
+		ChanType:        channeldb.SingleFunderTweaklessBit,
+		ChainHash:       *tc.netParams.GenesisHash,
+		FundingOutpoint: tc.fundingOutpoint,
+		ShortChannelID:  tc.shortChanID,
+		IsInitiator:     true,
+		IdentityPub:     identityKey,
+		LocalChanCfg: channeldb.ChannelConfig{
+			ChannelConstraints: channeldb.ChannelConstraints{
+				DustLimit:        tc.dustLimit,
+				MaxPendingAmount: lnwire.NewMSatFromSatoshis(tc.fundingAmount),
+				MaxAcceptedHtlcs: input.MaxHTLCNumber,
+				CsvDelay:         tc.localCsvDelay,
+			},
+			MultiSigKey: keychain.KeyDescriptor{
+				PubKey: tc.localFundingPubKey,
+			},
+			PaymentBasePoint: keychain.KeyDescriptor{
+				PubKey: tc.localPaymentBasePoint,
+			},
+			HtlcBasePoint: keychain.KeyDescriptor{
+				PubKey: tc.localPaymentBasePoint,
+			},
+			DelayBasePoint: keychain.KeyDescriptor{
+				PubKey: localDelayBasePoint,
+			},
+		},
+		RemoteChanCfg: channeldb.ChannelConfig{
+			MultiSigKey: keychain.KeyDescriptor{
+				PubKey: tc.remoteFundingPubKey,
+			},
+			PaymentBasePoint: keychain.KeyDescriptor{
+				PubKey: tc.remotePaymentBasePoint,
+			},
+			HtlcBasePoint: keychain.KeyDescriptor{
+				PubKey: tc.remotePaymentBasePoint,
+			},
+		},
+		Capacity:           tc.fundingAmount,
+		RevocationProducer: shachain.NewRevocationProducer(zeroHash),
+	}
+	tc.signer = &input.MockSigner{
+		Privkeys: []*btcec.PrivateKey{
+			tc.localFundingPrivKey, tc.localPaymentPrivKey,
+		},
+		NetParams: tc.netParams,
+	}
+
+	// Construct a LightningChannel manually because we don't have nor need all
+	// of the dependencies.
+	tc.channel = &LightningChannel{
+		channelState:  tc.channelState,
+		Signer:        tc.signer,
+		commitBuilder: NewCommitmentBuilder(tc.channelState),
+	}
+	err = tc.channel.createSignDesc()
+	if err != nil {
+		t.Fatalf("Failed to generate channel sign descriptor: %v", err)
+	}
+
+	// The commitmentPoint is technically hidden in the spec, but we need it to
+	// generate the correct tweak.
+	tweak := input.SingleTweakBytes(tc.commitmentPoint, tc.localPaymentBasePoint)
+	tc.keys = &CommitmentKeyRing{
+		CommitPoint:         tc.commitmentPoint,
+		LocalCommitKeyTweak: tweak,
+		LocalHtlcKeyTweak:   tweak,
+		LocalHtlcKey:        tc.localPaymentPubKey,
+		RemoteHtlcKey:       tc.remotePaymentPubKey,
+		ToLocalKey:          tc.localDelayPubKey,
+		ToRemoteKey:         tc.remotePaymentPubKey,
+		RevocationKey:       tc.localRevocationPubKey,
+	}
 
 	return
 }
@@ -681,101 +778,9 @@ var testCases = []struct {
 func TestCommitmentAndHTLCTransactions(t *testing.T) {
 	t.Parallel()
 
-	tc, err := newTestContext()
+	tc, err := newTestContext(t)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	// Generate random some keys that don't actually matter but need to be set.
-	var (
-		identityKey         *btcec.PublicKey
-		localDelayBasePoint *btcec.PublicKey
-	)
-	generateKeys := []**btcec.PublicKey{
-		&identityKey,
-		&localDelayBasePoint,
-	}
-	for _, keyRef := range generateKeys {
-		privkey, err := btcec.NewPrivateKey(btcec.S256())
-		if err != nil {
-			t.Fatalf("Failed to generate new key: %v", err)
-		}
-		*keyRef = privkey.PubKey()
-	}
-
-	// Manually construct a new LightningChannel.
-	channelState := channeldb.OpenChannel{
-		ChanType:        channeldb.SingleFunderTweaklessBit,
-		ChainHash:       *tc.netParams.GenesisHash,
-		FundingOutpoint: tc.fundingOutpoint,
-		ShortChannelID:  tc.shortChanID,
-		IsInitiator:     true,
-		IdentityPub:     identityKey,
-		LocalChanCfg: channeldb.ChannelConfig{
-			ChannelConstraints: channeldb.ChannelConstraints{
-				DustLimit:        tc.dustLimit,
-				MaxPendingAmount: lnwire.NewMSatFromSatoshis(tc.fundingAmount),
-				MaxAcceptedHtlcs: input.MaxHTLCNumber,
-				CsvDelay:         tc.localCsvDelay,
-			},
-			MultiSigKey: keychain.KeyDescriptor{
-				PubKey: tc.localFundingPubKey,
-			},
-			PaymentBasePoint: keychain.KeyDescriptor{
-				PubKey: tc.localPaymentBasePoint,
-			},
-			HtlcBasePoint: keychain.KeyDescriptor{
-				PubKey: tc.localPaymentBasePoint,
-			},
-			DelayBasePoint: keychain.KeyDescriptor{
-				PubKey: localDelayBasePoint,
-			},
-		},
-		RemoteChanCfg: channeldb.ChannelConfig{
-			MultiSigKey: keychain.KeyDescriptor{
-				PubKey: tc.remoteFundingPubKey,
-			},
-			PaymentBasePoint: keychain.KeyDescriptor{
-				PubKey: tc.remotePaymentBasePoint,
-			},
-			HtlcBasePoint: keychain.KeyDescriptor{
-				PubKey: tc.remotePaymentBasePoint,
-			},
-		},
-		Capacity:           tc.fundingAmount,
-		RevocationProducer: shachain.NewRevocationProducer(zeroHash),
-	}
-	signer := &input.MockSigner{
-		Privkeys: []*btcec.PrivateKey{
-			tc.localFundingPrivKey, tc.localPaymentPrivKey,
-		},
-		NetParams: tc.netParams,
-	}
-
-	// Construct a LightningChannel manually because we don't have nor need all
-	// of the dependencies.
-	channel := LightningChannel{
-		channelState:  &channelState,
-		Signer:        signer,
-		commitBuilder: NewCommitmentBuilder(&channelState),
-	}
-	err = channel.createSignDesc()
-	if err != nil {
-		t.Fatalf("Failed to generate channel sign descriptor: %v", err)
-	}
-
-	// The commitmentPoint is technically hidden in the spec, but we need it to
-	// generate the correct tweak.
-	tweak := input.SingleTweakBytes(tc.commitmentPoint, tc.localPaymentBasePoint)
-	keys := &CommitmentKeyRing{
-		CommitPoint:         tc.commitmentPoint,
-		LocalCommitKeyTweak: tweak,
-		LocalHtlcKeyTweak:   tweak,
-		LocalHtlcKey:        tc.localPaymentPubKey,
-		RemoteHtlcKey:       tc.remotePaymentPubKey,
-		ToLocalKey:          tc.localDelayPubKey,
-		ToRemoteKey:         tc.remotePaymentPubKey,
-		RevocationKey:       tc.localRevocationPubKey,
 	}
 
 	for i, test := range testCases {
@@ -799,10 +804,10 @@ func TestCommitmentAndHTLCTransactions(t *testing.T) {
 		height := test.commitment.CommitHeight
 
 		// Create unsigned commitment transaction.
-		view, err := channel.commitBuilder.createUnsignedCommitmentTx(
+		view, err := tc.channel.commitBuilder.createUnsignedCommitmentTx(
 			test.commitment.LocalBalance,
 			test.commitment.RemoteBalance, isOurs, feePerKw,
-			height, theHTLCView, keys,
+			height, theHTLCView, tc.keys,
 		)
 		if err != nil {
 			t.Errorf("Case %d: Failed to create new commitment tx: %v", i, err)
@@ -821,20 +826,20 @@ func TestCommitmentAndHTLCTransactions(t *testing.T) {
 		}
 
 		// Initialize LocalCommit, which is used in getSignedCommitTx.
-		channelState.LocalCommitment = test.commitment
-		channelState.LocalCommitment.Htlcs = htlcs
-		channelState.LocalCommitment.CommitTx = commitmentView.txn
+		tc.channelState.LocalCommitment = test.commitment
+		tc.channelState.LocalCommitment.Htlcs = htlcs
+		tc.channelState.LocalCommitment.CommitTx = commitmentView.txn
 
 		// This is the remote party's signature over the commitment
 		// transaction which is included in the commitment tx's witness
 		// data.
-		channelState.LocalCommitment.CommitSig, err = hex.DecodeString(test.remoteSigHex)
+		tc.channelState.LocalCommitment.CommitSig, err = hex.DecodeString(test.remoteSigHex)
 		if err != nil {
 			t.Fatalf("Case %d: Failed to parse serialized signature: %v",
 				i, err)
 		}
 
-		commitTx, err := channel.getSignedCommitTx()
+		commitTx, err := tc.channel.getSignedCommitTx()
 		if err != nil {
 			t.Errorf("Case %d: Failed to sign commitment tx: %v", i, err)
 			continue
@@ -852,9 +857,9 @@ func TestCommitmentAndHTLCTransactions(t *testing.T) {
 		// commitment tx.
 		htlcResolutions, err := extractHtlcResolutions(
 			chainfee.SatPerKWeight(test.commitment.FeePerKw), true,
-			signer, htlcs, keys, &channel.channelState.LocalChanCfg,
-			&channel.channelState.RemoteChanCfg, commitTx.TxHash(),
-			channel.channelState.ChanType,
+			tc.signer, htlcs, tc.keys, &tc.channel.channelState.LocalChanCfg,
+			&tc.channel.channelState.RemoteChanCfg, commitTx.TxHash(),
+			tc.channel.channelState.ChanType,
 		)
 		if err != nil {
 			t.Errorf("Case %d: Failed to extract HTLC resolutions: %v", i, err)
