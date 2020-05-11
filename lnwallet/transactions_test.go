@@ -438,14 +438,18 @@ func (tc *testContext) extractFundingInput() (*Utxo, *wire.TxOut, error) {
 	return &block1Utxo, txout, nil
 }
 
-// testCases encode the raw test vectors specified in Appendix C of BOLT 03.
-var testCases = []struct {
+type testCase struct {
+	name                    string
 	commitment              channeldb.ChannelCommitment
 	htlcDescs               []htlcDesc
 	expectedCommitmentTxHex string
 	remoteSigHex            string
-}{
+}
+
+// testCases encode the raw test vectors specified in Appendix C of BOLT 03.
+var testCases = []testCase{
 	{
+		name: "simple commitment tx with no HTLCs",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  7000000000,
@@ -457,6 +461,7 @@ var testCases = []struct {
 		remoteSigHex:            "3045022100f51d2e566a70ba740fc5d8c0f07b9b93d2ed741c3c0860c613173de7d39e7968022041376d520e9c0e1ad52248ddf4b22e12be8763007df977253ef45a4ca3bdb7c0",
 	},
 	{
+		name: "commitment tx with all five HTLCs untrimmed (minimum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -494,6 +499,7 @@ var testCases = []struct {
 		remoteSigHex:            "304402204fd4928835db1ccdfc40f5c78ce9bd65249b16348df81f0c44328dcdefc97d630220194d3869c38bc732dd87d13d2958015e2fc16829e74cd4377f84d215c0b70606",
 	},
 	{
+		name: "commitment tx with seven outputs untrimmed (maximum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -531,6 +537,7 @@ var testCases = []struct {
 		remoteSigHex:            "3045022100a5c01383d3ec646d97e40f44318d49def817fcd61a0ef18008a665b3e151785502203e648efddd5838981ef55ec954be69c4a652d021e6081a100d034de366815e9b",
 	},
 	{
+		name: "commitment tx with six outputs untrimmed (minimum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -563,6 +570,7 @@ var testCases = []struct {
 		remoteSigHex:            "3044022072714e2fbb93cdd1c42eb0828b4f2eff143f717d8f26e79d6ada4f0dcb681bbe02200911be4e5161dd6ebe59ff1c58e1997c4aea804f81db6b698821db6093d7b057",
 	},
 	{
+		name: "commitment tx with six outputs untrimmed (maximum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -595,6 +603,7 @@ var testCases = []struct {
 		remoteSigHex:            "3044022001d55e488b8b035b2dd29d50b65b530923a416d47f377284145bc8767b1b6a75022019bb53ddfe1cefaf156f924777eaaf8fdca1810695a7d0a247ad2afba8232eb4",
 	},
 	{
+		name: "commitment tx with five outputs untrimmed (minimum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -622,6 +631,7 @@ var testCases = []struct {
 		remoteSigHex:            "3045022100f2377f7a67b7fc7f4e2c0c9e3a7de935c32417f5668eda31ea1db401b7dc53030220415fdbc8e91d0f735e70c21952342742e25249b0d062d43efbfc564499f37526",
 	},
 	{
+		name: "commitment tx with five outputs untrimmed (maximum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -649,6 +659,7 @@ var testCases = []struct {
 		remoteSigHex:            "3045022100d33c4e541aa1d255d41ea9a3b443b3b822ad8f7f86862638aac1f69f8f760577022007e2a18e6931ce3d3a804b1c78eda1de17dbe1fb7a95488c9a4ec86203953348",
 	},
 	{
+		name: "commitment tx with four outputs untrimmed (minimum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -671,6 +682,7 @@ var testCases = []struct {
 		remoteSigHex:            "304402205e2f76d4657fb732c0dfc820a18a7301e368f5799e06b7828007633741bda6df0220458009ae59d0c6246065c419359e05eb2a4b4ef4a1b310cc912db44eb7924298",
 	},
 	{
+		name: "commitment tx with four outputs untrimmed (maximum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -693,6 +705,7 @@ var testCases = []struct {
 		remoteSigHex:            "3045022100c1a3b0b60ca092ed5080121f26a74a20cec6bdee3f8e47bae973fcdceb3eda5502207d467a9873c939bf3aa758014ae67295fedbca52412633f7e5b2670fc7c381c1",
 	},
 	{
+		name: "commitment tx with three outputs untrimmed (minimum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -710,6 +723,7 @@ var testCases = []struct {
 		remoteSigHex:            "30450221008b7c191dd46893b67b628e618d2dc8e81169d38bade310181ab77d7c94c6675e02203b4dd131fd7c9deb299560983dcdc485545c98f989f7ae8180c28289f9e6bdb0",
 	},
 	{
+		name: "commitment tx with three outputs untrimmed (maximum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -727,6 +741,7 @@ var testCases = []struct {
 		remoteSigHex:            "304402206d6cb93969d39177a09d5d45b583f34966195b77c7e585cf47ac5cce0c90cefb022031d71ae4e33a4e80df7f981d696fbdee517337806a3c7138b7491e2cbb077a0e",
 	},
 	{
+		name: "commitment tx with two outputs untrimmed (minimum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -738,6 +753,7 @@ var testCases = []struct {
 		remoteSigHex:            "304402200769ba89c7330dfa4feba447b6e322305f12ac7dac70ec6ba997ed7c1b598d0802204fe8d337e7fee781f9b7b1a06e580b22f4f79d740059560191d7db53f8765552",
 	},
 	{
+		name: "commitment tx with two outputs untrimmed (maximum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -749,6 +765,7 @@ var testCases = []struct {
 		remoteSigHex:            "3044022037f83ff00c8e5fb18ae1f918ffc24e54581775a20ff1ae719297ef066c71caa9022039c529cccd89ff6c5ed1db799614533844bd6d101da503761c45c713996e3bbd",
 	},
 	{
+		name: "commitment tx with one output untrimmed (minimum feerate)",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -760,6 +777,7 @@ var testCases = []struct {
 		remoteSigHex:            "3044022064901950be922e62cbe3f2ab93de2b99f37cff9fc473e73e394b27f88ef0731d02206d1dfa227527b4df44a07599289e207d6fd9cca60c0365682dcd3deaf739567e",
 	},
 	{
+		name: "commitment tx with fee greater than funder amount",
 		commitment: channeldb.ChannelCommitment{
 			CommitHeight:  42,
 			LocalBalance:  6988000000,
@@ -778,125 +796,131 @@ var testCases = []struct {
 func TestCommitmentAndHTLCTransactions(t *testing.T) {
 	t.Parallel()
 
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			testCommitmentAndHTLCTransactions(t, test)
+		})
+	}
+}
+
+func testCommitmentAndHTLCTransactions(t *testing.T, test testCase) {
 	tc, err := newTestContext(t)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for i, test := range testCases {
-		expectedCommitmentTx, err := txFromHex(test.expectedCommitmentTxHex)
+	expectedCommitmentTx, err := txFromHex(test.expectedCommitmentTxHex)
+	if err != nil {
+		t.Fatalf("Failed to parse serialized tx: %v", err)
+	}
+
+	// Build required HTLC structs from raw test vector data.
+	htlcs := make([]channeldb.HTLC, len(test.htlcDescs), len(test.htlcDescs))
+	for i, htlcDesc := range test.htlcDescs {
+		htlcs[i], err = tc.getHTLC(i, &htlcDesc)
 		if err != nil {
-			t.Fatalf("Case %d: Failed to parse serialized tx: %v", i, err)
+			t.Fatal(err)
 		}
+	}
+	theHTLCView := htlcViewFromHTLCs(htlcs)
 
-		// Build required HTLC structs from raw test vector data.
-		htlcs := make([]channeldb.HTLC, len(test.htlcDescs), len(test.htlcDescs))
-		for i, htlcDesc := range test.htlcDescs {
-			htlcs[i], err = tc.getHTLC(i, &htlcDesc)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		theHTLCView := htlcViewFromHTLCs(htlcs)
+	feePerKw := chainfee.SatPerKWeight(test.commitment.FeePerKw)
+	isOurs := true
+	height := test.commitment.CommitHeight
 
-		feePerKw := chainfee.SatPerKWeight(test.commitment.FeePerKw)
-		isOurs := true
-		height := test.commitment.CommitHeight
+	// Create unsigned commitment transaction.
+	view, err := tc.channel.commitBuilder.createUnsignedCommitmentTx(
+		test.commitment.LocalBalance,
+		test.commitment.RemoteBalance, isOurs, feePerKw,
+		height, theHTLCView, tc.keys,
+	)
+	if err != nil {
+		t.Errorf("Failed to create new commitment tx: %v", err)
+		return
+	}
 
-		// Create unsigned commitment transaction.
-		view, err := tc.channel.commitBuilder.createUnsignedCommitmentTx(
-			test.commitment.LocalBalance,
-			test.commitment.RemoteBalance, isOurs, feePerKw,
-			height, theHTLCView, tc.keys,
-		)
-		if err != nil {
-			t.Errorf("Case %d: Failed to create new commitment tx: %v", i, err)
+	commitmentView := &commitment{
+		ourBalance:   view.ourBalance,
+		theirBalance: view.theirBalance,
+		txn:          view.txn,
+		fee:          view.fee,
+		height:       height,
+		feePerKw:     feePerKw,
+		dustLimit:    tc.dustLimit,
+		isOurs:       isOurs,
+	}
+
+	// Initialize LocalCommit, which is used in getSignedCommitTx.
+	tc.channelState.LocalCommitment = test.commitment
+	tc.channelState.LocalCommitment.Htlcs = htlcs
+	tc.channelState.LocalCommitment.CommitTx = commitmentView.txn
+
+	// This is the remote party's signature over the commitment
+	// transaction which is included in the commitment tx's witness
+	// data.
+	tc.channelState.LocalCommitment.CommitSig, err = hex.DecodeString(test.remoteSigHex)
+	if err != nil {
+		t.Fatalf("Failed to parse serialized signature: %v",
+			err)
+	}
+
+	commitTx, err := tc.channel.getSignedCommitTx()
+	if err != nil {
+		t.Errorf("Failed to sign commitment tx: %v", err)
+		return
+	}
+
+	// Check that commitment transaction was created correctly.
+	if commitTx.WitnessHash() != *expectedCommitmentTx.WitnessHash() {
+		t.Errorf("generated unexpected commitment tx: "+
+			"expected %s, got %s", spew.Sdump(expectedCommitmentTx),
+			spew.Sdump(commitTx))
+		return
+	}
+
+	// Generate second-level HTLC transactions for HTLCs in
+	// commitment tx.
+	htlcResolutions, err := extractHtlcResolutions(
+		chainfee.SatPerKWeight(test.commitment.FeePerKw), true,
+		tc.signer, htlcs, tc.keys, &tc.channel.channelState.LocalChanCfg,
+		&tc.channel.channelState.RemoteChanCfg, commitTx.TxHash(),
+		tc.channel.channelState.ChanType,
+	)
+	if err != nil {
+		t.Errorf("Failed to extract HTLC resolutions: %v", err)
+		return
+	}
+
+	resolutionIdx := 0
+	for j, htlcDesc := range test.htlcDescs {
+		// TODO: Check HTLC success transactions; currently not implemented.
+		// resolutionIdx can be replaced by j when this is handled.
+		if htlcs[j].Incoming {
 			continue
 		}
 
-		commitmentView := &commitment{
-			ourBalance:   view.ourBalance,
-			theirBalance: view.theirBalance,
-			txn:          view.txn,
-			fee:          view.fee,
-			height:       height,
-			feePerKw:     feePerKw,
-			dustLimit:    tc.dustLimit,
-			isOurs:       isOurs,
+		expectedTx, err := txFromHex(htlcDesc.resolutionTxHex)
+		if err != nil {
+			t.Fatalf("Failed to parse serialized tx: %v", err)
 		}
 
-		// Initialize LocalCommit, which is used in getSignedCommitTx.
-		tc.channelState.LocalCommitment = test.commitment
-		tc.channelState.LocalCommitment.Htlcs = htlcs
-		tc.channelState.LocalCommitment.CommitTx = commitmentView.txn
+		htlcResolution := htlcResolutions.OutgoingHTLCs[resolutionIdx]
+		resolutionIdx++
 
-		// This is the remote party's signature over the commitment
-		// transaction which is included in the commitment tx's witness
-		// data.
-		tc.channelState.LocalCommitment.CommitSig, err = hex.DecodeString(test.remoteSigHex)
-		if err != nil {
-			t.Fatalf("Case %d: Failed to parse serialized signature: %v",
-				i, err)
-		}
-
-		commitTx, err := tc.channel.getSignedCommitTx()
-		if err != nil {
-			t.Errorf("Case %d: Failed to sign commitment tx: %v", i, err)
+		actualTx := htlcResolution.SignedTimeoutTx
+		if actualTx == nil {
+			t.Errorf("Failed to generate second level tx: "+
+				"output %d, %v", j,
+				htlcResolutions.OutgoingHTLCs[j])
 			continue
 		}
 
-		// Check that commitment transaction was created correctly.
-		if commitTx.WitnessHash() != *expectedCommitmentTx.WitnessHash() {
-			t.Errorf("Case %d: Generated unexpected commitment tx: "+
-				"expected %s, got %s", i, spew.Sdump(expectedCommitmentTx),
-				spew.Sdump(commitTx))
+		// Check that second-level HTLC transaction was created correctly.
+		if actualTx.WitnessHash() != *expectedTx.WitnessHash() {
+			t.Errorf("Generated unexpected second level tx: "+
+				"output %d, expected %s, got %s", j,
+				expectedTx.WitnessHash(), actualTx.WitnessHash())
 			continue
-		}
-
-		// Generate second-level HTLC transactions for HTLCs in
-		// commitment tx.
-		htlcResolutions, err := extractHtlcResolutions(
-			chainfee.SatPerKWeight(test.commitment.FeePerKw), true,
-			tc.signer, htlcs, tc.keys, &tc.channel.channelState.LocalChanCfg,
-			&tc.channel.channelState.RemoteChanCfg, commitTx.TxHash(),
-			tc.channel.channelState.ChanType,
-		)
-		if err != nil {
-			t.Errorf("Case %d: Failed to extract HTLC resolutions: %v", i, err)
-			continue
-		}
-
-		resolutionIdx := 0
-		for j, htlcDesc := range test.htlcDescs {
-			// TODO: Check HTLC success transactions; currently not implemented.
-			// resolutionIdx can be replaced by j when this is handled.
-			if htlcs[j].Incoming {
-				continue
-			}
-
-			expectedTx, err := txFromHex(htlcDesc.resolutionTxHex)
-			if err != nil {
-				t.Fatalf("Failed to parse serialized tx: %v", err)
-			}
-
-			htlcResolution := htlcResolutions.OutgoingHTLCs[resolutionIdx]
-			resolutionIdx++
-
-			actualTx := htlcResolution.SignedTimeoutTx
-			if actualTx == nil {
-				t.Errorf("Case %d: Failed to generate second level tx: "+
-					"output %d, %v", i, j,
-					htlcResolutions.OutgoingHTLCs[j])
-				continue
-			}
-
-			// Check that second-level HTLC transaction was created correctly.
-			if actualTx.WitnessHash() != *expectedTx.WitnessHash() {
-				t.Errorf("Case %d: Generated unexpected second level tx: "+
-					"output %d, expected %s, got %s", i, j,
-					expectedTx.WitnessHash(), actualTx.WitnessHash())
-				continue
-			}
 		}
 	}
 }
