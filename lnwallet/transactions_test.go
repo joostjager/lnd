@@ -1,7 +1,6 @@
 package lnwallet
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/shachain"
@@ -55,7 +55,8 @@ type testContext struct {
 	fundingOutpoint      wire.OutPoint
 	shortChanID          lnwire.ShortChannelID
 
-	htlcs []channeldb.HTLC
+	htlcs     []channeldb.HTLC
+	preimages []lntypes.Preimage
 
 	localCsvDelay uint16
 	fundingAmount btcutil.Amount
@@ -266,17 +267,20 @@ func newTestContext(t *testing.T) (tc *testContext, err error) {
 	}
 
 	tc.htlcs = make([]channeldb.HTLC, len(htlcData))
+	tc.preimages = make([]lntypes.Preimage, len(htlcData))
 	for i, htlc := range htlcData {
-		preimage, decodeErr := hex.DecodeString(htlc.preimage)
+		preimage, decodeErr := lntypes.MakePreimageFromStr(htlc.preimage)
 		if decodeErr != nil {
 			err = fmt.Errorf("Failed to decode HTLC preimage: %v", decodeErr)
 			return
 		}
 
-		tc.htlcs[i].RHash = sha256.Sum256(preimage)
+		tc.htlcs[i].RHash = preimage.Hash()
 		tc.htlcs[i].Amt = htlc.amount
 		tc.htlcs[i].RefundTimeout = htlc.expiry
 		tc.htlcs[i].Incoming = htlc.incoming
+
+		tc.preimages[i] = preimage
 	}
 
 	tc.localCsvDelay = 144
@@ -891,23 +895,33 @@ func testCommitmentAndHTLCTransactions(t *testing.T, test testCase) {
 		return
 	}
 
-	resolutionIdx := 0
+	inIdx := 0
+	outIdx := 0
 	for j, htlcDesc := range test.htlcDescs {
-		// TODO: Check HTLC success transactions; currently not implemented.
-		// resolutionIdx can be replaced by j when this is handled.
-		if htlcs[j].Incoming {
-			continue
-		}
-
 		expectedTx, err := txFromHex(htlcDesc.resolutionTxHex)
 		if err != nil {
 			t.Fatalf("Failed to parse serialized tx: %v", err)
 		}
 
-		htlcResolution := htlcResolutions.OutgoingHTLCs[resolutionIdx]
-		resolutionIdx++
+		var actualTx *wire.MsgTx
+		if htlcs[j].Incoming {
+			htlcResolution := htlcResolutions.IncomingHTLCs[inIdx]
+			actualTx = htlcResolution.SignedSuccessTx
 
-		actualTx := htlcResolution.SignedTimeoutTx
+			// Preimage is normally only set during resolver
+			// execution. Set it here now to get matching txes.
+			actualTx.TxIn[0].Witness[3] =
+				tc.preimages[htlcDesc.index][:]
+
+			inIdx++
+		} else {
+
+			htlcResolution := htlcResolutions.OutgoingHTLCs[outIdx]
+			actualTx = htlcResolution.SignedTimeoutTx
+
+			outIdx++
+		}
+
 		if actualTx == nil {
 			t.Errorf("Failed to generate second level tx: "+
 				"output %d, %v", j,
