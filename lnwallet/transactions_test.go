@@ -1,8 +1,14 @@
 package lnwallet
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -1326,4 +1332,381 @@ func TestCommitmentSpendValidation(t *testing.T) {
 			testSpendValidation(t, tweakless)
 		})
 	}
+}
+
+func TestVectors(t *testing.T) {
+	tc, err := newTestContext(t, CommitmentTypeTweakless)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chanType := channeldb.SingleFunderTweaklessBit
+	aliceChannel, bobChannel, cleanUp, err := createTestChannelsForVectors(
+		tc, chanType,
+	)
+	if err != nil {
+		t.Fatalf("unable to create test channels: %v", err)
+	}
+	defer cleanUp()
+
+	chanID := lnwire.NewChanIDFromOutPoint(aliceChannel.ChanPoint)
+
+	for _, htlc := range tc.htlcs {
+		msg := &lnwire.UpdateAddHTLC{
+			Amount:      htlc.Amt,
+			ChanID:      chanID,
+			Expiry:      htlc.RefundTimeout,
+			PaymentHash: htlc.RHash,
+		}
+		if htlc.Incoming {
+			htlcID, err := aliceChannel.AddHTLC(msg, nil)
+			if err != nil {
+				t.Fatalf("unable to add htlc: %v", err)
+			}
+			msg.ID = htlcID
+			_, err = bobChannel.ReceiveHTLC(msg)
+			if err != nil {
+				t.Fatalf("unable to recv htlc: %v", err)
+			}
+		} else {
+			htlcID, err := bobChannel.AddHTLC(msg, nil)
+			if err != nil {
+				t.Fatalf("unable to add htlc: %v", err)
+			}
+			msg.ID = htlcID
+			_, err = aliceChannel.ReceiveHTLC(msg)
+			if err != nil {
+				t.Fatalf("unable to recv htlc: %v", err)
+			}
+		}
+	}
+
+	bobSig, bobHtlcSigs, _, err := bobChannel.SignNextCommitment()
+	if err != nil {
+		t.Fatalf("bob unable to sign commitment: %v", err)
+	}
+	err = aliceChannel.ReceiveNewCommitment(bobSig, bobHtlcSigs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = aliceChannel.RevokeCurrentCommitment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, aliceHtlcSigs, _, err := aliceChannel.SignNextCommitment()
+	if err != nil {
+		t.Fatalf("alice unable to sign commitment: %v", err)
+	}
+
+	fmt.Printf("HTLC sigs:\n")
+	for _, sig := range aliceHtlcSigs {
+		fmt.Printf("%x\n", sig.ToSignatureBytes())
+	}
+}
+
+func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelType) (
+	*LightningChannel, *LightningChannel, func(), error) {
+
+	channelCapacity := btcutil.Amount(10000000)
+
+	channelBal := channelCapacity / 2
+	aliceDustLimit := btcutil.Amount(546)
+	bobDustLimit := btcutil.Amount(546)
+	csvTimeoutAlice := uint32(144)
+	csvTimeoutBob := uint32(144)
+
+	prevOut := &tc.fundingOutpoint
+	fundingTxIn := wire.NewTxIn(prevOut, nil, nil)
+
+	// // For each party, we'll create a distinct set of keys in order to
+	// // emulate the typical set up with live channels.
+	// var (
+	// 	aliceKeys []*btcec.PrivateKey
+	// 	bobKeys   []*btcec.PrivateKey
+	// )
+	// for i := 0; i < 5; i++ {
+	// 	key := make([]byte, len(testWalletPrivKey))
+	// 	copy(key[:], testWalletPrivKey[:])
+	// 	key[0] ^= byte(i + 1)
+
+	// 	aliceKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), key)
+	// 	aliceKeys = append(aliceKeys, aliceKey)
+
+	// 	key = make([]byte, len(bobsPrivKey))
+	// 	copy(key[:], bobsPrivKey)
+	// 	key[0] ^= byte(i + 1)
+
+	// 	bobKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), key)
+	// 	bobKeys = append(bobKeys, bobKey)
+	// }
+
+	// Generate random some keys that don't actually matter but need to be set.
+	var (
+		identityKey *btcec.PublicKey
+	)
+	generateKeys := []**btcec.PublicKey{
+		&identityKey,
+	}
+	for _, keyRef := range generateKeys {
+		privkey, err := btcec.NewPrivateKey(btcec.S256())
+		if err != nil {
+			panic(err)
+		}
+		*keyRef = privkey.PubKey()
+	}
+
+	aliceCfg := channeldb.ChannelConfig{
+		ChannelConstraints: channeldb.ChannelConstraints{
+			DustLimit:        aliceDustLimit,
+			MaxPendingAmount: lnwire.NewMSatFromSatoshis(channelCapacity),
+			ChanReserve:      channelCapacity / 100,
+			MinHTLC:          0,
+			MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
+			CsvDelay:         uint16(csvTimeoutAlice),
+		},
+		MultiSigKey: keychain.KeyDescriptor{
+			PubKey: tc.remoteFundingPubKey,
+		},
+		PaymentBasePoint: keychain.KeyDescriptor{
+			PubKey: tc.remotePaymentBasePoint,
+		},
+		HtlcBasePoint: keychain.KeyDescriptor{
+			PubKey: tc.remotePaymentBasePoint,
+		},
+		DelayBasePoint: keychain.KeyDescriptor{
+			PubKey: localDelayPubKey, // todo: use other key?
+		},
+		RevocationBasePoint: keychain.KeyDescriptor{
+			PubKey: localDelayPubKey, // todo: use other key?
+		},
+	}
+	bobCfg := channeldb.ChannelConfig{
+		ChannelConstraints: channeldb.ChannelConstraints{
+			DustLimit:        bobDustLimit,
+			MaxPendingAmount: lnwire.NewMSatFromSatoshis(channelCapacity),
+			ChanReserve:      channelCapacity / 100,
+			MinHTLC:          0,
+			MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
+			CsvDelay:         uint16(csvTimeoutBob),
+		},
+		MultiSigKey: keychain.KeyDescriptor{
+			PubKey: tc.localFundingPubKey,
+		},
+		PaymentBasePoint: keychain.KeyDescriptor{
+			PubKey: tc.localPaymentBasePoint,
+		},
+		HtlcBasePoint: keychain.KeyDescriptor{
+			PubKey: tc.localPaymentBasePoint,
+		},
+		DelayBasePoint: keychain.KeyDescriptor{
+			PubKey: localDelayPubKey,
+		},
+		RevocationBasePoint: keychain.KeyDescriptor{
+			PubKey: localDelayPubKey, // todo: use other key?
+		},
+	}
+
+	bobRoot, err := chainhash.NewHash(localPerCommitmentSecret)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	bobPreimageProducer := shachain.NewRevocationProducer(*bobRoot)
+	bobFirstRevoke, err := bobPreimageProducer.AtIndex(0)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	bobCommitPoint := input.ComputeCommitmentPoint(bobFirstRevoke[:])
+
+	aliceRoot, err := chainhash.NewHash(localPerCommitmentSecret.Serialize())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	alicePreimageProducer := shachain.NewRevocationProducer(*aliceRoot)
+	aliceFirstRevoke, err := alicePreimageProducer.AtIndex(0)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	aliceCommitPoint := input.ComputeCommitmentPoint(aliceFirstRevoke[:])
+
+	aliceCommitTx, bobCommitTx, err := CreateCommitmentTxns(
+		channelBal, channelBal, &aliceCfg, &bobCfg, aliceCommitPoint,
+		bobCommitPoint, *fundingTxIn, chanType,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	alicePath, err := ioutil.TempDir("", "alicedb")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	dbAlice, err := channeldb.Open(alicePath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	bobPath, err := ioutil.TempDir("", "bobdb")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	dbBob, err := channeldb.Open(bobPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	feePerKw := chainfee.SatPerKWeight(253)
+	commitFee := calcStaticFee(chanType, 0)
+	var anchorAmt btcutil.Amount
+	if chanType.HasAnchors() {
+		anchorAmt += 2 * anchorSize
+	}
+
+	aliceBalance := lnwire.NewMSatFromSatoshis(
+		channelBal - commitFee - anchorAmt,
+	)
+	bobBalance := lnwire.NewMSatFromSatoshis(channelBal)
+
+	aliceCommit := channeldb.ChannelCommitment{
+		CommitHeight:  0,
+		LocalBalance:  aliceBalance,
+		RemoteBalance: bobBalance,
+		CommitFee:     commitFee,
+		FeePerKw:      btcutil.Amount(feePerKw),
+		CommitTx:      aliceCommitTx,
+		CommitSig:     testSigBytes,
+	}
+	bobCommit := channeldb.ChannelCommitment{
+		CommitHeight:  0,
+		LocalBalance:  bobBalance,
+		RemoteBalance: aliceBalance,
+		CommitFee:     commitFee,
+		FeePerKw:      btcutil.Amount(feePerKw),
+		CommitTx:      bobCommitTx,
+		CommitSig:     testSigBytes,
+	}
+
+	var chanIDBytes [8]byte
+	if _, err := io.ReadFull(rand.Reader, chanIDBytes[:]); err != nil {
+		return nil, nil, nil, err
+	}
+
+	shortChanID := lnwire.NewShortChanIDFromInt(
+		binary.BigEndian.Uint64(chanIDBytes[:]),
+	)
+
+	aliceChannelState := &channeldb.OpenChannel{
+		LocalChanCfg:            aliceCfg,
+		RemoteChanCfg:           bobCfg,
+		IdentityPub:             localPerCommitmentSecret.PubKey(),
+		FundingOutpoint:         *prevOut,
+		ShortChannelID:          shortChanID,
+		ChanType:                chanType,
+		IsInitiator:             true,
+		Capacity:                channelCapacity,
+		RemoteCurrentRevocation: bobCommitPoint,
+		RevocationProducer:      alicePreimageProducer,
+		RevocationStore:         shachain.NewRevocationStore(),
+		LocalCommitment:         aliceCommit,
+		RemoteCommitment:        aliceCommit,
+		Db:                      dbAlice,
+		Packager:                channeldb.NewChannelPackager(shortChanID),
+		FundingTxn:              testTx,
+	}
+	bobChannelState := &channeldb.OpenChannel{
+		LocalChanCfg:            bobCfg,
+		RemoteChanCfg:           aliceCfg,
+		IdentityPub:             localPerCommitmentSecret.PubKey(),
+		FundingOutpoint:         *prevOut,
+		ShortChannelID:          shortChanID,
+		ChanType:                chanType,
+		IsInitiator:             false,
+		Capacity:                channelCapacity,
+		RemoteCurrentRevocation: aliceCommitPoint,
+		RevocationProducer:      bobPreimageProducer,
+		RevocationStore:         shachain.NewRevocationStore(),
+		LocalCommitment:         bobCommit,
+		RemoteCommitment:        bobCommit,
+		Db:                      dbBob,
+		Packager:                channeldb.NewChannelPackager(shortChanID),
+	}
+
+	bobSigner := &input.MockSigner{Privkeys: []*btcec.PrivateKey{
+		localFundingPrivKey, localPaymentPrivKey, localDelayPrivKey, localBasePointSecret,
+	}}
+
+	aliceSigner := &input.MockSigner{Privkeys: []*btcec.PrivateKey{
+		remoteFundingPrivKey, remotePrivKey,
+	}}
+
+	// TODO(roasbeef): make mock version of pre-image store
+
+	alicePool := NewSigPool(1, aliceSigner)
+	channelAlice, err := NewLightningChannel(
+		aliceSigner, aliceChannelState, alicePool,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	alicePool.Start()
+
+	obfuscator := createStateHintObfuscator(aliceChannelState)
+
+	bobPool := NewSigPool(1, bobSigner)
+	channelBob, err := NewLightningChannel(
+		bobSigner, bobChannelState, bobPool,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	bobPool.Start()
+
+	err = SetStateNumHint(
+		aliceCommitTx, 0, obfuscator,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	err = SetStateNumHint(
+		bobCommitTx, 0, obfuscator,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	addr := &net.TCPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: 18556,
+	}
+	if err := channelAlice.channelState.SyncPending(addr, 101); err != nil {
+		return nil, nil, nil, err
+	}
+
+	addr = &net.TCPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: 18555,
+	}
+
+	if err := channelBob.channelState.SyncPending(addr, 101); err != nil {
+		return nil, nil, nil, err
+	}
+
+	cleanUpFunc := func() {
+		os.RemoveAll(bobPath)
+		os.RemoveAll(alicePath)
+
+		alicePool.Stop()
+		bobPool.Stop()
+	}
+
+	// Now that the channel are open, simulate the start of a session by
+	// having Alice and Bob extend their revocation windows to each other.
+	err = initRevocationWindows(channelAlice, channelBob)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return channelAlice, channelBob, cleanUpFunc, nil
 }

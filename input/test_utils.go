@@ -64,7 +64,8 @@ func (m *MockSigner) SignOutputRaw(tx *wire.MsgTx,
 	hash160 := btcutil.Hash160(pubkey.SerializeCompressed())
 	privKey := m.findKey(hash160, signDesc.SingleTweak, signDesc.DoubleTweak)
 	if privKey == nil {
-		return nil, fmt.Errorf("mock signer does not have key")
+		return nil, fmt.Errorf("mock signer does not have priv key for %x (untweaked %x)",
+			pubkey.SerializeCompressed(), signDesc.KeyDesc.PubKey.SerializeCompressed())
 	}
 
 	sig, err := txscript.RawTxInWitnessSignature(tx, signDesc.SigHashes,
