@@ -153,6 +153,10 @@ func DeriveCommitmentKeys(commitPoint *btcec.PublicKey,
 		revocationBasePoint, commitPoint,
 	)
 
+	fmt.Printf("TO_LOCAL %x\n", keyRing.ToLocalKey.SerializeCompressed())
+	fmt.Printf("commitPoint %x\n", commitPoint.SerializeCompressed())
+	fmt.Printf("toLocalBasePoint %x\n", toLocalBasePoint.SerializeCompressed())
+
 	// If this commitment should omit the tweak for the remote point, then
 	// we'll use that directly, and ignore the commitPoint tweak.
 	if tweaklessCommit {

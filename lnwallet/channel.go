@@ -3322,6 +3322,7 @@ func (lc *LightningChannel) SignNextCommitment() (lnwire.Sig, []lnwire.Sig, []ch
 	// party, then we're unable to create new states. Each time we create a
 	// new state, we consume a prior revocation point.
 	commitPoint := lc.channelState.RemoteNextRevocation
+	fmt.Printf("commit point: %x\n", commitPoint.SerializeCompressed())
 	if lc.remoteCommitChain.hasUnackedCommitment() || commitPoint == nil {
 
 		return sig, htlcSigs, nil, ErrNoWindow
@@ -4116,6 +4117,8 @@ func (lc *LightningChannel) ReceiveNewCommitment(commitSig lnwire.Sig,
 		return err
 	}
 	commitPoint := input.ComputeCommitmentPoint(commitSecret[:])
+	fmt.Printf("commit point: %x\n", commitPoint.SerializeCompressed())
+
 	keyRing := DeriveCommitmentKeys(
 		commitPoint, true, lc.channelState.ChanType,
 		&lc.channelState.LocalChanCfg, &lc.channelState.RemoteChanCfg,
@@ -4418,6 +4421,8 @@ func (lc *LightningChannel) ReceiveRevocation(revMsg *lnwire.RevokeAndAck) (
 	if !derivedCommitPoint.IsEqual(currentCommitPoint) {
 		return nil, nil, nil, nil, fmt.Errorf("revocation key mismatch")
 	}
+
+	fmt.Printf("commit point: %x\n", derivedCommitPoint.SerializeCompressed())
 
 	// Now that we've verified that the prior commitment has been properly
 	// revoked, we'll advance the revocation state we track for the remote
@@ -6506,6 +6511,9 @@ func (lc *LightningChannel) generateRevocation(height uint64) (*lnwire.RevokeAnd
 	}
 
 	revocationMsg.NextRevocationKey = input.ComputeCommitmentPoint(nextCommitSecret[:])
+
+	fmt.Printf("commit point: %x\n", revocationMsg.NextRevocationKey.SerializeCompressed())
+
 	revocationMsg.ChanID = lnwire.NewChanIDFromOutPoint(
 		&lc.channelState.FundingOutpoint)
 

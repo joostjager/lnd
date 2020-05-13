@@ -1342,7 +1342,7 @@ func TestVectors(t *testing.T) {
 
 	chanType := channeldb.SingleFunderTweaklessBit
 	aliceChannel, bobChannel, cleanUp, err := createTestChannelsForVectors(
-		tc, chanType,
+		chanType,
 	)
 	if err != nil {
 		t.Fatalf("unable to create test channels: %v", err)
@@ -1405,56 +1405,79 @@ func TestVectors(t *testing.T) {
 	}
 }
 
-func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelType) (
+type mockProducer struct {
+	secret chainhash.Hash
+}
+
+func (p *mockProducer) AtIndex(uint64) (*chainhash.Hash, error) {
+	return &p.secret, nil
+}
+
+func (p *mockProducer) Encode(w io.Writer) error {
+	_, err := w.Write(p.secret[:])
+	return err
+}
+
+func createTestChannelsForVectors(chanType channeldb.ChannelType) (
 	*LightningChannel, *LightningChannel, func(), error) {
 
 	channelCapacity := btcutil.Amount(10000000)
 
-	channelBal := channelCapacity / 2
+	aliceBalance := btcutil.Amount(3000000)
+	bobBalance := btcutil.Amount(6988000)
+
 	aliceDustLimit := btcutil.Amount(546)
 	bobDustLimit := btcutil.Amount(546)
 	csvTimeoutAlice := uint32(144)
 	csvTimeoutBob := uint32(144)
 
-	prevOut := &tc.fundingOutpoint
+	const fundingTxHex = "0200000001adbb20ea41a8423ea937e76e8151636bf6093b70eaff942930d20576600521fd000000006b48304502210090587b6201e166ad6af0227d3036a9454223d49a1f11839c1a362184340ef0240220577f7cd5cca78719405cbf1de7414ac027f0239ef6e214c90fcaab0454d84b3b012103535b32d5eb0a6ed0982a0479bbadc9868d9836f6ba94dd5a63be16d875069184ffffffff028096980000000000220020c015c4a6be010e21657068fc2e6a9d02b27ebe4d490a25846f7237f104d1a3cd20256d29010000001600143ca33c2e4446f4a305f23c80df8ad1afdcf652f900000000"
+	fundingTx, err := txFromHex(fundingTxHex)
+	if err != nil {
+		panic(err)
+	}
+
+	prevOut := &wire.OutPoint{
+		Hash:  *fundingTx.Hash(),
+		Index: 0,
+	}
+
 	fundingTxIn := wire.NewTxIn(prevOut, nil, nil)
 
-	// // For each party, we'll create a distinct set of keys in order to
-	// // emulate the typical set up with live channels.
-	// var (
-	// 	aliceKeys []*btcec.PrivateKey
-	// 	bobKeys   []*btcec.PrivateKey
-	// )
-	// for i := 0; i < 5; i++ {
-	// 	key := make([]byte, len(testWalletPrivKey))
-	// 	copy(key[:], testWalletPrivKey[:])
-	// 	key[0] ^= byte(i + 1)
-
-	// 	aliceKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), key)
-	// 	aliceKeys = append(aliceKeys, aliceKey)
-
-	// 	key = make([]byte, len(bobsPrivKey))
-	// 	copy(key[:], bobsPrivKey)
-	// 	key[0] ^= byte(i + 1)
-
-	// 	bobKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), key)
-	// 	bobKeys = append(bobKeys, bobKey)
-	// }
-
-	// Generate random some keys that don't actually matter but need to be set.
+	//Generate random some keys that don't actually matter but need to be set.
 	var (
-		identityKey *btcec.PublicKey
+		aliceDummy1, aliceDummy2, bobDummy2, bobDummy1 *btcec.PrivateKey
 	)
-	generateKeys := []**btcec.PublicKey{
-		&identityKey,
+	generateKeys := []**btcec.PrivateKey{
+		&aliceDummy1, &aliceDummy2, &bobDummy1, &bobDummy2,
 	}
 	for _, keyRef := range generateKeys {
 		privkey, err := btcec.NewPrivateKey(btcec.S256())
 		if err != nil {
 			panic(err)
 		}
-		*keyRef = privkey.PubKey()
+		*keyRef = privkey
 	}
+
+	// alice = remote, bob = local
+
+	priv := func(v string) *btcec.PrivateKey {
+		k, err := privkeyFromHex(v)
+		if err != nil {
+			panic(err)
+		}
+		return k
+	}
+
+	remoteFundingPrivkey := priv("1552dfba4f6cf29a62a0af13c8d6981d36d0ef8d61ba10fb0fe90da7634d7e1301")
+	remoteRevocationBasepointSecret := priv("222222222222222222222222222222222222222222222222222222222222222201")
+	remotePaymentBasepointSecret := priv("444444444444444444444444444444444444444444444444444444444444444401")
+	localPaymentBasepointSecret := priv("111111111111111111111111111111111111111111111111111111111111111101")
+	localDelayedPaymentBasepointSecret := priv("333333333333333333333333333333333333333333333333333333333333333301")
+	localFundingPrivkey := priv("30ff4956bbdd3222d44cc5e8a1261dab1e07957bdac5ae88fe3261ef321f374901")
+
+	//remotePrivkey := priv("8deba327a7cc6d638ab0eb025770400a6184afcba6713c210d8d10e199ff2fda01")
+	// localDelayedPrivkey := priv("adf3464ce9c2f230fd2582fda4c6965e4993ca5524e8c9580e3df0cf226981ad01")
 
 	aliceCfg := channeldb.ChannelConfig{
 		ChannelConstraints: channeldb.ChannelConstraints{
@@ -1466,19 +1489,19 @@ func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelTyp
 			CsvDelay:         uint16(csvTimeoutAlice),
 		},
 		MultiSigKey: keychain.KeyDescriptor{
-			PubKey: tc.remoteFundingPubKey,
+			PubKey: remoteFundingPrivkey.PubKey(),
 		},
 		PaymentBasePoint: keychain.KeyDescriptor{
-			PubKey: tc.remotePaymentBasePoint,
+			PubKey: remotePaymentBasepointSecret.PubKey(),
 		},
 		HtlcBasePoint: keychain.KeyDescriptor{
-			PubKey: tc.remotePaymentBasePoint,
+			PubKey: remotePaymentBasepointSecret.PubKey(),
 		},
 		DelayBasePoint: keychain.KeyDescriptor{
-			PubKey: localDelayPubKey, // todo: use other key?
+			PubKey: aliceDummy1.PubKey(),
 		},
 		RevocationBasePoint: keychain.KeyDescriptor{
-			PubKey: localDelayPubKey, // todo: use other key?
+			PubKey: remoteRevocationBasepointSecret.PubKey(),
 		},
 	}
 	bobCfg := channeldb.ChannelConfig{
@@ -1491,46 +1514,42 @@ func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelTyp
 			CsvDelay:         uint16(csvTimeoutBob),
 		},
 		MultiSigKey: keychain.KeyDescriptor{
-			PubKey: tc.localFundingPubKey,
+			PubKey: localFundingPrivkey.PubKey(),
 		},
 		PaymentBasePoint: keychain.KeyDescriptor{
-			PubKey: tc.localPaymentBasePoint,
+			PubKey: localPaymentBasepointSecret.PubKey(),
 		},
 		HtlcBasePoint: keychain.KeyDescriptor{
-			PubKey: tc.localPaymentBasePoint,
+			PubKey: localPaymentBasepointSecret.PubKey(),
 		},
 		DelayBasePoint: keychain.KeyDescriptor{
-			PubKey: localDelayPubKey,
+			PubKey: localDelayedPaymentBasepointSecret.PubKey(),
 		},
 		RevocationBasePoint: keychain.KeyDescriptor{
-			PubKey: localDelayPubKey, // todo: use other key?
+			PubKey: bobDummy1.PubKey(),
 		},
 	}
 
-	bobRoot, err := chainhash.NewHash(localPerCommitmentSecret)
+	localPerCommitSecret, err := lntypes.MakeHashFromStr("1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100")
 	if err != nil {
-		return nil, nil, nil, err
+		panic(err)
 	}
-	bobPreimageProducer := shachain.NewRevocationProducer(*bobRoot)
-	bobFirstRevoke, err := bobPreimageProducer.AtIndex(0)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	bobCommitPoint := input.ComputeCommitmentPoint(bobFirstRevoke[:])
 
-	aliceRoot, err := chainhash.NewHash(localPerCommitmentSecret.Serialize())
-	if err != nil {
-		return nil, nil, nil, err
+	alicePreimageProducer := &mockProducer{
+		secret: chainhash.Hash(localPerCommitSecret),
 	}
-	alicePreimageProducer := shachain.NewRevocationProducer(*aliceRoot)
-	aliceFirstRevoke, err := alicePreimageProducer.AtIndex(0)
-	if err != nil {
-		return nil, nil, nil, err
+	aliceCommitPoint := input.ComputeCommitmentPoint(localPerCommitSecret[:])
+
+	bobPreimageProducer := &mockProducer{
+		secret: chainhash.Hash(localPerCommitSecret),
 	}
-	aliceCommitPoint := input.ComputeCommitmentPoint(aliceFirstRevoke[:])
+	bobCommitPoint := input.ComputeCommitmentPoint(localPerCommitSecret[:])
+
+	fmt.Printf("%x\n", aliceCommitPoint.SerializeCompressed())
 
 	aliceCommitTx, bobCommitTx, err := CreateCommitmentTxns(
-		channelBal, channelBal, &aliceCfg, &bobCfg, aliceCommitPoint,
+		aliceBalance, bobBalance,
+		&aliceCfg, &bobCfg, aliceCommitPoint,
 		bobCommitPoint, *fundingTxIn, chanType,
 	)
 	if err != nil {
@@ -1557,31 +1576,26 @@ func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelTyp
 		return nil, nil, nil, err
 	}
 
-	feePerKw := chainfee.SatPerKWeight(253)
+	feePerKw := chainfee.SatPerKWeight(647)
 	commitFee := calcStaticFee(chanType, 0)
 	var anchorAmt btcutil.Amount
 	if chanType.HasAnchors() {
 		anchorAmt += 2 * anchorSize
 	}
 
-	aliceBalance := lnwire.NewMSatFromSatoshis(
-		channelBal - commitFee - anchorAmt,
-	)
-	bobBalance := lnwire.NewMSatFromSatoshis(channelBal)
-
 	aliceCommit := channeldb.ChannelCommitment{
-		CommitHeight:  0,
-		LocalBalance:  aliceBalance,
-		RemoteBalance: bobBalance,
+		CommitHeight:  42,
+		LocalBalance:  lnwire.NewMSatFromSatoshis(aliceBalance),
+		RemoteBalance: lnwire.NewMSatFromSatoshis(bobBalance),
 		CommitFee:     commitFee,
 		FeePerKw:      btcutil.Amount(feePerKw),
 		CommitTx:      aliceCommitTx,
 		CommitSig:     testSigBytes,
 	}
 	bobCommit := channeldb.ChannelCommitment{
-		CommitHeight:  0,
-		LocalBalance:  bobBalance,
-		RemoteBalance: aliceBalance,
+		CommitHeight:  42,
+		LocalBalance:  lnwire.NewMSatFromSatoshis(bobBalance),
+		RemoteBalance: lnwire.NewMSatFromSatoshis(aliceBalance),
 		CommitFee:     commitFee,
 		FeePerKw:      btcutil.Amount(feePerKw),
 		CommitTx:      bobCommitTx,
@@ -1600,7 +1614,7 @@ func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelTyp
 	aliceChannelState := &channeldb.OpenChannel{
 		LocalChanCfg:            aliceCfg,
 		RemoteChanCfg:           bobCfg,
-		IdentityPub:             localPerCommitmentSecret.PubKey(),
+		IdentityPub:             aliceDummy2.PubKey(),
 		FundingOutpoint:         *prevOut,
 		ShortChannelID:          shortChanID,
 		ChanType:                chanType,
@@ -1618,7 +1632,7 @@ func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelTyp
 	bobChannelState := &channeldb.OpenChannel{
 		LocalChanCfg:            bobCfg,
 		RemoteChanCfg:           aliceCfg,
-		IdentityPub:             localPerCommitmentSecret.PubKey(),
+		IdentityPub:             bobDummy2.PubKey(),
 		FundingOutpoint:         *prevOut,
 		ShortChannelID:          shortChanID,
 		ChanType:                chanType,
@@ -1634,11 +1648,13 @@ func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelTyp
 	}
 
 	bobSigner := &input.MockSigner{Privkeys: []*btcec.PrivateKey{
-		localFundingPrivKey, localPaymentPrivKey, localDelayPrivKey, localBasePointSecret,
+		localPaymentBasepointSecret, localDelayedPaymentBasepointSecret,
+		localFundingPrivkey, bobDummy1, bobDummy2,
 	}}
 
 	aliceSigner := &input.MockSigner{Privkeys: []*btcec.PrivateKey{
-		remoteFundingPrivKey, remotePrivKey,
+		remoteFundingPrivkey, remoteRevocationBasepointSecret,
+		remotePaymentBasepointSecret, aliceDummy1, aliceDummy2,
 	}}
 
 	// TODO(roasbeef): make mock version of pre-image store
@@ -1664,13 +1680,13 @@ func createTestChannelsForVectors(tc *testContext, chanType channeldb.ChannelTyp
 	bobPool.Start()
 
 	err = SetStateNumHint(
-		aliceCommitTx, 0, obfuscator,
+		aliceCommitTx, 42, obfuscator,
 	)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	err = SetStateNumHint(
-		bobCommitTx, 0, obfuscator,
+		bobCommitTx, 42, obfuscator,
 	)
 	if err != nil {
 		return nil, nil, nil, err
