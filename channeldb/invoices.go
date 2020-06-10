@@ -129,6 +129,9 @@ const (
 	expiryHeightType tlv.Type = 13
 	htlcStateType    tlv.Type = 15
 	mppTotalAmtType  tlv.Type = 17
+	htlcAMPType      tlv.Type = 19
+	htlcHashType     tlv.Type = 21
+	htlcPreimageType tlv.Type = 23
 
 	// A set of tlv type definitions used to serialize invoice bodiees.
 	//
@@ -401,6 +404,32 @@ type InvoiceHTLC struct {
 	// CustomRecords contains the custom key/value pairs that accompanied
 	// the htlc.
 	CustomRecords record.CustomSet
+
+	// AMP is a copy of the AMP record presented in the onion payload
+	// containing the information necessary to correlate and settle a
+	// spontaneous HTLC set. Newly accepted legacy keysend payments will
+	// also have this field set as we automatically promote them into an AMP
+	// payment for internal processing.
+	//
+	// NOTE: This value will only be set for AMP HTLCs.
+	AMP *record.AMP
+
+	// Hash is an HTLC-level payment hash that is stored only for AMP
+	// payments. This is done because an AMP HTLC will carry a different
+	// payment hash from the invoice it might be satisfying, so we track the
+	// payment hashes individually to able to compute whether or not the
+	// reconstructred preimage correctly matches the HTLC's hash.
+	//
+	// NOTE: This value will only be set for AMP HTLCs.
+	Hash *lntypes.Hash
+
+	// Preimage is an HTLC-level preimage that satisfies the AMP HTLC's
+	// Hash. The preimage can be derived either from secret share
+	// reconstruction of the shares in the AMP payload, for transmitted
+	// direcetly in the onion payload for the case of legacy keysend.
+	//
+	// NOTE: This value will only be set for AMP HTLCs.
+	Preimage *lntypes.Preimage
 }
 
 // HtlcAcceptDesc describes the details of a newly accepted htlc.
@@ -421,6 +450,32 @@ type HtlcAcceptDesc struct {
 	// CustomRecords contains the custom key/value pairs that accompanied
 	// the htlc.
 	CustomRecords record.CustomSet
+
+	// AMP is a copy of the AMP record presented in the onion payload
+	// containing the information necessary to correlate and settle a
+	// spontaneous HTLC set. Newly accepted legacy keysend payments will
+	// also have this field set as we automatically promote them into an AMP
+	// payment for internal processing.
+	//
+	// NOTE: This value will only be set for AMP HTLCs.
+	AMP *record.AMP
+
+	// Hash is an HTLC-level payment hash that is stored only for AMP
+	// payments. This is done because an AMP HTLC will carry a different
+	// payment hash from the invoice it might be satisfying, so we track the
+	// payment hashes individually to able to compute whether or not the
+	// reconstructred preimage correctly matches the HTLC's hash.
+	//
+	// NOTE: This value will only be set for AMP HTLCs.
+	Hash *lntypes.Hash
+
+	// Preimage is an HTLC-level preimage that satisfies the AMP HTLC's
+	// Hash. The preimage can be derived either from secret share
+	// reconstruction of the shares in the AMP payload, for transmitted
+	// direcetly in the onion payload for the case of legacy keysend.
+	//
+	// NOTE: This value will only be set for AMP HTLCs.
+	Preimage *lntypes.Preimage
 }
 
 // InvoiceUpdateDesc describes the changes that should be applied to the
@@ -1199,6 +1254,28 @@ func serializeHtlcs(w io.Writer, htlcs map[CircuitKey]*InvoiceHTLC) error {
 			tlv.MakePrimitiveRecord(mppTotalAmtType, &mppTotalAmt),
 		)
 
+		if htlc.AMP != nil {
+			setIDRecord := tlv.MakeDynamicRecord(
+				htlcAMPType, htlc.AMP, htlc.AMP.PayloadSize,
+				record.AMPEncoder, record.AMPDecoder,
+			)
+			records = append(records, setIDRecord)
+		}
+		if htlc.Hash != nil {
+			hash32 := [32]byte(*htlc.Hash)
+			hashRecord := tlv.MakePrimitiveRecord(
+				htlcHashType, &hash32,
+			)
+			records = append(records, hashRecord)
+		}
+		if htlc.Preimage != nil {
+			preimage32 := [32]byte(*htlc.Preimage)
+			preimageRecord := tlv.MakePrimitiveRecord(
+				htlcPreimageType, &preimage32,
+			)
+			records = append(records, preimageRecord)
+		}
+
 		// Convert the custom records to tlv.Record types that are ready
 		// for serialization.
 		customRecords := tlv.MapToRecords(htlc.CustomRecords)
@@ -1368,6 +1445,9 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 			state                   uint8
 			acceptTime, resolveTime uint64
 			amt, mppTotalAmt        uint64
+			amp                     = &record.AMP{}
+			hash32                  = &[32]byte{}
+			preimage32              = &[32]byte{}
 		)
 		tlvStream, err := tlv.NewStream(
 			tlv.MakePrimitiveRecord(chanIDType, &chanID),
@@ -1381,6 +1461,12 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 			tlv.MakePrimitiveRecord(expiryHeightType, &htlc.Expiry),
 			tlv.MakePrimitiveRecord(htlcStateType, &state),
 			tlv.MakePrimitiveRecord(mppTotalAmtType, &mppTotalAmt),
+			tlv.MakeDynamicRecord(
+				htlcAMPType, amp, amp.PayloadSize,
+				record.AMPEncoder, record.AMPDecoder,
+			),
+			tlv.MakePrimitiveRecord(htlcHashType, hash32),
+			tlv.MakePrimitiveRecord(htlcPreimageType, preimage32),
 		)
 		if err != nil {
 			return nil, err
@@ -1391,12 +1477,31 @@ func deserializeHtlcs(r io.Reader) (map[CircuitKey]*InvoiceHTLC, error) {
 			return nil, err
 		}
 
+		if _, ok := parsedTypes[htlcAMPType]; !ok {
+			amp = nil
+		}
+
+		var preimage *lntypes.Preimage
+		if _, ok := parsedTypes[htlcPreimageType]; ok {
+			pimg := lntypes.Preimage(*preimage32)
+			preimage = &pimg
+		}
+
+		var hash *lntypes.Hash
+		if _, ok := parsedTypes[htlcHashType]; ok {
+			h := lntypes.Hash(*hash32)
+			hash = &h
+		}
+
 		key.ChanID = lnwire.NewShortChanIDFromInt(chanID)
 		htlc.AcceptTime = time.Unix(0, int64(acceptTime))
 		htlc.ResolveTime = time.Unix(0, int64(resolveTime))
 		htlc.State = HtlcState(state)
 		htlc.Amt = lnwire.MilliSatoshi(amt)
 		htlc.MppTotalAmt = lnwire.MilliSatoshi(mppTotalAmt)
+		htlc.AMP = amp
+		htlc.Hash = hash
+		htlc.Preimage = preimage
 
 		// Reconstruct the custom records fields from the parsed types
 		// map return from the tlv parser.
@@ -1423,6 +1528,15 @@ func copyInvoiceHTLC(src *InvoiceHTLC) *InvoiceHTLC {
 	result.CustomRecords = make(record.CustomSet)
 	for k, v := range src.CustomRecords {
 		result.CustomRecords[k] = v
+	}
+
+	if src.Hash != nil {
+		hash := *src.Hash
+		result.Hash = &hash
+	}
+	if src.Preimage != nil {
+		preimage := *src.Preimage
+		result.Preimage = &preimage
 	}
 
 	return &result
@@ -1525,6 +1639,9 @@ func (d *DB) updateInvoice(hash lntypes.Hash, invoices, settleIndex kvdb.RwBucke
 			AcceptTime:    now,
 			State:         HtlcStateAccepted,
 			CustomRecords: htlcUpdate.CustomRecords,
+			AMP:           htlcUpdate.AMP,
+			Hash:          htlcUpdate.Hash,
+			Preimage:      htlcUpdate.Preimage,
 		}
 
 		invoice.Htlcs[key] = htlc

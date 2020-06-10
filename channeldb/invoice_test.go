@@ -1134,6 +1134,74 @@ func TestCustomRecords(t *testing.T) {
 	)
 }
 
+// TestInvoiceHtlcAMPFields asserts that the set id and preimage fields are
+// properly recorded when updating an invoice.
+func TestInvoiceHtlcAMPFields(t *testing.T) {
+	t.Run("amp", func(t *testing.T) {
+		testInvoiceHtlcAMPFields(t, true)
+	})
+	t.Run("no amp", func(t *testing.T) {
+		testInvoiceHtlcAMPFields(t, false)
+	})
+}
+
+func testInvoiceHtlcAMPFields(t *testing.T, isAMP bool) {
+	db, cleanUp, err := makeTestDB()
+	defer cleanUp()
+	require.Nil(t, err)
+
+	testInvoice, err := randInvoice(1000)
+	require.Nil(t, err)
+
+	payHash := testInvoice.Terms.PaymentPreimage.Hash()
+	_, err = db.AddInvoice(testInvoice, payHash)
+	require.Nil(t, err)
+
+	// Accept an htlc with custom records on this invoice.
+	key := CircuitKey{ChanID: lnwire.NewShortChanIDFromInt(1), HtlcID: 4}
+	records := make(map[uint64][]byte)
+
+	var (
+		amp      *record.AMP
+		preimage *lntypes.Preimage
+		hash     *lntypes.Hash
+	)
+	if isAMP {
+		amp = record.NewAMP([32]byte{1}, [32]byte{2}, 3)
+		preimage = &lntypes.Preimage{4}
+		h := preimage.Hash()
+		hash = &h
+	}
+
+	ref := InvoiceRefByHash(payHash)
+	_, err = db.UpdateInvoice(ref,
+		func(invoice *Invoice) (*InvoiceUpdateDesc, error) {
+			return &InvoiceUpdateDesc{
+				AddHtlcs: map[CircuitKey]*HtlcAcceptDesc{
+					key: {
+						Amt:           500,
+						AMP:           amp,
+						Preimage:      preimage,
+						Hash:          hash,
+						CustomRecords: records,
+					},
+				},
+			}, nil
+		},
+	)
+	require.Nil(t, err)
+
+	// Retrieve the invoice from that database and verify that the AMP
+	// fields are as expected.
+	dbInvoice, err := db.LookupInvoice(ref)
+	require.Nil(t, err)
+
+	require.Equal(t, 1, len(dbInvoice.Htlcs))
+	require.Equal(t, amp, dbInvoice.Htlcs[key].AMP)
+	require.Equal(t, preimage, dbInvoice.Htlcs[key].Preimage)
+	require.Equal(t, hash, dbInvoice.Htlcs[key].Hash)
+}
+
 // TestInvoiceRef asserts that the proper identifiers are returned from an
 // InvoiceRef depending on the constructor used.
 func TestInvoiceRef(t *testing.T) {
