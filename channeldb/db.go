@@ -158,6 +158,12 @@ var (
 			number:    16,
 			migration: migration16.MigrateSequenceIndex,
 		},
+		{
+			// Initialize set id index so that invoices can be
+			// queried by individual htlc sets.
+			number:    17,
+			migration: mig.CreateTLB(setIDIndexBucket),
+		},
 	}
 
 	// Big endian is the preferred byte order, due to cursor scans over
@@ -271,6 +277,7 @@ var topLevelBuckets = [][]byte{
 	fwdPackagesKey,
 	invoiceBucket,
 	payAddrIndexBucket,
+	setIDIndexBucket,
 	paymentsIndexBucket,
 	nodeInfoBucket,
 	nodeBucket,

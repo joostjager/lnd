@@ -1207,18 +1207,28 @@ func testInvoiceHtlcAMPFields(t *testing.T, isAMP bool) {
 func TestInvoiceRef(t *testing.T) {
 	payHash := lntypes.Hash{0x01}
 	payAddr := [32]byte{0x02}
+	setID := [32]byte{0x03}
 
 	// An InvoiceRef by hash should return the provided hash and a nil
 	// payment addr.
 	refByHash := InvoiceRefByHash(payHash)
 	require.Equal(t, payHash, refByHash.PayHash())
 	require.Equal(t, (*[32]byte)(nil), refByHash.PayAddr())
+	require.Equal(t, (*[32]byte)(nil), refByHash.SetID())
 
 	// An InvoiceRef by hash and addr should return the payment hash and
 	// payment addr passed to the constructor.
 	refByHashAndAddr := InvoiceRefByHashAndAddr(payHash, payAddr)
 	require.Equal(t, payHash, refByHashAndAddr.PayHash())
 	require.Equal(t, &payAddr, refByHashAndAddr.PayAddr())
+	require.Equal(t, (*[32]byte)(nil), refByHashAndAddr.SetID())
+
+	// An InvoiceRef by set id should return an empty pay hash, a nil pay
+	// addr, and a reference to the given set id.
+	refBySetID := InvoiceRefBySetID(setID)
+	require.Equal(t, lntypes.Hash{}, refBySetID.PayHash())
+	require.Equal(t, (*[32]byte)(nil), refBySetID.PayAddr())
+	require.Equal(t, &setID, refBySetID.SetID())
 }
 
 // TestHTLCSet asserts that HTLCSet returns the proper set of accepted HTLCs
@@ -1322,4 +1332,152 @@ func TestAddInvoiceWithHTLCs(t *testing.T) {
 	payHash := testInvoice.Terms.PaymentPreimage.Hash()
 	_, err = db.AddInvoice(testInvoice, payHash)
 	require.Equal(t, ErrInvoiceHasHtlcs, err)
+}
+
+// TestSetIDIndex asserts that the set id index properly adds new invoices as we
+// accept HTLCs, that they can be queried by their set id after accepting, and
+// that invoices with duplicate set ids are disallowed.
+func TestSetIDIndex(t *testing.T) {
+	db, cleanUp, err := makeTestDB()
+	defer cleanUp()
+	require.Nil(t, err)
+
+	// We'll start out by creating an invoice and writing it to the DB.
+	amt := lnwire.NewMSatFromSatoshis(1000)
+	invoice, err := randInvoice(amt)
+	require.Nil(t, err)
+
+	preimage := *invoice.Terms.PaymentPreimage
+	payHash := preimage.Hash()
+	_, err = db.AddInvoice(invoice, payHash)
+	require.Nil(t, err)
+
+	setID := &[32]byte{1}
+
+	// Update the invoice with an accepted HTLC that also accepts the
+	// invoice.
+	ref := InvoiceRefByHashAndAddr(payHash, invoice.Terms.PaymentAddr)
+	dbInvoice, err := db.UpdateInvoice(ref, updateAcceptAMPHtlc(0, amt, setID, true))
+	require.Nil(t, err)
+
+	// We'll update what we expect the accepted invoice to be so that our
+	// comparison below has the correct assumption.
+	invoice.State = ContractAccepted
+	invoice.AmtPaid = amt
+	invoice.SettleDate = dbInvoice.SettleDate
+	invoice.Htlcs = map[CircuitKey]*InvoiceHTLC{
+		{HtlcID: 0}: makeAMPInvoiceHTLC(amt, *setID, preimage),
+	}
+
+	// We should get back the exact same invoice that we just inserted.
+	require.Equal(t, invoice, dbInvoice)
+
+	// Now lookup the invoice by set id and see that we get the same one.
+	refBySetID := InvoiceRefBySetID(*setID)
+	dbInvoiceBySetID, err := db.LookupInvoice(refBySetID)
+	require.Nil(t, err)
+	require.Equal(t, invoice, &dbInvoiceBySetID)
+
+	// Trying to accept an HTLC to a different invoice, but using the same
+	// set id should fail.
+	invoice2, err := randInvoice(amt)
+	require.Nil(t, err)
+
+	payHash2 := invoice2.Terms.PaymentPreimage.Hash()
+	_, err = db.AddInvoice(invoice2, payHash2)
+	require.Nil(t, err)
+
+	ref2 := InvoiceRefByHashAndAddr(payHash2, invoice2.Terms.PaymentAddr)
+	_, err = db.UpdateInvoice(ref2, updateAcceptAMPHtlc(0, amt, setID, true))
+	require.Equal(t, ErrDuplicateSetID(*setID), err)
+
+	// Now, begin constructing a second htlc set under a different set id.
+	// This set will contain two distinct HTLCs.
+	setID2 := &[32]byte{2}
+
+	_, err = db.UpdateInvoice(ref, updateAcceptAMPHtlc(1, amt, setID2, false))
+	require.Nil(t, err)
+	dbInvoice, err = db.UpdateInvoice(ref, updateAcceptAMPHtlc(2, amt, setID2, false))
+	require.Nil(t, err)
+
+	// We'll update what we expect the settle invoice to be so that our
+	// comparison below has the correct assumption.
+	invoice.State = ContractAccepted
+	invoice.AmtPaid += 2 * amt
+	invoice.SettleDate = dbInvoice.SettleDate
+	invoice.Htlcs = map[CircuitKey]*InvoiceHTLC{
+		{HtlcID: 0}: makeAMPInvoiceHTLC(amt, *setID, preimage),
+		{HtlcID: 1}: makeAMPInvoiceHTLC(amt, *setID2, preimage),
+		{HtlcID: 2}: makeAMPInvoiceHTLC(amt, *setID2, preimage),
+	}
+
+	// We should get back the exact same invoice that we just inserted.
+	require.Equal(t, invoice, dbInvoice)
+
+	// Now lookup the invoice by second set id and see that we get the same
+	// index, including the htlcs under the first set id.
+	refBySetID = InvoiceRefBySetID(*setID2)
+	dbInvoiceBySetID, err = db.LookupInvoice(refBySetID)
+	require.Nil(t, err)
+	require.Equal(t, invoice, &dbInvoiceBySetID)
+
+	// Lastly, querying for an unknown set id should fail.
+	refUnknownSetID := InvoiceRefBySetID([32]byte{})
+	_, err = db.LookupInvoice(refUnknownSetID)
+	require.Equal(t, ErrInvoiceNotFound, err)
+}
+
+func makeAMPInvoiceHTLC(amt lnwire.MilliSatoshi, setID [32]byte,
+	preimage lntypes.Preimage) *InvoiceHTLC {
+
+	payHash := preimage.Hash()
+
+	return &InvoiceHTLC{
+		Amt:           amt,
+		AcceptTime:    time.Unix(1, 0),
+		ResolveTime:   time.Time{},
+		State:         HtlcStateAccepted,
+		CustomRecords: make(record.CustomSet),
+		AMP:           record.NewAMP([32]byte{}, setID, 0),
+		Hash:          &payHash,
+		Preimage:      &preimage,
+	}
+}
+
+// updateAcceptAMPHtlc returns an invoice update callback that, when called,
+// settles the invoice with the given amount.
+func updateAcceptAMPHtlc(id uint64, amt lnwire.MilliSatoshi,
+	setID *[32]byte, accept bool) InvoiceUpdateCallback {
+
+	return func(invoice *Invoice) (*InvoiceUpdateDesc, error) {
+		if invoice.State == ContractSettled {
+			return nil, ErrInvoiceAlreadySettled
+		}
+
+		noRecords := make(record.CustomSet)
+
+		var state *InvoiceStateUpdateDesc
+		if accept {
+			state = &InvoiceStateUpdateDesc{
+				NewState: ContractAccepted,
+				SetID:    setID,
+			}
+		}
+
+		hash := invoice.Terms.PaymentPreimage.Hash()
+		update := &InvoiceUpdateDesc{
+			State: state,
+			AddHtlcs: map[CircuitKey]*HtlcAcceptDesc{
+				{HtlcID: id}: {
+					Amt:           amt,
+					CustomRecords: noRecords,
+					AMP:           record.NewAMP([32]byte{}, *setID, 0),
+					Hash:          &hash,
+					Preimage:      invoice.Terms.PaymentPreimage,
+				},
+			},
+		}
+
+		return update, nil
+	}
 }
