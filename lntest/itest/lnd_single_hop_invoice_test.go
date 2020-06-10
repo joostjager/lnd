@@ -16,6 +16,7 @@ import (
 	"github.com/lightningnetwork/lnd/lntest/wait"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/record"
+	"github.com/stretchr/testify/require"
 )
 
 func testSingleHopInvoice(net *lntest.NetworkHarness, t *harnessTest) {
@@ -163,6 +164,25 @@ func testSingleHopInvoice(net *lntest.NetworkHarness, t *harnessTest) {
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
+
+	// Assert that the invoice has the proper AMP fields set, since the
+	// legacy keysend payment should have been promoted into an AMP payment
+	// internally.
+	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+	keysendInvoice, err := net.Bob.LookupInvoice(
+		ctxt, &lnrpc.PaymentHash{
+			RHash: keySendHash[:],
+		},
+	)
+	require.NoError(t.t, err)
+	require.Equal(t.t, 1, len(keysendInvoice.Htlcs))
+	htlc := keysendInvoice.Htlcs[0]
+	require.NotNil(t.t, htlc.Amp)
+	require.Equal(t.t, keySendPreimage[:], htlc.Amp.RootShare)
+	require.Equal(t.t, 32, len(htlc.Amp.SetId))
+	require.Equal(t.t, uint32(0), htlc.Amp.ChildIndex)
+	require.Equal(t.t, keySendPreimage[:], htlc.Amp.Preimage)
+	require.Equal(t.t, keySendHash[:], htlc.Amp.Hash)
 
 	ctxt, _ = context.WithTimeout(ctxb, channelCloseTimeout)
 	closeChannelAndAssert(ctxt, t, net, net.Alice, chanPoint, false)
