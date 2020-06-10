@@ -728,6 +728,7 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 		finalCltvRejectDelta: i.cfg.FinalCltvRejectDelta,
 		customRecords:        payload.CustomRecords(),
 		mpp:                  payload.MultiPath(),
+		amp:                  payload.AMPRecord(),
 	}
 
 	// Process keysend if present. Do this outside of the lock, because
