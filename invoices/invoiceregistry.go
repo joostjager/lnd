@@ -1,6 +1,7 @@
 package invoices
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"sync"
@@ -637,8 +638,10 @@ func (i *InvoiceRegistry) cancelSingleHtlc(invoiceRef channeldb.InvoiceRef,
 }
 
 // processKeySend just-in-time inserts an invoice if this htlc is a keysend
-// htlc.
-func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx) error {
+// htlc. If the preliminary checks succeed, the passed context will be modified
+// to resemble an AMP payment so that legacy keysend can be processed similarly
+// to AMP payments when updating the target invoice.
+func (i *InvoiceRegistry) processKeySend(ctx *invoiceUpdateCtx) error {
 
 	// Retrieve keysend record if present.
 	preimageSlice, ok := ctx.customRecords[record.KeySendType]
@@ -680,6 +683,26 @@ func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx) error {
 		return errors.New("final expiry too soon")
 	}
 
+	// Generate a random payment address and set id for this invoice. The
+	// invoice database is indexed by payment address, so we must ensure
+	// that the generated keysend invoices also have a unique identifier,
+	// otherwise insertion will fail on the second attempt to insert a
+	// keysend invoice or if this context is being replayed after a restart.
+	//
+	// If this is a replay we may discard them and extract the values
+	// generated previously, but we can't be sure it's a replayed htlc until
+	// we try to insert.
+	var (
+		payAddr [32]byte
+		setID   [32]byte
+	)
+	if _, err := rand.Read(payAddr[:]); err != nil {
+		return err
+	}
+	if _, err := rand.Read(setID[:]); err != nil {
+		return err
+	}
+
 	// Create placeholder invoice.
 	invoice := &channeldb.Invoice{
 		CreationDate: i.cfg.Clock.Now(),
@@ -687,6 +710,7 @@ func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx) error {
 			FinalCltvDelta:  finalCltvDelta,
 			Value:           amt,
 			PaymentPreimage: &preimage,
+			PaymentAddr:     payAddr,
 			Features:        features,
 		},
 	}
@@ -694,9 +718,36 @@ func (i *InvoiceRegistry) processKeySend(ctx invoiceUpdateCtx) error {
 	// Insert invoice into database. Ignore duplicates, because this
 	// may be a replay.
 	_, err = i.AddInvoice(invoice, ctx.hash)
-	if err != nil && err != channeldb.ErrDuplicateInvoice {
+	switch {
+
+	// An invoice already exists with this payment hash, more than likely
+	// indicating that this HTLC is being replayed. Extract the random
+	// payment address and set id generated before.
+	case err == channeldb.ErrDuplicateInvoice:
+		dbInvoice, err := i.LookupInvoice(ctx.hash)
+		if err != nil {
+			return err
+		}
+
+		// Extract the payment address, which was generated at random on
+		// the initial pass.
+		payAddr = dbInvoice.Terms.PaymentAddr
+
+		// If the HTLC got added to the invoice, we'll also extract the
+		// set id we generated previously. If one doesn't exist we'll
+		// assign this HTLC the random set id generated before.
+		htlc, ok := dbInvoice.Htlcs[ctx.circuitKey]
+		if ok && htlc.AMP != nil {
+			setID = htlc.AMP.SetID()
+		}
+
+	case err != nil:
 		return err
 	}
+
+	ctx.mpp = record.NewMPP(amt, payAddr)
+	ctx.amp = record.NewAMP(preimage, setID, 0)
+	ctx.legacyKeysend = true
 
 	return nil
 }
@@ -739,7 +790,7 @@ func (i *InvoiceRegistry) NotifyExitHopHtlc(rHash lntypes.Hash,
 	// AddInvoice obtains its own lock. This is no problem, because the
 	// operation is idempotent.
 	if i.cfg.AcceptKeySend {
-		err := i.processKeySend(ctx)
+		err := i.processKeySend(&ctx)
 		if err != nil {
 			ctx.log(fmt.Sprintf("keysend error: %v", err))
 

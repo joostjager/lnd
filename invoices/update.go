@@ -21,6 +21,7 @@ type invoiceUpdateCtx struct {
 	customRecords        record.CustomSet
 	mpp                  *record.MPP
 	amp                  *record.AMP
+	legacyKeysend        bool
 }
 
 // invoiceRef returns an identifier that can be used to lookup or update the
@@ -40,6 +41,21 @@ func (i invoiceUpdateCtx) setID() *[32]byte {
 	if i.amp != nil {
 		setID := i.amp.SetID()
 		return &setID
+	}
+	return nil
+}
+
+// keysendPreimage returns the payment preimage provided in an legacy keysend
+// onion packet. This method provides a way to extract the preimage from the
+// artificial AMP payload, since we cannot apply the regular secret share
+// reconstruction procedure. Since there can only be one HTLC in a legacy
+// keysend, the root share here would be a valid 1-of-1 share of the root seed
+// in AMP. However, the preimage DOES NOT commit to the child index, so we just
+// return it directly and skip the extra layer of hashing.
+func (i invoiceUpdateCtx) keysendPreimage() *lntypes.Preimage {
+	if i.legacyKeysend {
+		preimage := lntypes.Preimage(i.amp.RootShare())
+		return &preimage
 	}
 	return nil
 }
@@ -93,9 +109,14 @@ func updateInvoice(ctx *invoiceUpdateCtx, inv *channeldb.Invoice) (
 			return nil, ctx.acceptRes(resultReplayToAccepted), nil
 
 		case channeldb.HtlcStateSettled:
+			keysendPreimage := ctx.keysendPreimage()
+			preimage := *inv.Terms.PaymentPreimage
+			if keysendPreimage != nil {
+				preimage = *keysendPreimage
+			}
+
 			return nil, ctx.settleRes(
-				*inv.Terms.PaymentPreimage,
-				ResultReplayToSettled,
+				preimage, ResultReplayToSettled,
 			), nil
 
 		default:
@@ -117,6 +138,7 @@ func updateMpp(ctx *invoiceUpdateCtx,
 	HtlcResolution, error) {
 
 	setID := ctx.setID()
+	keysendPreimage := ctx.keysendPreimage()
 
 	// Start building the accept descriptor.
 	acceptDesc := &channeldb.HtlcAcceptDesc{
@@ -125,6 +147,11 @@ func updateMpp(ctx *invoiceUpdateCtx,
 		AcceptHeight:  ctx.currentHeight,
 		MppTotalAmt:   ctx.mpp.TotalMsat(),
 		CustomRecords: ctx.customRecords,
+	}
+	if ctx.amp != nil {
+		acceptDesc.AMP = ctx.amp
+		acceptDesc.Hash = &ctx.hash
+		acceptDesc.Preimage = keysendPreimage
 	}
 
 	// Only accept payments to open invoices. This behaviour differs from
@@ -205,12 +232,28 @@ func updateMpp(ctx *invoiceUpdateCtx,
 
 	update.State = &channeldb.InvoiceStateUpdateDesc{
 		NewState: channeldb.ContractSettled,
-		Preimage: inv.Terms.PaymentPreimage,
 		SetID:    setID,
 	}
 
+	// Determine the preiamge to return in our settle resolution. We'll also
+	// set the preimage on the state update descriptior to settle the HTLC
+	// set in the non-AMP case.
+	var preimage *lntypes.Preimage
+	switch {
+
+	// For legacy keysend, the preimage is taken from the onion payload.
+	case keysendPreimage != nil:
+		preimage = keysendPreimage
+
+	// For MPP payments, the the preimage is taken from the invoice. We'll
+	// also set the preimage field on the state update descriptor.
+	default:
+		preimage = inv.Terms.PaymentPreimage
+		update.State.Preimage = inv.Terms.PaymentPreimage
+	}
+
 	return &update, ctx.settleRes(
-		*inv.Terms.PaymentPreimage, ResultSettled,
+		*preimage, ResultSettled,
 	), nil
 }
 
