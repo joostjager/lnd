@@ -474,6 +474,56 @@ func (i *Invoice) HTLCSet(setID *[32]byte) map[CircuitKey]*InvoiceHTLC {
 	return htlcSet
 }
 
+// GetSingleAcceptedHTLCSetID gets the set id of the set of accepted HTLCs. This
+// function assumes there is no more than a single accepted set at any given time.
+func (i *Invoice) GetSingleAcceptedHTLCSetID() (*[32]byte, error) {
+	var (
+		setID    *[32]byte
+		setIDSet bool
+	)
+	for _, htlc := range i.Htlcs {
+		// Only consider accepted mpp htlcs. It is possible that there
+		// are htlcs registered in the invoice database that previously
+		// timed out and are in the canceled state now.
+		if htlc.State != HtlcStateAccepted {
+			continue
+		}
+
+		var htlcSetID *[32]byte
+		if htlc.AMP != nil {
+			id := htlc.AMP.SetID()
+			htlcSetID = &id
+		}
+
+		if !setIDSet {
+			setID = htlcSetID
+			setIDSet = true
+			continue
+		}
+
+		switch {
+		case htlcSetID == nil && setID != nil:
+			fallthrough
+
+		case htlcSetID != nil && setID == nil:
+			return nil, errors.New("no single set")
+
+		case htlcSetID == nil && setID == nil:
+
+		default:
+			if *htlcSetID != *setID {
+				return nil, errors.New("no single set")
+			}
+		}
+	}
+
+	if !setIDSet {
+		return nil, errors.New("no single set")
+	}
+
+	return setID, nil
+}
+
 // HtlcState defines the states an htlc paying to an invoice can be in.
 type HtlcState uint8
 

@@ -658,20 +658,24 @@ func TestUnknownInvoice(t *testing.T) {
 // TestKeySend tests receiving a spontaneous payment with and without keysend
 // enabled.
 func TestKeySend(t *testing.T) {
+	t.Run("enabled hold settle", func(t *testing.T) {
+		testKeySend(t, true, time.Minute, false)
+	})
 	t.Run("enabled hold timeout", func(t *testing.T) {
-		testKeySend(t, true, time.Minute)
+		testKeySend(t, true, time.Minute, true)
 	})
 	t.Run("enabled", func(t *testing.T) {
-		testKeySend(t, true, 0)
+		testKeySend(t, true, 0, false)
 	})
 	t.Run("disabled", func(t *testing.T) {
-		testKeySend(t, false, 0)
+		testKeySend(t, false, 0, false)
 	})
 }
 
 // testKeySend is the inner test function that tests keysend for a particular
 // enabled state on the receiver end.
-func testKeySend(t *testing.T, keySendEnabled bool, holdDuration time.Duration) {
+func testKeySend(t *testing.T, keySendEnabled bool, holdDuration time.Duration,
+	timeoutKeysend bool) {
 	defer timeout()()
 
 	ctx := newTestContext(t)
@@ -754,30 +758,6 @@ func testKeySend(t *testing.T, keySendEnabled bool, holdDuration time.Duration) 
 	newInvoice := <-allSubscriptions.NewInvoices
 	require.Equal(t, newInvoice.State, channeldb.ContractOpen)
 
-	// If the keysend is to be held, we expect no immediate
-	// resolution.
-	if holdDuration != 0 {
-		require.Nil(t, resolution, "expected hold resolution")
-
-		// Advance the clock to just past the hold duration.
-		ctx.clock.SetTime(ctx.clock.Now().Add(
-			holdDuration + time.Millisecond),
-		)
-
-		// Expect the keysend payment to be failed.
-		res := <-hodlChan
-		failResolution, ok = res.(*HtlcFailResolution)
-		if !ok {
-			t.Fatalf("expected fail resolution, got: %T",
-				resolution)
-		}
-		if failResolution.Outcome != ResultCanceled {
-			t.Fatal("expected keysend payment to be failed")
-		}
-
-		return
-	}
-
 	checkResolution := func(res HtlcResolution, pimg lntypes.Preimage) {
 		// Otherwise we expect no error and a settle res for the htlc.
 		settleResolution, ok := res.(*HtlcSettleResolution)
@@ -785,7 +765,42 @@ func testKeySend(t *testing.T, keySendEnabled bool, holdDuration time.Duration) 
 		require.Equal(t, settleResolution.Preimage, pimg)
 	}
 
-	checkResolution(resolution, preimage)
+	// If the keysend is to be held, we expect no immediate
+	// resolution.
+	if holdDuration != 0 {
+		require.Nil(t, resolution, "expected hold resolution")
+
+		if timeoutKeysend {
+			// Advance the clock to just past the hold duration.
+			ctx.clock.SetTime(ctx.clock.Now().Add(
+				holdDuration + time.Millisecond),
+			)
+
+			// Expect the keysend payment to be failed.
+			res := <-hodlChan
+			failResolution, ok = res.(*HtlcFailResolution)
+			if !ok {
+				t.Fatalf("expected fail resolution, got: %T",
+					resolution)
+			}
+			if failResolution.Outcome != ResultCanceled {
+				t.Fatal("expected keysend payment to be failed")
+			}
+
+			return
+		}
+
+		// Settle keysend payment manually.
+		err := ctx.registry.SettleHodlInvoice(
+			*newInvoice.Terms.PaymentPreimage,
+		)
+		if err != nil {
+			t.Fatalf("error settling keysend payment: %v",
+				err)
+		}
+	} else {
+		checkResolution(resolution, preimage)
+	}
 
 	// We expect a settled notification to be sent out.
 	settledInvoice := <-allSubscriptions.SettledInvoices

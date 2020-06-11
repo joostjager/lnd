@@ -1003,11 +1003,22 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 			return nil, channeldb.ErrInvoiceAlreadySettled
 		}
 
+		stateUpdate := &channeldb.InvoiceStateUpdateDesc{
+			NewState: channeldb.ContractSettled,
+		}
+
+		setID, err := invoice.GetSingleAcceptedHTLCSetID()
+		if err != nil {
+			return nil, err
+		}
+		if setID == nil {
+			stateUpdate.Preimage = &preimage
+		} else {
+			stateUpdate.SetID = setID
+		}
+
 		return &channeldb.InvoiceUpdateDesc{
-			State: &channeldb.InvoiceStateUpdateDesc{
-				NewState: channeldb.ContractSettled,
-				Preimage: &preimage,
-			},
+			State: stateUpdate,
 		}, nil
 	}
 
