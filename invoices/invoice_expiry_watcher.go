@@ -15,8 +15,8 @@ import (
 // invoiceExpiry holds and invoice's payment hash and its expiry. This
 // is used to order invoices by their expiry for cancellation.
 type invoiceExpiry struct {
-	PaymentHash lntypes.Hash
-	Expiry      time.Time
+	Ref    channeldb.InvoiceRef
+	Expiry time.Time
 }
 
 // Less implements PriorityQueueItem.Less such that the top item in the
@@ -41,7 +41,7 @@ type InvoiceExpiryWatcher struct {
 	clock clock.Clock
 
 	// cancelInvoice is a template method that cancels an expired invoice.
-	cancelInvoice func(lntypes.Hash) error
+	cancelInvoice func(channeldb.InvoiceRef) error
 
 	// expiryQueue holds invoiceExpiry items and is used to find the next
 	// invoice to expire.
@@ -71,7 +71,7 @@ func NewInvoiceExpiryWatcher(clock clock.Clock) *InvoiceExpiryWatcher {
 // expects a cancellation function passed that will be use to cancel expired
 // invoices by their payment hash.
 func (ew *InvoiceExpiryWatcher) Start(
-	cancelInvoice func(lntypes.Hash) error) error {
+	cancelInvoice func(channeldb.InvoiceRef) error) error {
 
 	ew.Lock()
 	defer ew.Unlock()
@@ -117,10 +117,11 @@ func (ew *InvoiceExpiryWatcher) prepareInvoice(
 		realExpiry = zpay32.DefaultInvoiceExpiry
 	}
 
+	ref := invoice.GetRefWithHash(paymentHash)
 	expiry := invoice.CreationDate.Add(realExpiry)
 	return &invoiceExpiry{
-		PaymentHash: paymentHash,
-		Expiry:      expiry,
+		Ref:    ref,
+		Expiry: expiry,
 	}
 }
 
@@ -190,11 +191,11 @@ func (ew *InvoiceExpiryWatcher) cancelNextExpiredInvoice() {
 			return
 		}
 
-		err := ew.cancelInvoice(top.PaymentHash)
+		err := ew.cancelInvoice(top.Ref)
 		if err != nil && err != channeldb.ErrInvoiceAlreadySettled &&
 			err != channeldb.ErrInvoiceAlreadyCanceled {
 
-			log.Errorf("Unable to cancel invoice: %v", top.PaymentHash)
+			log.Errorf("Unable to cancel invoice: %v", top.Ref)
 		}
 
 		ew.expiryQueue.Pop()

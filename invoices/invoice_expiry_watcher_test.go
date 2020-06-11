@@ -7,7 +7,6 @@ import (
 
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/clock"
-	"github.com/lightningnetwork/lnd/lntypes"
 )
 
 // invoiceExpiryWatcherTest holds a test fixture and implements checks
@@ -17,7 +16,7 @@ type invoiceExpiryWatcherTest struct {
 	wg               sync.WaitGroup
 	watcher          *InvoiceExpiryWatcher
 	testData         invoiceExpiryTestData
-	canceledInvoices []lntypes.Hash
+	canceledInvoices []channeldb.InvoiceRef
 }
 
 // newInvoiceExpiryWatcherTest creates a new InvoiceExpiryWatcher test fixture
@@ -35,8 +34,8 @@ func newInvoiceExpiryWatcherTest(t *testing.T, now time.Time,
 
 	test.wg.Add(numExpiredInvoices)
 
-	err := test.watcher.Start(func(paymentHash lntypes.Hash) error {
-		test.canceledInvoices = append(test.canceledInvoices, paymentHash)
+	err := test.watcher.Start(func(ref channeldb.InvoiceRef) error {
+		test.canceledInvoices = append(test.canceledInvoices, ref)
 		test.wg.Done()
 		return nil
 	})
@@ -65,6 +64,8 @@ func (t *invoiceExpiryWatcherTest) waitForFinish(timeout time.Duration) {
 }
 
 func (t *invoiceExpiryWatcherTest) checkExpectations() {
+	t.t.Helper()
+
 	// Check that invoices that got canceled during the test are the ones
 	// that expired.
 	if len(t.canceledInvoices) != len(t.testData.expiredInvoices) {
@@ -72,17 +73,23 @@ func (t *invoiceExpiryWatcherTest) checkExpectations() {
 			len(t.testData.expiredInvoices), len(t.canceledInvoices))
 	}
 
-	for i := range t.canceledInvoices {
-		if _, ok := t.testData.expiredInvoices[t.canceledInvoices[i]]; !ok {
-			t.t.Fatalf("wrong invoice canceled")
+loop:
+	for _, i := range t.canceledInvoices {
+		for hash, expectedInvoice := range t.testData.expiredInvoices {
+			ref := expectedInvoice.GetRefWithHash(hash)
+
+			if i.IsEquivalent(ref) {
+				continue loop
+			}
 		}
+		t.t.Fatalf("wrong invoice canceled")
 	}
 }
 
 // Tests that InvoiceExpiryWatcher can be started and stopped.
 func TestInvoiceExpiryWatcherStartStop(t *testing.T) {
 	watcher := NewInvoiceExpiryWatcher(clock.NewTestClock(testTime))
-	cancel := func(lntypes.Hash) error {
+	cancel := func(channeldb.InvoiceRef) error {
 		t.Fatalf("unexpected call")
 		return nil
 	}

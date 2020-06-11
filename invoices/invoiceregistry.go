@@ -166,9 +166,9 @@ func (i *InvoiceRegistry) populateExpiryWatcher() error {
 func (i *InvoiceRegistry) Start() error {
 	// Start InvoiceExpiryWatcher and prepopulate it with existing active
 	// invoices.
-	err := i.expiryWatcher.Start(func(paymentHash lntypes.Hash) error {
+	err := i.expiryWatcher.Start(func(ref channeldb.InvoiceRef) error {
 		cancelIfAccepted := false
-		return i.cancelInvoiceImpl(paymentHash, cancelIfAccepted)
+		return i.cancelInvoiceImpl(ref, cancelIfAccepted)
 	})
 
 	if err != nil {
@@ -1043,20 +1043,21 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 // CancelInvoice attempts to cancel the invoice corresponding to the passed
 // payment hash.
 func (i *InvoiceRegistry) CancelInvoice(payHash lntypes.Hash) error {
-	return i.cancelInvoiceImpl(payHash, true)
+	ref := channeldb.InvoiceRefByHash(payHash)
+
+	return i.cancelInvoiceImpl(ref, true)
 }
 
 // cancelInvoice attempts to cancel the invoice corresponding to the passed
 // payment hash. Accepted invoices will only be canceled if explicitly
 // requested to do so. It notifies subscribing links and resolvers that
 // the associated htlcs were canceled if they change state.
-func (i *InvoiceRegistry) cancelInvoiceImpl(payHash lntypes.Hash,
+func (i *InvoiceRegistry) cancelInvoiceImpl(ref channeldb.InvoiceRef,
 	cancelAccepted bool) error {
 
 	i.Lock()
 	defer i.Unlock()
 
-	ref := channeldb.InvoiceRefByHash(payHash)
 	log.Debugf("Invoice%v: canceling invoice", ref)
 
 	updateInvoice := func(invoice *channeldb.Invoice) (
