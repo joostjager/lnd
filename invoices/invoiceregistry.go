@@ -1121,6 +1121,14 @@ func (i *InvoiceRegistry) CancelInvoice(payHash lntypes.Hash) error {
 	return i.cancelInvoiceImpl(ref, true)
 }
 
+// CancelAmp attempts to cancel the invoice corresponding to the passed
+// payment address.
+func (i *InvoiceRegistry) CancelAmp(paymentAddr [32]byte) error {
+	ref := channeldb.InvoiceRefByAddr(paymentAddr)
+
+	return i.cancelInvoiceImpl(ref, true)
+}
+
 // cancelInvoice attempts to cancel the invoice corresponding to the passed
 // payment hash. Accepted invoices will only be canceled if explicitly
 // requested to do so. It notifies subscribing links and resolvers that

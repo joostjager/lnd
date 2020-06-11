@@ -662,6 +662,7 @@ const (
 	keysendSettle
 	keysendHoldSettle
 	keysendHoldTimeout
+	keysendHoldCancel
 )
 
 // TestKeySend tests receiving a spontaneous payment with and without keysend
@@ -669,6 +670,9 @@ const (
 func TestKeySend(t *testing.T) {
 	t.Run("enabled hold settle", func(t *testing.T) {
 		testKeySend(t, keysendHoldSettle)
+	})
+	t.Run("enabled hold cancel", func(t *testing.T) {
+		testKeySend(t, keysendHoldCancel)
 	})
 	t.Run("enabled hold timeout", func(t *testing.T) {
 		testKeySend(t, keysendHoldTimeout)
@@ -693,7 +697,7 @@ func testKeySend(t *testing.T, test keysendTest) {
 
 	var holdDuration time.Duration
 	switch test {
-	case keysendHoldTimeout, keysendHoldSettle:
+	case keysendHoldTimeout, keysendHoldSettle, keysendHoldCancel:
 		holdDuration = time.Minute
 	}
 
@@ -787,13 +791,26 @@ func testKeySend(t *testing.T, test keysendTest) {
 	// If the keysend is to be held, we expect no immediate
 	// resolution.
 	switch test {
-	case keysendHoldTimeout:
+	case keysendHoldTimeout, keysendHoldCancel:
 		require.Nil(t, resolution, "expected hold resolution")
 
-		// Advance the clock to just past the hold duration.
-		ctx.clock.SetTime(ctx.clock.Now().Add(
-			holdDuration + time.Millisecond),
-		)
+		switch test {
+
+		case keysendHoldTimeout:
+			// Advance the clock to just past the hold duration.
+			ctx.clock.SetTime(ctx.clock.Now().Add(
+				holdDuration + time.Millisecond),
+			)
+
+		case keysendHoldCancel:
+			// Cancel keysend payment manually.
+			err := ctx.registry.CancelAmp(
+				newInvoice.Terms.PaymentAddr,
+			)
+			if err != nil {
+				t.Fatalf("error canceling keysend payment: %v", err)
+			}
+		}
 
 		// Expect the keysend payment to be failed.
 		res := <-hodlChan

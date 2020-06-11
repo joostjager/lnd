@@ -238,6 +238,9 @@
         }
       }
     },
+    "invoicesrpcCancelAmpResponse": {
+      "type": "object"
+    },
     "invoicesrpcCancelInvoiceMsg": {
       "type": "object",
       "properties": {

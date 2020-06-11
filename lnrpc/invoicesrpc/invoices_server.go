@@ -58,6 +58,10 @@ var (
 			Entity: "invoices",
 			Action: "write",
 		}},
+		"/invoicesrpc.Invoices/CancelAmp": {{
+			Entity: "invoices",
+			Action: "write",
+		}},
 		"/invoicesrpc.Invoices/AddHoldInvoice": {{
 			Entity: "invoices",
 			Action: "write",
@@ -307,6 +311,27 @@ func (s *Server) CancelInvoice(ctx context.Context,
 	log.Infof("Canceled invoice %v", paymentHash)
 
 	return &CancelInvoiceResp{}, nil
+}
+
+// CancelInvoice cancels a currently open invoice. If the invoice is already
+// canceled, this call will succeed. If the invoice is already settled, it will
+// fail.
+func (s *Server) CancelAmp(ctx context.Context,
+	in *CancelAmpRequest) (*CancelAmpResponse, error) {
+
+	if len(in.PaymentAddr) != 32 {
+		return nil, errors.New("payment address should be 32 bytes")
+	}
+
+	var paymentAddr [32]byte
+	copy(paymentAddr[:], in.PaymentAddr)
+
+	err := s.cfg.InvoiceRegistry.CancelAmp(paymentAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CancelAmpResponse{}, nil
 }
 
 // AddHoldInvoice attempts to add a new hold invoice to the invoice database.
