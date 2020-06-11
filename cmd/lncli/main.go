@@ -303,6 +303,7 @@ func main() {
 		bakeMacaroonCommand,
 		trackPaymentCommand,
 		versionCommand,
+		tlvshopCommand,
 	}
 
 	// Add any extra commands determined by build flags.
