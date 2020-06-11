@@ -117,6 +117,11 @@ message SettleInvoiceResp {
 message SubscribeSingleInvoiceRequest {
     reserved 1;
 
-    // Hash corresponding to the (hold) invoice to subscribe to.
+    // Hash corresponding to the (hold) invoice to subscribe to. The fields
+    // r_hash and payment_addr are mutually exclusive.
     bytes r_hash = 2;
+
+    // Payment address corresponding to the (hold) invoice to subscribe to. The
+    // fields r_hash and payment_addr are mutually exclusive.
+    bytes payment_addr = 3;
 }

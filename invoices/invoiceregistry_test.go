@@ -22,7 +22,9 @@ func TestSettleInvoice(t *testing.T) {
 	defer allSubscriptions.Cancel()
 
 	// Subscribe to the not yet existing invoice.
-	subscription, err := ctx.registry.SubscribeSingleInvoice(testInvoicePaymentHash)
+	subscription, err := ctx.registry.SubscribeSingleInvoice(
+		channeldb.InvoiceRefByHash(testInvoicePaymentHash),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +32,17 @@ func TestSettleInvoice(t *testing.T) {
 
 	if subscription.invoiceRef.PayHash() != testInvoicePaymentHash {
 		t.Fatalf("expected subscription for provided hash")
+	}
+
+	// Subscribe to the not yet existing invoice by payment address.
+	subscriptionAddr, err := ctx.registry.SubscribeSingleInvoice(
+		channeldb.InvoiceRefByAddr(testPaymentAddr),
+	)
+	require.NoError(t, err)
+	defer subscriptionAddr.Cancel()
+
+	updateChans := []chan *channeldb.Invoice{
+		subscription.Updates, subscriptionAddr.Updates,
 	}
 
 	// Add the invoice.
@@ -44,14 +57,16 @@ func TestSettleInvoice(t *testing.T) {
 	}
 
 	// We expect the open state to be sent to the single invoice subscriber.
-	select {
-	case update := <-subscription.Updates:
-		if update.State != channeldb.ContractOpen {
-			t.Fatalf("expected state ContractOpen, but got %v",
-				update.State)
+	for _, updates := range updateChans {
+		select {
+		case update := <-updates:
+			if update.State != channeldb.ContractOpen {
+				t.Fatalf("expected state ContractOpen, but got %v",
+					update.State)
+			}
+		case <-time.After(testTimeout):
+			t.Fatal("no update received")
 		}
-	case <-time.After(testTimeout):
-		t.Fatal("no update received")
 	}
 
 	// We expect a new invoice notification to be sent out.
@@ -112,17 +127,19 @@ func TestSettleInvoice(t *testing.T) {
 
 	// We expect the settled state to be sent to the single invoice
 	// subscriber.
-	select {
-	case update := <-subscription.Updates:
-		if update.State != channeldb.ContractSettled {
-			t.Fatalf("expected state ContractOpen, but got %v",
-				update.State)
+	for _, updates := range updateChans {
+		select {
+		case update := <-updates:
+			if update.State != channeldb.ContractSettled {
+				t.Fatalf("expected state ContractOpen, but got %v",
+					update.State)
+			}
+			if update.AmtPaid != amtPaid {
+				t.Fatal("invoice AmtPaid incorrect")
+			}
+		case <-time.After(testTimeout):
+			t.Fatal("no update received")
 		}
-		if update.AmtPaid != amtPaid {
-			t.Fatal("invoice AmtPaid incorrect")
-		}
-	case <-time.After(testTimeout):
-		t.Fatal("no update received")
 	}
 
 	// We expect a settled notification to be sent out.
@@ -234,7 +251,9 @@ func TestCancelInvoice(t *testing.T) {
 	}
 
 	// Subscribe to the not yet existing invoice.
-	subscription, err := ctx.registry.SubscribeSingleInvoice(testInvoicePaymentHash)
+	subscription, err := ctx.registry.SubscribeSingleInvoice(
+		channeldb.InvoiceRefByHash(testInvoicePaymentHash),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +379,9 @@ func TestSettleHoldInvoice(t *testing.T) {
 	defer allSubscriptions.Cancel()
 
 	// Subscribe to the not yet existing invoice.
-	subscription, err := registry.SubscribeSingleInvoice(testInvoicePaymentHash)
+	subscription, err := registry.SubscribeSingleInvoice(
+		channeldb.InvoiceRefByHash(testInvoicePaymentHash),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,7 +817,7 @@ func TestMppPayment(t *testing.T) {
 	}
 
 	mppPayload := &mockPayload{
-		mpp: record.NewMPP(testInvoiceAmt, [32]byte{}),
+		mpp: record.NewMPP(testInvoiceAmt, testPaymentAddr),
 	}
 
 	// Send htlc 1.

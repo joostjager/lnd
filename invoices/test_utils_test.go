@@ -94,13 +94,15 @@ var (
 )
 
 var (
-	testInvoiceAmt = lnwire.MilliSatoshi(100000)
-	testInvoice    = &channeldb.Invoice{
+	testInvoiceAmt  = lnwire.MilliSatoshi(100000)
+	testPaymentAddr = [32]byte{100, 102, 104}
+	testInvoice     = &channeldb.Invoice{
 		Terms: channeldb.ContractTerm{
 			PaymentPreimage: &testInvoicePreimage,
 			Value:           testInvoiceAmt,
 			Expiry:          time.Hour,
 			Features:        testFeatures,
+			PaymentAddr:     testPaymentAddr,
 		},
 		CreationDate: testInvoiceCreationDate,
 	}
