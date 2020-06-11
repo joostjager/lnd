@@ -35,6 +35,12 @@ service Invoices {
     settled, this call will succeed.
     */
     rpc SettleInvoice (SettleInvoiceMsg) returns (SettleInvoiceResp);
+
+    /*
+    SettleAmp settles an accepted amp invoice. If the invoice is already
+    settled, this call will succeed.
+    */
+    rpc SettleAmp (SettleAmpMsg) returns (SettleAmpResp);
 }
 
 message CancelInvoiceMsg {
@@ -112,6 +118,16 @@ message SettleInvoiceMsg {
 }
 
 message SettleInvoiceResp {
+}
+
+message SettleAmpMsg {
+    /*
+    Payment address of the amp invoice to settle.
+    */
+    bytes payment_addr = 1;
+}
+
+message SettleAmpResp {
 }
 
 message SubscribeSingleInvoiceRequest {

@@ -50,6 +50,10 @@ var (
 			Entity: "invoices",
 			Action: "write",
 		}},
+		"/invoicesrpc.Invoices/SettleAmp": {{
+			Entity: "invoices",
+			Action: "write",
+		}},
 		"/invoicesrpc.Invoices/CancelInvoice": {{
 			Entity: "invoices",
 			Action: "write",
@@ -262,6 +266,26 @@ func (s *Server) SettleInvoice(ctx context.Context,
 	}
 
 	return &SettleInvoiceResp{}, nil
+}
+
+// SettleAmp settles an accepted invoice. If the invoice is already settled,
+// this call will succeed.
+func (s *Server) SettleAmp(ctx context.Context,
+	in *SettleAmpMsg) (*SettleAmpResp, error) {
+
+	if len(in.PaymentAddr) != 32 {
+		return nil, errors.New("payment address should be 32 bytes")
+	}
+
+	var paymentAddr [32]byte
+	copy(paymentAddr[:], in.PaymentAddr)
+
+	err := s.cfg.InvoiceRegistry.SettleAmpInvoice(paymentAddr)
+	if err != nil && err != channeldb.ErrInvoiceAlreadySettled {
+		return nil, err
+	}
+
+	return &SettleAmpResp{}, nil
 }
 
 // CancelInvoice cancels a currently open invoice. If the invoice is already

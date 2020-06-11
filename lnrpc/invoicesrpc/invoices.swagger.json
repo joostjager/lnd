@@ -251,6 +251,9 @@
     "invoicesrpcCancelInvoiceResp": {
       "type": "object"
     },
+    "invoicesrpcSettleAmpResp": {
+      "type": "object"
+    },
     "invoicesrpcSettleInvoiceMsg": {
       "type": "object",
       "properties": {

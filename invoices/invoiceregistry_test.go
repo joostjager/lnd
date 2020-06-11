@@ -660,12 +660,16 @@ type keysendTest uint8
 const (
 	keysendDisabled keysendTest = iota
 	keysendSettle
+	keysendHoldSettle
 	keysendHoldTimeout
 )
 
 // TestKeySend tests receiving a spontaneous payment with and without keysend
 // enabled.
 func TestKeySend(t *testing.T) {
+	t.Run("enabled hold settle", func(t *testing.T) {
+		testKeySend(t, keysendHoldSettle)
+	})
 	t.Run("enabled hold timeout", func(t *testing.T) {
 		testKeySend(t, keysendHoldTimeout)
 	})
@@ -689,7 +693,7 @@ func testKeySend(t *testing.T, test keysendTest) {
 
 	var holdDuration time.Duration
 	switch test {
-	case keysendHoldTimeout:
+	case keysendHoldTimeout, keysendHoldSettle:
 		holdDuration = time.Minute
 	}
 
@@ -773,9 +777,17 @@ func testKeySend(t *testing.T, test keysendTest) {
 	newInvoice := <-allSubscriptions.NewInvoices
 	require.Equal(t, newInvoice.State, channeldb.ContractOpen)
 
+	checkResolution := func(res HtlcResolution, pimg lntypes.Preimage) {
+		// Otherwise we expect no error and a settle res for the htlc.
+		settleResolution, ok := res.(*HtlcSettleResolution)
+		require.True(t, ok)
+		require.Equal(t, settleResolution.Preimage, pimg)
+	}
+
 	// If the keysend is to be held, we expect no immediate
 	// resolution.
-	if holdDuration != 0 {
+	switch test {
+	case keysendHoldTimeout:
 		require.Nil(t, resolution, "expected hold resolution")
 
 		// Advance the clock to just past the hold duration.
@@ -795,16 +807,20 @@ func testKeySend(t *testing.T, test keysendTest) {
 		}
 
 		return
-	}
 
-	checkResolution := func(res HtlcResolution, pimg lntypes.Preimage) {
-		// Otherwise we expect no error and a settle res for the htlc.
-		settleResolution, ok := res.(*HtlcSettleResolution)
-		require.True(t, ok)
-		require.Equal(t, settleResolution.Preimage, pimg)
-	}
+	case keysendHoldSettle:
+		// Settle keysend payment manually.
+		err := ctx.registry.SettleAmpInvoice(
+			newInvoice.Terms.PaymentAddr,
+		)
+		if err != nil {
+			t.Fatalf("error settling keysend payment: %v",
+				err)
+		}
 
-	checkResolution(resolution, preimage)
+	default:
+		checkResolution(resolution, preimage)
+	}
 
 	// We expect a settled notification to be sent out.
 	settledInvoice := <-allSubscriptions.SettledInvoices
@@ -825,8 +841,10 @@ func testKeySend(t *testing.T, test keysendTest) {
 	case <-time.After(time.Second):
 	}
 
-	// Finally, test that we can properly fulfill a second keysend payment
-	// with a unique preiamge.
+	// Finally, test that we can properly fulfill a second non-hold keysend
+	// payment with a unique preiamge.
+	ctx.registry.cfg.KeySendHoldTime = 0
+
 	preimage2 := lntypes.Preimage{1, 2, 3, 4}
 	hash2 := preimage2.Hash()
 

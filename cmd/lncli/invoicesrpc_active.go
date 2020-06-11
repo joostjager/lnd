@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"strconv"
@@ -19,6 +20,7 @@ func invoicesCommands() []cli.Command {
 		cancelInvoiceCommand,
 		addHoldInvoiceCommand,
 		settleInvoiceCommand,
+		settleAmpCommand,
 	}
 }
 
@@ -77,6 +79,42 @@ func settleInvoice(ctx *cli.Context) error {
 	}
 
 	resp, err := client.SettleInvoice(context.Background(), invoice)
+	if err != nil {
+		return err
+	}
+
+	printRespJSON(resp)
+
+	return nil
+}
+
+var settleAmpCommand = cli.Command{
+	Name:      "settleamp",
+	Category:  "Invoices",
+	Usage:     "Settle an AMP invoice.",
+	ArgsUsage: "payment_addr",
+	Action:    actionDecorator(settleAmp),
+}
+
+func settleAmp(ctx *cli.Context) error {
+	client, cleanUp := getInvoicesClient(ctx)
+	defer cleanUp()
+
+	args := ctx.Args()
+	if !args.Present() {
+		return errors.New("payment_addr argument is required")
+	}
+	paymentAddr, err := hex.DecodeString(args.First())
+	if err != nil {
+		return fmt.Errorf("unable to parse payment_addr: %v", err)
+	}
+
+	resp, err := client.SettleAmp(
+		context.Background(),
+		&invoicesrpc.SettleAmpMsg{
+			PaymentAddr: paymentAddr,
+		},
+	)
 	if err != nil {
 		return err
 	}

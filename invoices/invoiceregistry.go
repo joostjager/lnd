@@ -1003,16 +1003,19 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 			return nil, channeldb.ErrInvoiceAlreadySettled
 		}
 
+		stateUpdate := &channeldb.InvoiceStateUpdateDesc{
+			NewState: channeldb.ContractSettled,
+			Preimage: &preimage,
+		}
+
 		return &channeldb.InvoiceUpdateDesc{
-			State: &channeldb.InvoiceStateUpdateDesc{
-				NewState: channeldb.ContractSettled,
-				Preimage: &preimage,
-			},
+			State: stateUpdate,
 		}, nil
 	}
 
 	hash := preimage.Hash()
 	invoiceRef := channeldb.InvoiceRefByHash(hash)
+
 	invoice, err := i.cdb.UpdateInvoice(invoiceRef, updateInvoice)
 	if err != nil {
 		log.Errorf("SettleHodlInvoice with preimage %v: %v",
@@ -1037,6 +1040,70 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 
 		resolution := NewSettleResolution(
 			preimage, key, int32(htlc.AcceptHeight), ResultSettled,
+		)
+
+		i.notifyHodlSubscribers(resolution)
+	}
+	i.notifyClients(invoiceRef, invoice, invoice.State)
+
+	return nil
+}
+
+// SettleAmpInvoice settles an accepted amp invoice.
+func (i *InvoiceRegistry) SettleAmpInvoice(paymentAddr [32]byte) error {
+	i.Lock()
+	defer i.Unlock()
+
+	updateInvoice := func(invoice *channeldb.Invoice) (
+		*channeldb.InvoiceUpdateDesc, error) {
+
+		switch invoice.State {
+		case channeldb.ContractOpen:
+			return nil, channeldb.ErrInvoiceStillOpen
+		case channeldb.ContractCanceled:
+			return nil, channeldb.ErrInvoiceAlreadyCanceled
+		case channeldb.ContractSettled:
+			return nil, channeldb.ErrInvoiceAlreadySettled
+		}
+
+		setID, err := invoice.GetSingleAcceptedHTLCSetID()
+		if err != nil {
+			return nil, err
+		}
+
+		return &channeldb.InvoiceUpdateDesc{
+			State: &channeldb.InvoiceStateUpdateDesc{
+				NewState: channeldb.ContractSettled,
+				SetID:    setID,
+			},
+		}, nil
+	}
+
+	invoiceRef := channeldb.InvoiceRefByAddr(paymentAddr)
+	invoice, err := i.cdb.UpdateInvoice(invoiceRef, updateInvoice)
+	if err != nil {
+		log.Errorf("SettleHodlInvoice for amp invoice %v: %v",
+			paymentAddr, err)
+
+		return err
+	}
+
+	log.Debugf("Invoice%v: settled", invoiceRef)
+
+	// In the callback, we marked the invoice as settled. UpdateInvoice will
+	// have seen this and should have moved all htlcs that were accepted to
+	// the settled state. In the loop below, we go through all of these and
+	// notify links and resolvers that are waiting for resolution. Any htlcs
+	// that were already settled before, will be notified again. This isn't
+	// necessary but doesn't hurt either.
+	for key, htlc := range invoice.Htlcs {
+		if htlc.State != channeldb.HtlcStateSettled {
+			continue
+		}
+
+		resolution := NewSettleResolution(
+			*htlc.Preimage,
+			key, int32(htlc.AcceptHeight), ResultSettled,
 		)
 
 		i.notifyHodlSubscribers(resolution)
