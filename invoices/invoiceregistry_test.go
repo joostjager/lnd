@@ -634,26 +634,33 @@ func TestUnknownInvoice(t *testing.T) {
 	}
 }
 
+type keysendTest uint8
+
+const (
+	keysendDisabled keysendTest = iota
+	keysendSettle
+)
+
 // TestKeySend tests receiving a spontaneous payment with and without keysend
 // enabled.
 func TestKeySend(t *testing.T) {
 	t.Run("enabled", func(t *testing.T) {
-		testKeySend(t, true)
+		testKeySend(t, keysendSettle)
 	})
 	t.Run("disabled", func(t *testing.T) {
-		testKeySend(t, false)
+		testKeySend(t, keysendDisabled)
 	})
 }
 
 // testKeySend is the inner test function that tests keysend for a particular
 // enabled state on the receiver end.
-func testKeySend(t *testing.T, keySendEnabled bool) {
+func testKeySend(t *testing.T, test keysendTest) {
 	defer timeout()()
 
 	ctx := newTestContext(t)
 	defer ctx.cleanup()
 
-	ctx.registry.cfg.AcceptKeySend = keySendEnabled
+	ctx.registry.cfg.AcceptKeySend = test != keysendDisabled
 
 	allSubscriptions, err := ctx.registry.SubscribeNotifications(0, 0)
 	require.Nil(t, err)
@@ -690,10 +697,14 @@ func testKeySend(t *testing.T, keySendEnabled bool) {
 	}
 
 	switch {
-	case !keySendEnabled && failResolution.Outcome != ResultInvoiceNotFound:
+	case test == keysendDisabled &&
+		failResolution.Outcome != ResultInvoiceNotFound:
+
 		t.Fatal("expected invoice not found outcome")
 
-	case keySendEnabled && failResolution.Outcome != ResultKeySendError:
+	case test != keysendDisabled &&
+		failResolution.Outcome != ResultKeySendError:
+
 		t.Fatal("expected keysend error")
 	}
 
@@ -713,7 +724,7 @@ func testKeySend(t *testing.T, keySendEnabled bool) {
 	}
 
 	// Expect a cancel resolution if keysend is disabled.
-	if !keySendEnabled {
+	if test == keysendDisabled {
 		failResolution, ok = resolution.(*HtlcFailResolution)
 		if !ok {
 			t.Fatalf("expected fail resolution, got: %T",
