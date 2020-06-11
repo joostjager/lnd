@@ -30,6 +30,7 @@ func newInvoiceExpiryWatcherTest(t *testing.T, now time.Time,
 		testData: generateInvoiceExpiryTestData(
 			t, now, 0, numExpiredInvoices, numPendingInvoices,
 		),
+		t: t,
 	}
 
 	test.wg.Add(numExpiredInvoices)
