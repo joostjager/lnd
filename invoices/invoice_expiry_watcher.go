@@ -15,8 +15,9 @@ import (
 // invoiceExpiry holds and invoice's payment hash and its expiry. This
 // is used to order invoices by their expiry for cancellation.
 type invoiceExpiry struct {
-	Ref    channeldb.InvoiceRef
-	Expiry time.Time
+	Ref     channeldb.InvoiceRef
+	Expiry  time.Time
+	Keysend bool
 }
 
 // Less implements PriorityQueueItem.Less such that the top item in the
@@ -41,7 +42,7 @@ type InvoiceExpiryWatcher struct {
 	clock clock.Clock
 
 	// cancelInvoice is a template method that cancels an expired invoice.
-	cancelInvoice func(channeldb.InvoiceRef) error
+	cancelInvoice func(channeldb.InvoiceRef, bool) error
 
 	// expiryQueue holds invoiceExpiry items and is used to find the next
 	// invoice to expire.
@@ -71,7 +72,7 @@ func NewInvoiceExpiryWatcher(clock clock.Clock) *InvoiceExpiryWatcher {
 // expects a cancellation function passed that will be use to cancel expired
 // invoices by their payment hash.
 func (ew *InvoiceExpiryWatcher) Start(
-	cancelInvoice func(channeldb.InvoiceRef) error) error {
+	cancelInvoice func(channeldb.InvoiceRef, bool) error) error {
 
 	ew.Lock()
 	defer ew.Unlock()
@@ -120,8 +121,9 @@ func (ew *InvoiceExpiryWatcher) prepareInvoice(
 	ref := invoice.GetRefWithHash(paymentHash)
 	expiry := invoice.CreationDate.Add(realExpiry)
 	return &invoiceExpiry{
-		Ref:    ref,
-		Expiry: expiry,
+		Ref:     ref,
+		Expiry:  expiry,
+		Keysend: len(invoice.PaymentRequest) == 0,
 	}
 }
 
@@ -191,7 +193,13 @@ func (ew *InvoiceExpiryWatcher) cancelNextExpiredInvoice() {
 			return
 		}
 
-		err := ew.cancelInvoice(top.Ref)
+		// Don't force-cancel already accepted invoices. An exception to
+		// this are auto-generated keysend invoices. Because those start
+		// out in the Accepted state, the expiry field would never be
+		// used. Enabling cancellation for accepted keysend invoices
+		// creates a safety mechanism that can prevents channel
+		// force-closes.
+		err := ew.cancelInvoice(top.Ref, top.Keysend)
 		if err != nil && err != channeldb.ErrInvoiceAlreadySettled &&
 			err != channeldb.ErrInvoiceAlreadyCanceled {
 

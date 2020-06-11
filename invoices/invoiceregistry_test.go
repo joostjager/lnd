@@ -660,11 +660,15 @@ type keysendTest uint8
 const (
 	keysendDisabled keysendTest = iota
 	keysendSettle
+	keysendHoldTimeout
 )
 
 // TestKeySend tests receiving a spontaneous payment with and without keysend
 // enabled.
 func TestKeySend(t *testing.T) {
+	t.Run("enabled hold timeout", func(t *testing.T) {
+		testKeySend(t, keysendHoldTimeout)
+	})
 	t.Run("enabled", func(t *testing.T) {
 		testKeySend(t, keysendSettle)
 	})
@@ -682,6 +686,14 @@ func testKeySend(t *testing.T, test keysendTest) {
 	defer ctx.cleanup()
 
 	ctx.registry.cfg.AcceptKeySend = test != keysendDisabled
+
+	var holdDuration time.Duration
+	switch test {
+	case keysendHoldTimeout:
+		holdDuration = time.Minute
+	}
+
+	ctx.registry.cfg.KeySendHoldTime = holdDuration
 
 	allSubscriptions, err := ctx.registry.SubscribeNotifications(0, 0)
 	require.Nil(t, err)
@@ -757,24 +769,46 @@ func testKeySend(t *testing.T, test keysendTest) {
 		return
 	}
 
+	// We expect a new invoice notification to be sent out.
+	newInvoice := <-allSubscriptions.NewInvoices
+	require.Equal(t, newInvoice.State, channeldb.ContractOpen)
+
+	// If the keysend is to be held, we expect no immediate
+	// resolution.
+	if holdDuration != 0 {
+		require.Nil(t, resolution, "expected hold resolution")
+
+		// Advance the clock to just past the hold duration.
+		ctx.clock.SetTime(ctx.clock.Now().Add(
+			holdDuration + time.Millisecond),
+		)
+
+		// Expect the keysend payment to be failed.
+		res := <-hodlChan
+		failResolution, ok = res.(*HtlcFailResolution)
+		if !ok {
+			t.Fatalf("expected fail resolution, got: %T",
+				resolution)
+		}
+		if failResolution.Outcome != ResultCanceled {
+			t.Fatal("expected keysend payment to be failed")
+		}
+
+		return
+	}
+
 	checkResolution := func(res HtlcResolution, pimg lntypes.Preimage) {
 		// Otherwise we expect no error and a settle res for the htlc.
 		settleResolution, ok := res.(*HtlcSettleResolution)
 		require.True(t, ok)
 		require.Equal(t, settleResolution.Preimage, pimg)
 	}
-	checkSubscription := func() {
-		// We expect a new invoice notification to be sent out.
-		newInvoice := <-allSubscriptions.NewInvoices
-		require.Equal(t, newInvoice.State, channeldb.ContractOpen)
-
-		// We expect a settled notification to be sent out.
-		settledInvoice := <-allSubscriptions.SettledInvoices
-		require.Equal(t, settledInvoice.State, channeldb.ContractSettled)
-	}
 
 	checkResolution(resolution, preimage)
-	checkSubscription()
+
+	// We expect a settled notification to be sent out.
+	settledInvoice := <-allSubscriptions.SettledInvoices
+	require.Equal(t, settledInvoice.State, channeldb.ContractSettled)
 
 	// Replay the same keysend payment. We expect an identical resolution,
 	// but no event should be generated.
@@ -809,7 +843,14 @@ func testKeySend(t *testing.T, test keysendTest) {
 	require.Nil(t, err)
 
 	checkResolution(resolution, preimage2)
-	checkSubscription()
+
+	// We expect a new invoice notification to be sent out.
+	newInvoice = <-allSubscriptions.NewInvoices
+	require.Equal(t, newInvoice.State, channeldb.ContractOpen)
+
+	// We expect a settled notification to be sent out.
+	settledInvoice = <-allSubscriptions.SettledInvoices
+	require.Equal(t, settledInvoice.State, channeldb.ContractSettled)
 }
 
 // TestMppPayment tests settling of an invoice with multiple partial payments.

@@ -34,7 +34,9 @@ func newInvoiceExpiryWatcherTest(t *testing.T, now time.Time,
 
 	test.wg.Add(numExpiredInvoices)
 
-	err := test.watcher.Start(func(ref channeldb.InvoiceRef) error {
+	err := test.watcher.Start(func(ref channeldb.InvoiceRef,
+		force bool) error {
+
 		test.canceledInvoices = append(test.canceledInvoices, ref)
 		test.wg.Done()
 		return nil
@@ -89,7 +91,7 @@ loop:
 // Tests that InvoiceExpiryWatcher can be started and stopped.
 func TestInvoiceExpiryWatcherStartStop(t *testing.T) {
 	watcher := NewInvoiceExpiryWatcher(clock.NewTestClock(testTime))
-	cancel := func(channeldb.InvoiceRef) error {
+	cancel := func(channeldb.InvoiceRef, bool) error {
 		t.Fatalf("unexpected call")
 		return nil
 	}
