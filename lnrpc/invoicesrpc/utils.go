@@ -172,6 +172,11 @@ func CreateRPCInvoice(invoice *channeldb.Invoice,
 		rpcInvoice.RPreimage = preimage[:]
 	}
 
+	var noPaymentAddr [32]byte
+	if invoice.Terms.PaymentAddr != noPaymentAddr {
+		rpcInvoice.PaymentAddr = invoice.Terms.PaymentAddr[:]
+	}
+
 	return rpcInvoice, nil
 }
 

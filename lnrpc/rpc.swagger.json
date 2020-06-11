@@ -3855,6 +3855,11 @@
           "type": "boolean",
           "format": "boolean",
           "description": "Indicates if this invoice was a spontaneous payment that arrived via keysend\n[EXPERIMENTAL]."
+        },
+        "payment_addr": {
+          "type": "string",
+          "format": "byte",
+          "title": "The payment address of the invoice"
         }
       }
     },
