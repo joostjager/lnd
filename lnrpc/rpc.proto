@@ -2572,6 +2572,9 @@ message Invoice {
     [EXPERIMENTAL].
     */
     bool is_keysend = 25;
+
+    /* The payment address of the invoice */
+    bytes payment_addr = 26;
 }
 
 enum InvoiceHTLCState {
