@@ -4,6 +4,7 @@ package invoicesrpc
 
 import (
 	"context"
+	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -192,12 +193,34 @@ func (s *Server) RegisterWithRestServer(ctx context.Context,
 func (s *Server) SubscribeSingleInvoice(req *SubscribeSingleInvoiceRequest,
 	updateStream Invoices_SubscribeSingleInvoiceServer) error {
 
-	hash, err := lntypes.MakeHash(req.RHash)
-	if err != nil {
-		return err
+	var ref channeldb.InvoiceRef
+	switch {
+	case req.RHash != nil && req.PaymentAddr != nil:
+		return errors.New("r_hash and payment_addr are mutually " +
+			"exclusive")
+
+	case req.RHash != nil:
+		hash, err := lntypes.MakeHash(req.RHash)
+		if err != nil {
+			return err
+		}
+
+		ref = channeldb.InvoiceRefByHash(hash)
+
+	case req.PaymentAddr != nil:
+		if len(req.PaymentAddr) != 32 {
+			return errors.New("expected 32-byte payment address")
+		}
+		var paymentAddr [32]byte
+		copy(paymentAddr[:], req.PaymentAddr)
+
+		ref = channeldb.InvoiceRefByAddr(paymentAddr)
+
+	default:
+		return errors.New("r_hash or payment_addr must be specified")
 	}
 
-	invoiceClient, err := s.cfg.InvoiceRegistry.SubscribeSingleInvoice(hash)
+	invoiceClient, err := s.cfg.InvoiceRegistry.SubscribeSingleInvoice(ref)
 	if err != nil {
 		return err
 	}

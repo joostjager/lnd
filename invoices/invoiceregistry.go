@@ -201,7 +201,7 @@ func (i *InvoiceRegistry) Stop() {
 // Only two event types are currently supported: newly created invoices, and
 // instance where invoices are settled.
 type invoiceEvent struct {
-	hash    lntypes.Hash
+	ref     channeldb.InvoiceRef
 	invoice *channeldb.Invoice
 }
 
@@ -321,7 +321,7 @@ func (i *InvoiceRegistry) invoiceEventLoop() {
 func (i *InvoiceRegistry) dispatchToSingleClients(event *invoiceEvent) {
 	// Dispatch to single invoice subscribers.
 	for _, client := range i.singleNotificationClients {
-		if client.invoiceRef.PayHash() != event.hash {
+		if !client.invoiceRef.IsEquivalent(event.ref) {
 			continue
 		}
 
@@ -456,6 +456,7 @@ func (i *InvoiceRegistry) deliverSingleBacklogEvents(
 	client *SingleInvoiceSubscription) error {
 
 	invoice, err := i.cdb.LookupInvoice(client.invoiceRef)
+	ref := invoice.SupplementRef(client.invoiceRef)
 
 	// It is possible that the invoice does not exist yet, but the client is
 	// already watching it in anticipation.
@@ -469,7 +470,7 @@ func (i *InvoiceRegistry) deliverSingleBacklogEvents(
 	}
 
 	err = client.notify(&invoiceEvent{
-		hash:    client.invoiceRef.PayHash(),
+		ref:     ref,
 		invoice: &invoice,
 	})
 	if err != nil {
@@ -503,7 +504,7 @@ func (i *InvoiceRegistry) AddInvoice(invoice *channeldb.Invoice,
 
 	// Now that we've added the invoice, we'll send dispatch a message to
 	// notify the clients of this new invoice.
-	i.notifyClients(paymentHash, invoice, channeldb.ContractOpen)
+	i.notifyClients(ref, invoice, channeldb.ContractOpen)
 	i.Unlock()
 
 	// InvoiceExpiryWatcher.AddInvoice must not be locked by InvoiceRegistry
@@ -886,7 +887,8 @@ func (i *InvoiceRegistry) notifyExitHopHtlcLocked(
 	}
 
 	if updateSubscribers {
-		i.notifyClients(ctx.hash, invoice, invoice.State)
+		ref := invoice.GetRefWithHash(ctx.hash)
+		i.notifyClients(ref, invoice, invoice.State)
 	}
 
 	switch res := resolution.(type) {
@@ -1033,7 +1035,7 @@ func (i *InvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
 
 		i.notifyHodlSubscribers(resolution)
 	}
-	i.notifyClients(hash, invoice, invoice.State)
+	i.notifyClients(invoiceRef, invoice, invoice.State)
 
 	return nil
 }
@@ -1076,8 +1078,7 @@ func (i *InvoiceRegistry) cancelInvoiceImpl(payHash lntypes.Hash,
 		}, nil
 	}
 
-	invoiceRef := channeldb.InvoiceRefByHash(payHash)
-	invoice, err := i.cdb.UpdateInvoice(invoiceRef, updateInvoice)
+	invoice, err := i.cdb.UpdateInvoice(ref, updateInvoice)
 
 	// Implement idempotency by returning success if the invoice was already
 	// canceled.
@@ -1114,20 +1115,23 @@ func (i *InvoiceRegistry) cancelInvoiceImpl(payHash lntypes.Hash,
 			),
 		)
 	}
-	i.notifyClients(payHash, invoice, channeldb.ContractCanceled)
+	i.notifyClients(ref, invoice, channeldb.ContractCanceled)
 
 	return nil
 }
 
 // notifyClients notifies all currently registered invoice notification clients
 // of a newly added/settled invoice.
-func (i *InvoiceRegistry) notifyClients(hash lntypes.Hash,
+func (i *InvoiceRegistry) notifyClients(ref channeldb.InvoiceRef,
 	invoice *channeldb.Invoice,
 	state channeldb.ContractState) {
 
+	// Complete invoice ref with invoice data if necessary.
+	ref = invoice.SupplementRef(ref)
+
 	event := &invoiceEvent{
 		invoice: invoice,
-		hash:    hash,
+		ref:     ref,
 	}
 
 	select {
@@ -1318,7 +1322,7 @@ func (i *InvoiceRegistry) SubscribeNotifications(
 // SubscribeSingleInvoice returns an SingleInvoiceSubscription which allows the
 // caller to receive async notifications for a specific invoice.
 func (i *InvoiceRegistry) SubscribeSingleInvoice(
-	hash lntypes.Hash) (*SingleInvoiceSubscription, error) {
+	ref channeldb.InvoiceRef) (*SingleInvoiceSubscription, error) {
 
 	client := &SingleInvoiceSubscription{
 		Updates: make(chan *channeldb.Invoice),
@@ -1327,7 +1331,7 @@ func (i *InvoiceRegistry) SubscribeSingleInvoice(
 			ntfnQueue:  queue.NewConcurrentQueue(20),
 			cancelChan: make(chan struct{}),
 		},
-		invoiceRef: channeldb.InvoiceRefByHash(hash),
+		invoiceRef: ref,
 	}
 	client.ntfnQueue.Start()
 

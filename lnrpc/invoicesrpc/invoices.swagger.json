@@ -140,9 +140,17 @@
         "parameters": [
           {
             "name": "r_hash",
-            "description": "Hash corresponding to the (hold) invoice to subscribe to.",
+            "description": "Hash corresponding to the (hold) invoice to subscribe to. The fields\nr_hash and payment_addr are mutually exclusive.",
             "in": "path",
             "required": true,
+            "type": "string",
+            "format": "byte"
+          },
+          {
+            "name": "payment_addr",
+            "description": "Payment address corresponding to the (hold) invoice to subscribe to. The\nfields r_hash and payment_addr are mutually exclusive.",
+            "in": "query",
+            "required": false,
             "type": "string",
             "format": "byte"
           }

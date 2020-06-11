@@ -228,6 +228,14 @@ func InvoiceRefByHashAndAddr(payHash lntypes.Hash,
 	}
 }
 
+// InvoiceRefByAddr creates an InvoiceRef that queries for an invoice by the
+// provided payment address.
+func InvoiceRefByAddr(payAddr [32]byte) InvoiceRef {
+	return InvoiceRef{
+		payAddr: &payAddr,
+	}
+}
+
 // InvoiceRefBySetID creates an InvoiceRef that queries the set id index for an
 // invoice with the provided setID. If the invoice is not found, the query will
 // not fallback to payHash or payAddr.
@@ -262,6 +270,21 @@ func (r InvoiceRef) SetID() *[32]byte {
 		return &id
 	}
 	return nil
+}
+
+// IsEquivalent returns true if both invoice refs match the same invoice.
+func (r InvoiceRef) IsEquivalent(target InvoiceRef) bool {
+	if r.payHash != lntypes.ZeroHash && r.payHash == target.payHash {
+		return true
+	}
+
+	if r.payAddr != nil && target.payAddr != nil &&
+		*r.payAddr == *target.payAddr {
+
+		return true
+	}
+
+	return false
 }
 
 // String returns a human-readable representation of an InvoiceRef.
@@ -407,6 +430,24 @@ type Invoice struct {
 	// HodlInvoice indicates whether the invoice should be held in the
 	// Accepted state or be settled right away.
 	HodlInvoice bool
+}
+
+// SupplementRef completes a ref by using additional info from the invoice.
+func (i *Invoice) SupplementRef(ref InvoiceRef) InvoiceRef {
+	if ref.PayAddr() != nil {
+		return ref
+	}
+
+	return InvoiceRefByHashAndAddr(
+		ref.PayHash(), i.Terms.PaymentAddr,
+	)
+}
+
+// GetRefWithHash returns a complete a ref for this invoice.
+func (i *Invoice) GetRefWithHash(hash lntypes.Hash) InvoiceRef {
+	return InvoiceRefByHashAndAddr(
+		hash, i.Terms.PaymentAddr,
+	)
 }
 
 // HTLCSet returns the set of accepted HTLCs belonging to an invoice. Passing a
@@ -874,6 +915,11 @@ func fetchInvoiceNumByRef(invoiceIndex, payAddrIndex, setIDIndex kvdb.RBucket,
 	// was provided, or if it didn't match anything in our records.
 	case invoiceNumByHash != nil:
 		return invoiceNumByHash, nil
+
+	// If we were only able to reference the invoice by payment address,
+	// return the corresponding invoice number.
+	case invoiceNumByAddr != nil:
+		return invoiceNumByAddr, nil
 
 	// Otherwise we don't know of the target invoice.
 	default:
