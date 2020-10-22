@@ -124,6 +124,10 @@ var (
 			Entity: "onchain",
 			Action: "write",
 		}},
+		"/walletrpc.WalletKit/RegisterCoinFilter": {{
+			Entity: "onchain",
+			Action: "write",
+		}},
 	}
 
 	// DefaultWalletKitMacFilename is the default name of the wallet kit
@@ -1116,4 +1120,43 @@ func (w *WalletKit) FinalizePsbt(_ context.Context,
 		SignedPsbt: finalPsbtBytes.Bytes(),
 		RawFinalTx: finalTxBytes.Bytes(),
 	}, nil
+}
+
+func (w *WalletKit) RegisterCoinFilter(stream WalletKit_RegisterCoinFilterServer) error {
+	responses := make(map[wire.OutPoint]chan bool)
+
+	err := w.cfg.Wallet.RegisterCoinFilter(func(op wire.OutPoint) bool {
+		// TODO: locking
+		responseChan := make(chan bool)
+		responses[op] = responseChan
+
+		stream.Send(&CoinFilterRequest{
+			Outpoint: &lnrpc.OutPoint{
+				TxidBytes:   op.Hash[:],
+				OutputIndex: op.Index,
+			},
+		})
+
+		include := <-responseChan
+
+		return include
+	})
+	if err != nil {
+		return err
+	}
+	defer w.cfg.Wallet.RegisterCoinFilter(nil)
+
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+
+		op, err := unmarshallOutPoint(resp.Outpoint)
+		if err != nil {
+			return err
+		}
+
+		responses[*op] <- resp.Include
+	}
 }

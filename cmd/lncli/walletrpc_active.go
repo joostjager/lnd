@@ -48,6 +48,7 @@ func walletCommands() []cli.Command {
 				labelTxCommand,
 				releaseOutputCommand,
 				psbtCommand,
+				coinFilterCommand,
 			},
 		},
 	}

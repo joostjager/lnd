@@ -193,3 +193,7 @@ func (w *WalletController) Start() error {
 func (w *WalletController) Stop() error {
 	return nil
 }
+
+func (w *WalletController) RegisterCoinFilter(func(wire.OutPoint) bool) error {
+	return nil
+}

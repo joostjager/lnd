@@ -165,6 +165,18 @@ service WalletKit {
     unlock/release any locked UTXOs in case of an error in this method.
     */
     rpc FinalizePsbt (FinalizePsbtRequest) returns (FinalizePsbtResponse);
+
+    rpc RegisterCoinFilter (stream CoinFilterResponse) returns 
+        (stream CoinFilterRequest);
+}
+
+message CoinFilterRequest {
+    lnrpc.OutPoint outpoint = 1;
+}
+
+message CoinFilterResponse {
+    lnrpc.OutPoint outpoint = 1;
+    bool include = 2;
 }
 
 message ListUnspentRequest {

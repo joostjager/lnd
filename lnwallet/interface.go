@@ -316,6 +316,8 @@ type WalletController interface {
 	// TODO(roasbeef): make distinct interface?
 	SubscribeTransactions() (TransactionSubscription, error)
 
+	RegisterCoinFilter(func(wire.OutPoint) bool) error
+
 	// IsSynced returns a boolean indicating if from the PoV of the wallet,
 	// it has fully synced to the current best block in the main chain.
 	// It also returns an int64 indicating the timestamp of the best block

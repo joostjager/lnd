@@ -3,6 +3,7 @@ package btcwallet
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -65,6 +66,8 @@ type BtcWallet struct {
 	netParams *chaincfg.Params
 
 	chainKeyScope waddrmgr.KeyScope
+
+	coinFilter func(wire.OutPoint) bool
 }
 
 // A compile time check to ensure that BtcWallet implements the
@@ -432,6 +435,20 @@ func (b *BtcWallet) ListUnspentWitness(minConfs, maxConfs int32) (
 	// which are p2wkh outputs or a p2wsh output nested within a p2sh output.
 	witnessOutputs := make([]*lnwallet.Utxo, 0, len(unspentOutputs))
 	for _, output := range unspentOutputs {
+		txid, err := chainhash.NewHashFromStr(output.TxID)
+		if err != nil {
+			return nil, err
+		}
+
+		op := wire.OutPoint{
+			Hash:  *txid,
+			Index: output.Vout,
+		}
+
+		if b.coinFilter != nil && !b.coinFilter(op) {
+			continue
+		}
+
 		pkScript, err := hex.DecodeString(output.ScriptPubKey)
 		if err != nil {
 			return nil, err
@@ -450,11 +467,6 @@ func (b *BtcWallet) ListUnspentWitness(minConfs, maxConfs int32) (
 		if addressType == lnwallet.WitnessPubKey ||
 			addressType == lnwallet.NestedWitnessPubKey {
 
-			txid, err := chainhash.NewHashFromStr(output.TxID)
-			if err != nil {
-				return nil, err
-			}
-
 			// We'll ensure we properly convert the amount given in
 			// BTC to satoshis.
 			amt, err := btcutil.NewAmount(output.Amount)
@@ -463,13 +475,10 @@ func (b *BtcWallet) ListUnspentWitness(minConfs, maxConfs int32) (
 			}
 
 			utxo := &lnwallet.Utxo{
-				AddressType: addressType,
-				Value:       amt,
-				PkScript:    pkScript,
-				OutPoint: wire.OutPoint{
-					Hash:  *txid,
-					Index: output.Vout,
-				},
+				AddressType:   addressType,
+				Value:         amt,
+				PkScript:      pkScript,
+				OutPoint:      op,
 				Confirmations: output.Confirmations,
 			}
 			witnessOutputs = append(witnessOutputs, utxo)
@@ -478,6 +487,15 @@ func (b *BtcWallet) ListUnspentWitness(minConfs, maxConfs int32) (
 	}
 
 	return witnessOutputs, nil
+}
+
+func (b *BtcWallet) RegisterCoinFilter(filter func(wire.OutPoint) bool) error {
+	if b.coinFilter != nil {
+		return errors.New("coin filter already registered")
+	}
+	b.coinFilter = filter
+
+	return nil
 }
 
 // PublishTransaction performs cursory validation (dust checks, etc), then
