@@ -26,7 +26,6 @@ type routingGraph interface {
 // database.
 type dbRoutingTx struct {
 	graph  *channeldb.ChannelGraph
-	tx     kvdb.RTx
 	source route.Vertex
 }
 
@@ -38,21 +37,15 @@ func newDbRoutingTx(graph *channeldb.ChannelGraph) (*dbRoutingTx, error) {
 		return nil, err
 	}
 
-	tx, err := graph.Database().BeginReadTx()
-	if err != nil {
-		return nil, err
-	}
-
 	return &dbRoutingTx{
 		graph:  graph,
-		tx:     tx,
 		source: sourceNode.PubKeyBytes,
 	}, nil
 }
 
 // close closes the underlying db transaction.
 func (g *dbRoutingTx) close() error {
-	return g.tx.Rollback()
+	return nil
 }
 
 // forEachNodeChannel calls the callback for every channel of the given node.
@@ -68,7 +61,7 @@ func (g *dbRoutingTx) forEachNodeChannel(nodePub route.Vertex,
 		return cb(info, p1, p2)
 	}
 
-	return g.graph.ForEachNodeChannel(g.tx, nodePub[:], txCb)
+	return g.graph.ForEachNodeChannel(nil, nodePub[:], txCb)
 }
 
 // sourceNode returns the source node of the graph.
@@ -85,7 +78,7 @@ func (g *dbRoutingTx) sourceNode() route.Vertex {
 func (g *dbRoutingTx) fetchNodeFeatures(nodePub route.Vertex) (
 	*lnwire.FeatureVector, error) {
 
-	targetNode, err := g.graph.FetchLightningNode(g.tx, nodePub)
+	targetNode, err := g.graph.FetchLightningNode(nil, nodePub)
 	switch err {
 
 	// If the node exists and has features, return them directly.

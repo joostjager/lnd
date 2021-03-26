@@ -283,8 +283,13 @@ func (c *ChannelGraph) ForEachNodeChannel(tx kvdb.RTx, nodePub []byte,
 		*ChannelEdgePolicy) error) error {
 
 	db := c.db
+	if tx != nil {
+		return nodeTraversal(tx, nodePub, db, cb)
+	}
 
-	return nodeTraversal(tx, nodePub, db, cb)
+	return kvdb.View(c.db, func(newTx kvdb.RTx) error {
+		return nodeTraversal(newTx, nodePub, db, cb)
+	}, func() {})
 }
 
 // DisabledChannelIDs returns the channel ids of disabled channels.
