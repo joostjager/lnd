@@ -1621,6 +1621,11 @@ var queryRoutesCommand = cli.Command{
 			Usage: "the 33-byte hex-encoded public key for the payment " +
 				"destination",
 		},
+		cli.StringFlag{
+			Name: "src",
+			Usage: "the 33-byte hex-encoded public key for the payment " +
+				"origin",
+		},
 		cli.Int64Flag{
 			Name:  "amt",
 			Usage: "the amount to send expressed in satoshis",
@@ -1702,6 +1707,11 @@ func queryRoutes(ctx *cli.Context) error {
 		UseMissionControl: ctx.Bool("use_mc"),
 		CltvLimit:         uint32(ctx.Uint64(cltvLimitFlag.Name)),
 		OutgoingChanId:    ctx.Uint64("outgoing_chanid"),
+	}
+
+	src := ctx.String("src")
+	if src != "" {
+		req.SourcePubKey = src
 	}
 
 	route, err := client.QueryRoutes(ctxb, req)
