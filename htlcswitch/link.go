@@ -590,7 +590,7 @@ func (l *channelLink) markReestablished() {
 func (l *channelLink) sampleNetworkFee() (chainfee.SatPerKWeight, error) {
 	// We'll first query for the sat/kw recommended to be confirmed within 3
 	// blocks.
-	feePerKw, err := l.cfg.FeeEstimator.EstimateFeePerKW(3)
+	feePerKw, err := l.cfg.FeeEstimator.EstimateFeePerKW(80)
 	if err != nil {
 		return 0, err
 	}
