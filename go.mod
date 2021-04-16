@@ -87,4 +87,6 @@ replace github.com/lightningnetwork/lnd/clock => ./clock
 
 replace git.schwanenlied.me/yawning/bsaes.git => github.com/Yawning/bsaes v0.0.0-20180720073208-c0276d75487e
 
+replace go.etcd.io/bbolt => github.com/joostjager/bbolt v1.3.6-0.20210416093924-0695fd4ff081
+
 go 1.13
