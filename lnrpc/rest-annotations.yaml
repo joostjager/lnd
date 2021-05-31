@@ -149,6 +149,8 @@ http:
     - selector: lnrpc.Lightning.SendCustomMessage
       post: "/v1/custommessage/send"
       body: "*"
+    - selector: lnrpc.Lightning.SubscribeCustomMessages
+      get: "/v1/custommessage/subscribe"
 
     # walletunlocker.proto
     - selector: lnrpc.WalletUnlocker.GenSeed

@@ -297,9 +297,16 @@ type server struct {
 	// livelinessMonitor monitors that lnd has access to critical resources.
 	livelinessMonitor *healthcheck.Monitor
 
+	customMessageServer *subscribe.Server
+
 	quit chan struct{}
 
 	wg sync.WaitGroup
+}
+
+type CustomMessage struct {
+	Peer [33]byte
+	Msg  *lnwire.Custom
 }
 
 // parseAddr parses an address from its string format to a net.Addr.
@@ -469,6 +476,8 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		outboundPeers:             make(map[string]*peer.Brontide),
 		peerConnectedListeners:    make(map[string][]chan<- lnpeer.Peer),
 		peerDisconnectedListeners: make(map[string][]chan<- struct{}),
+
+		customMessageServer: subscribe.NewServer(),
 
 		featureMgr: featureMgr,
 		quit:       make(chan struct{}),
@@ -1496,6 +1505,12 @@ func (s *server) Start() error {
 	cleanup := cleaner{}
 
 	s.start.Do(func() {
+		if err := s.customMessageServer.Start(); err != nil {
+			startErr = err
+			return
+		}
+		cleanup = cleanup.add(s.customMessageServer.Stop)
+
 		if s.torController != nil {
 			if err := s.createNewHiddenService(); err != nil {
 				startErr = err
@@ -3181,6 +3196,24 @@ func (s *server) cancelConnReqs(pubStr string, skip *uint64) {
 	delete(s.persistentConnReqs, pubStr)
 }
 
+// handleCustomMessage dispatches an incoming custom peers message to
+// subscribers.
+func (s *server) handleCustomMessage(peer [33]byte, msg *lnwire.Custom) error {
+	srvrLog.Debugf("Custom message received: peer=%x, type=%d",
+		peer, msg.Type)
+
+	return s.customMessageServer.SendUpdate(&CustomMessage{
+		Peer: peer,
+		Msg:  msg,
+	})
+}
+
+// SubscribeCustomMessages subscribes to a stream of incoming custom peer
+// messages.
+func (s *server) SubscribeCustomMessages() (*subscribe.Client, error) {
+	return s.customMessageServer.Subscribe()
+}
+
 // peerConnected is a function that handles initialization a newly connected
 // peer by adding it to the server's global list of all active peers, and
 // starting all the goroutines the peer needs to function properly. The inbound
@@ -3276,6 +3309,7 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 			s.cfg.MaxCommitFeeRateAnchors * 1000).FeePerKWeight(),
 		ChannelCommitInterval:  s.cfg.ChannelCommitInterval,
 		ChannelCommitBatchSize: s.cfg.ChannelCommitBatchSize,
+		HandleCustomMessage:    s.handleCustomMessage,
 		Quit:                   s.quit,
 	}
 
