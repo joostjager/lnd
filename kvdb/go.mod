@@ -11,6 +11,7 @@ require (
 	github.com/google/uuid v1.1.1 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.14.3 // indirect
+	github.com/jackc/pgx/v4 v4.11.0
 	github.com/json-iterator/go v1.1.9 // indirect
 	github.com/lightningnetwork/lnd/healthcheck v1.0.0
 	github.com/stretchr/testify v1.7.0
@@ -18,7 +19,7 @@ require (
 	go.etcd.io/bbolt v1.3.5-0.20200615073812-232d8fc87f50
 	go.etcd.io/etcd v3.4.14+incompatible
 	go.uber.org/zap v1.14.1 // indirect
-	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899 // indirect
+	golang.org/x/net v0.0.0-20210226172049-e18ecbb05110
 )
 
 // Fix incompatibility of etcd go.mod package.
