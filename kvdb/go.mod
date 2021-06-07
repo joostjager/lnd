@@ -1,6 +1,7 @@
 module github.com/lightningnetwork/lnd/kvdb
 
 require (
+	github.com/JackC/pgx v3.6.2+incompatible
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f
 	github.com/btcsuite/btcwallet/walletdb v1.3.5-0.20210513043850-3a2f12e3a954
 	github.com/coreos/go-semver v0.3.0 // indirect
@@ -11,6 +12,8 @@ require (
 	github.com/google/uuid v1.1.1 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.14.3 // indirect
+	github.com/jackc/pgx v3.6.2+incompatible // indirect
+	github.com/jackc/pgx/v4 v4.11.0
 	github.com/json-iterator/go v1.1.9 // indirect
 	github.com/lightningnetwork/lnd/healthcheck v1.0.0
 	github.com/stretchr/testify v1.7.0
@@ -18,7 +21,7 @@ require (
 	go.etcd.io/bbolt v1.3.5-0.20200615073812-232d8fc87f50
 	go.etcd.io/etcd v3.4.14+incompatible
 	go.uber.org/zap v1.14.1 // indirect
-	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899 // indirect
+	golang.org/x/net v0.0.0-20210226172049-e18ecbb05110
 )
 
 // Fix incompatibility of etcd go.mod package.

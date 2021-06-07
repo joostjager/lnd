@@ -7,6 +7,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/kvdb"
 	"github.com/lightningnetwork/lnd/kvdb/etcd"
+	"github.com/lightningnetwork/lnd/kvdb/postgres"
 	"github.com/lightningnetwork/lnd/lnwallet/btcwallet"
 )
 
@@ -14,6 +15,7 @@ const (
 	dbName                     = "channel.db"
 	BoltBackend                = "bolt"
 	EtcdBackend                = "etcd"
+	PostgresBackend            = "postgres"
 	DefaultBatchCommitInterval = 500 * time.Millisecond
 )
 
@@ -26,6 +28,8 @@ type DB struct {
 	Etcd *etcd.Config `group:"etcd" namespace:"etcd" description:"Etcd settings."`
 
 	Bolt *kvdb.BoltConfig `group:"bolt" namespace:"bolt" description:"Bolt settings."`
+
+	Postgres *postgres.Config `group:"postgres" namespace:"postgres" description:"Postgres settings."`
 }
 
 // DefaultDB creates and returns a new default DB config.
@@ -44,7 +48,7 @@ func DefaultDB() *DB {
 func (db *DB) Validate() error {
 	switch db.Backend {
 	case BoltBackend:
-
+	case PostgresBackend:
 	case EtcdBackend:
 		if !db.Etcd.Embedded && db.Etcd.Host == "" {
 			return fmt.Errorf("etcd host must be set")
@@ -129,7 +133,8 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath, walletDBPath string,
 	makeTowerServerBoltDB boltBackendCreator) (
 	*DatabaseBackends, error) {
 
-	if db.Backend == EtcdBackend {
+	switch db.Backend {
+	case EtcdBackend:
 		etcdGraphBackend, err := kvdb.Open(
 			kvdb.EtcdBackendName, ctx,
 			db.Etcd.CloneWithSubNamespace("graphdb"),
@@ -207,6 +212,88 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath, walletDBPath string,
 			// state.
 			WalletDB: btcwallet.LoaderWithExternalWalletDB(
 				etcdWalletBackend,
+			),
+			Replicated: true,
+		}, nil
+
+	case PostgresBackend:
+		postgresGraphBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, "graphdb",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd graph DB: "+
+				"%v", err)
+		}
+
+		postgresChanStateBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, "chanstatedb",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd chan state "+
+				"DB: %v", err)
+		}
+
+		postgresMacaroonBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, "macaroondb",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd macaroon "+
+				"DB: %v", err)
+		}
+
+		postgresDecayedLogBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, "decayedlogdb",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd decayed "+
+				"log DB: %v", err)
+		}
+
+		postgresTowerClientBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, "towerclientdb",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd tower "+
+				"client DB: %v", err)
+		}
+
+		postgresTowerServerBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, "towerserverdb",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd tower "+
+				"server DB: %v", err)
+		}
+
+		postgresWalletBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, "walletdb",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd macaroon "+
+				"DB: %v", err)
+		}
+
+		return &DatabaseBackends{
+			GraphDB:       postgresGraphBackend,
+			ChanStateDB:   postgresChanStateBackend,
+			MacaroonDB:    postgresMacaroonBackend,
+			DecayedLogDB:  postgresDecayedLogBackend,
+			TowerClientDB: postgresTowerClientBackend,
+			TowerServerDB: postgresTowerServerBackend,
+			// The wallet loader will attempt to use/create the
+			// wallet in the replicated remote DB if we're running
+			// in a clustered environment. This will ensure that all
+			// members of the cluster have access to the same wallet
+			// state.
+			WalletDB: btcwallet.LoaderWithExternalWalletDB(
+				postgresWalletBackend,
 			),
 			Replicated: true,
 		}, nil
