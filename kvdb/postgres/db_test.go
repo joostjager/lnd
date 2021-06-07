@@ -1,0 +1,165 @@
+package postgres
+
+import (
+	"testing"
+
+	"github.com/btcsuite/btcwallet/walletdb"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/net/context"
+)
+
+func TestDb(t *testing.T) {
+	cfg := Config{
+		Dsn: "postgres://bottle:bottle@localhost:45432/lnd?sslmode=disable",
+	}
+
+	db, err := newPostgresBackend(context.Background(), cfg)
+	require.NoError(t, err)
+
+	err = db.Update(func(tx walletdb.ReadWriteTx) error {
+		// Try to delete all data (there is none).
+		err := tx.DeleteTopLevelBucket([]byte("top"))
+		require.ErrorIs(t, walletdb.ErrBucketNotFound, err)
+
+		// Create top level bucket.
+		top, err := tx.CreateTopLevelBucket([]byte("top"))
+		require.NoError(t, err)
+		require.NotNil(t, top)
+
+		// Assert that key doesn't exist.
+		require.Nil(t, top.Get([]byte("key")))
+
+		require.NoError(t, top.ForEach(func(k, v []byte) error {
+			require.Fail(t, "unexpected data")
+			return nil
+		}))
+
+		// Put key.
+		require.NoError(t, top.Put([]byte("key"), []byte("val")))
+		require.Equal(t, []byte("val"), top.Get([]byte("key")))
+
+		// Overwrite key.
+		require.NoError(t, top.Put([]byte("key"), []byte("val2")))
+		require.Equal(t, []byte("val2"), top.Get([]byte("key")))
+
+		// Put nil value.
+		require.NoError(t, top.Put([]byte("nilkey"), nil))
+		require.Equal(t, []byte(""), top.Get([]byte("nilkey")))
+
+		// Put empty value.
+		require.NoError(t, top.Put([]byte("nilkey"), []byte{}))
+		require.Equal(t, []byte(""), top.Get([]byte("nilkey")))
+
+		// Try to create bucket with same name as previous key.
+		_, err = top.CreateBucket([]byte("key"))
+		require.ErrorIs(t, err, walletdb.ErrIncompatibleValue)
+
+		_, err = top.CreateBucketIfNotExists([]byte("key"))
+		require.ErrorIs(t, err, walletdb.ErrIncompatibleValue)
+
+		// Create sub-bucket.
+		sub2, err := top.CreateBucket([]byte("sub2"))
+		require.NoError(t, err)
+		require.NotNil(t, sub2)
+
+		// Assert that re-creating the bucket fails.
+		_, err = top.CreateBucket([]byte("sub2"))
+		require.ErrorIs(t, err, walletdb.ErrBucketExists)
+
+		// Assert that create-if-not-exists succeeds.
+		_, err = top.CreateBucketIfNotExists([]byte("sub2"))
+		require.NoError(t, err)
+
+		// Assert that fetching the bucket succeeds.
+		sub2 = top.NestedReadWriteBucket([]byte("sub2"))
+		require.NotNil(t, sub2)
+
+		// Try to put key with same name as bucket.
+		require.ErrorIs(t, top.Put([]byte("sub2"), []byte("val")), walletdb.ErrIncompatibleValue)
+
+		// Check for each result.
+		kvs := make(map[string][]byte)
+		require.NoError(t, top.ForEach(func(k, v []byte) error {
+			kvs[string(k)] = v
+			return nil
+		}))
+		require.Equal(t, map[string][]byte{
+			"key":    []byte("val2"),
+			"nilkey": []byte(""),
+			"sub2":   nil,
+		}, kvs)
+
+		// Delete key.
+		require.NoError(t, top.Delete([]byte("key")))
+
+		// Delete non-existent key.
+		require.NoError(t, top.Delete([]byte("keynonexistent")))
+
+		// Test sequence.
+		require.Equal(t, uint64(0), top.Sequence())
+
+		require.NoError(t, top.SetSequence(100))
+		require.Equal(t, uint64(100), top.Sequence())
+
+		require.NoError(t, top.SetSequence(101))
+		require.Equal(t, uint64(101), top.Sequence())
+
+		next, err := top.NextSequence()
+		require.NoError(t, err)
+		require.Equal(t, uint64(102), next)
+
+		// Test cursor.
+		cursor := top.ReadWriteCursor()
+		k, v := cursor.First()
+		require.Equal(t, []byte("nilkey"), k)
+		require.Equal(t, []byte(""), v)
+
+		k, v = cursor.Last()
+		require.Equal(t, []byte("sub2"), k)
+		require.Nil(t, v)
+
+		k, v = cursor.Prev()
+		require.Equal(t, []byte("nilkey"), k)
+		require.Equal(t, []byte(""), v)
+
+		k, v = cursor.Prev()
+		require.Nil(t, k)
+		require.Nil(t, v)
+
+		k, v = cursor.Next()
+		require.Equal(t, []byte("sub2"), k)
+		require.Nil(t, v)
+
+		k, v = cursor.Next()
+		require.Nil(t, k)
+		require.Nil(t, v)
+
+		k, v = cursor.Seek([]byte("nilkey"))
+		require.Equal(t, []byte("nilkey"), k)
+		require.Equal(t, []byte(""), v)
+
+		require.NoError(t, sub2.Put([]byte("k1"), []byte("v1")))
+		require.NoError(t, sub2.Put([]byte("k2"), []byte("v2")))
+		require.NoError(t, sub2.Put([]byte("k3"), []byte("v3")))
+
+		cursor = sub2.ReadWriteCursor()
+		cursor.First()
+		for i := 0; i < 3; i++ {
+			require.NoError(t, cursor.Delete())
+		}
+		require.NoError(t, sub2.ForEach(func(k, v []byte) error {
+			require.Fail(t, "unexpected data")
+			return nil
+		}))
+
+		//Try to delete all data.
+		require.NoError(t, tx.DeleteTopLevelBucket([]byte("top")))
+		require.NoError(t, top.ForEach(func(k, v []byte) error {
+			require.Fail(t, "unexpected data")
+			return nil
+		}))
+
+		return nil
+	}, func() {})
+	require.NoError(t, err)
+}

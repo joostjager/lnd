@@ -7,12 +7,14 @@ import (
 
 	"github.com/lightningnetwork/lnd/kvdb"
 	"github.com/lightningnetwork/lnd/kvdb/etcd"
+	"github.com/lightningnetwork/lnd/kvdb/postgres"
 )
 
 const (
 	dbName                     = "channel.db"
 	BoltBackend                = "bolt"
 	EtcdBackend                = "etcd"
+	PostgresBackend            = "postgres"
 	DefaultBatchCommitInterval = 500 * time.Millisecond
 )
 
@@ -25,6 +27,8 @@ type DB struct {
 	Etcd *etcd.Config `group:"etcd" namespace:"etcd" description:"Etcd settings."`
 
 	Bolt *kvdb.BoltConfig `group:"bolt" namespace:"bolt" description:"Bolt settings."`
+
+	Postgres *postgres.Config `group:"postgres" namespace:"postgres" description:"Postgres settings."`
 }
 
 // NewDB creates and returns a new default DB config.
@@ -43,7 +47,7 @@ func DefaultDB() *DB {
 func (db *DB) Validate() error {
 	switch db.Backend {
 	case BoltBackend:
-
+	case PostgresBackend:
 	case EtcdBackend:
 		if !db.Etcd.Embedded && db.Etcd.Host == "" {
 			return fmt.Errorf("etcd host must be set")
@@ -103,9 +107,18 @@ func (db *DB) GetBackends(ctx context.Context, dbPath string) (
 		err               error
 	)
 
-	if db.Backend == EtcdBackend {
+	switch db.Backend {
+	case EtcdBackend:
 		remoteDB, err = kvdb.Open(
 			kvdb.EtcdBackendName, ctx, db.Etcd,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+	case PostgresBackend:
+		remoteDB, err = kvdb.Open(
+			kvdb.PostgresBackendName, ctx, db.Postgres,
 		)
 		if err != nil {
 			return nil, err
