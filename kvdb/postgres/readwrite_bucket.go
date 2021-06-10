@@ -18,14 +18,17 @@ type readWriteBucket struct {
 
 	// tx holds the parent transaction.
 	tx *readWriteTx
+
+	table string
 }
 
 // newReadWriteBucket creates a new rw bucket with the passed transaction
 // and bucket id.
-func newReadWriteBucket(tx *readWriteTx, id *int64) *readWriteBucket {
+func newReadWriteBucket(tx *readWriteTx, table string, id *int64) *readWriteBucket {
 	return &readWriteBucket{
-		id: id,
-		tx: tx,
+		id:    id,
+		tx:    tx,
+		table: table,
 	}
 }
 
@@ -49,7 +52,7 @@ func parentSelector(id *int64) string {
 func (b *readWriteBucket) ForEach(cb func(k, v []byte) error) error {
 	rows, err := b.tx.tx.Query(
 		context.TODO(),
-		"SELECT key,value FROM kv WHERE "+parentSelector(b.id)+" ORDER BY key",
+		"SELECT key,value FROM "+b.table+" WHERE "+parentSelector(b.id)+" ORDER BY key",
 	)
 	if err != nil {
 		return err
@@ -99,7 +102,7 @@ func (b *readWriteBucket) Get(key []byte) []byte {
 	var value *[]byte
 	err := b.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT value FROM kv WHERE "+parentSelector(b.id)+" AND key=$1",
+		"SELECT value FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1",
 		key,
 	).Scan(&value)
 
@@ -124,7 +127,7 @@ func (b *readWriteBucket) NestedReadWriteBucket(key []byte) walletdb.ReadWriteBu
 	var id int64
 	err := b.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT id FROM kv WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
+		"SELECT id FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
 		key,
 	).Scan(&id)
 
@@ -132,7 +135,7 @@ func (b *readWriteBucket) NestedReadWriteBucket(key []byte) walletdb.ReadWriteBu
 		return nil
 	}
 
-	return newReadWriteBucket(b.tx, &id)
+	return newReadWriteBucket(b.tx, b.table, &id)
 }
 
 // CreateBucket creates and returns a new nested bucket with the given
@@ -154,7 +157,7 @@ func (b *readWriteBucket) CreateBucket(key []byte) (
 	)
 	err := b.tx.tx.QueryRow(
 		context.TODO(),
-		"select id,value from kv where "+parentSelector(b.id)+" and key=$1",
+		"select id,value from "+b.table+" where "+parentSelector(b.id)+" and key=$1",
 		key).Scan(&id, &value)
 
 	switch {
@@ -172,14 +175,14 @@ func (b *readWriteBucket) CreateBucket(key []byte) (
 
 	err = b.tx.tx.QueryRow(
 		context.TODO(),
-		"insert into kv (parent_id, key) values($1, $2) RETURNING id",
+		"insert into "+b.table+" (parent_id, key) values($1, $2) RETURNING id",
 		b.id, key,
 	).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
 
-	return newReadWriteBucket(b.tx, &id), nil
+	return newReadWriteBucket(b.tx, b.table, &id), nil
 }
 
 // CreateBucketIfNotExists creates and returns a new nested bucket with
@@ -200,14 +203,14 @@ func (b *readWriteBucket) CreateBucketIfNotExists(key []byte) (
 	)
 	err := b.tx.tx.QueryRow(
 		context.TODO(),
-		"select id,value from kv where "+parentSelector(b.id)+" and key=$1",
+		"select id,value from "+b.table+" where "+parentSelector(b.id)+" and key=$1",
 		key).Scan(&id, &value)
 
 	switch {
 	case err == pgx.ErrNoRows:
 		err = b.tx.tx.QueryRow(
 			context.TODO(),
-			"insert into kv (parent_id, key) values($1, $2) RETURNING id",
+			"insert into "+b.table+" (parent_id, key) values($1, $2) RETURNING id",
 			b.id, key,
 		).Scan(&id)
 		if err != nil {
@@ -221,7 +224,7 @@ func (b *readWriteBucket) CreateBucketIfNotExists(key []byte) (
 		return nil, err
 	}
 
-	return newReadWriteBucket(b.tx, &id), nil
+	return newReadWriteBucket(b.tx, b.table, &id), nil
 }
 
 // DeleteNestedBucket deletes the nested bucket and its sub-buckets
@@ -235,7 +238,7 @@ func (b *readWriteBucket) DeleteNestedBucket(key []byte) error {
 
 	result, err := b.tx.tx.Exec(
 		context.TODO(),
-		"DELETE FROM kv WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
+		"DELETE FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
 		key,
 	)
 	if err != nil {
@@ -260,9 +263,16 @@ func (b *readWriteBucket) Put(key, value []byte) error {
 		value = []byte{}
 	}
 
+	var query string
+	if b.id == nil {
+		query = "INSERT INTO " + b.table + " (key, value, parent_id) VALUES($1, $2, $3) ON CONFLICT (key) WHERE parent_id IS NULL DO UPDATE SET value=$2 WHERE " + b.table + ".value IS NOT NULL"
+	} else {
+		query = "INSERT INTO " + b.table + " (key, value, parent_id) VALUES($1, $2, $3) ON CONFLICT (key, parent_id) WHERE parent_id IS NOT NULL DO UPDATE SET value=$2 WHERE " + b.table + ".value IS NOT NULL"
+	}
+
 	result, err := b.tx.tx.Exec(
 		context.TODO(),
-		"INSERT INTO kv (key, value, parent_id) VALUES($1, $2, $3) ON CONFLICT (parent_id, key) DO UPDATE SET value=$2 WHERE kv.value IS NOT NULL",
+		query,
 		key, value, b.id,
 	)
 	if err != nil {
@@ -288,7 +298,7 @@ func (b *readWriteBucket) Delete(key []byte) error {
 
 	_, err := b.tx.tx.Exec(
 		context.TODO(),
-		"DELETE FROM kv WHERE key=$1 AND "+parentSelector(b.id)+" AND value IS NOT NULL",
+		"DELETE FROM "+b.table+" WHERE key=$1 AND "+parentSelector(b.id)+" AND value IS NOT NULL",
 		key,
 	)
 	if err != nil {
@@ -322,7 +332,7 @@ func (b *readWriteBucket) NextSequence() (uint64, error) {
 func (b *readWriteBucket) SetSequence(v uint64) error {
 	result, err := b.tx.tx.Exec(
 		context.TODO(),
-		"UPDATE kv SET sequence=$2 WHERE id=$1",
+		"UPDATE "+b.table+" SET sequence=$2 WHERE id=$1",
 		b.id, int64(v),
 	)
 	if err != nil {
@@ -342,7 +352,7 @@ func (b *readWriteBucket) Sequence() uint64 {
 
 	err := b.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT sequence FROM kv WHERE id=$1",
+		"SELECT sequence FROM "+b.table+" WHERE id=$1",
 		b.id,
 	).Scan(&seq)
 
