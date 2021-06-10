@@ -330,10 +330,22 @@ func (b *readWriteBucket) NextSequence() (uint64, error) {
 
 // SetSequence updates the sequence number for the bucket.
 func (b *readWriteBucket) SetSequence(v uint64) error {
+	var (
+		query     string
+		queryArgs []interface{}
+	)
+
+	if b.id == nil {
+		query = "INSERT INTO top_sequences (table_name, sequence) values($1, $2) ON CONFLICT (table_name) DO UPDATE SET sequence=$2"
+		queryArgs = []interface{}{b.table, int64(v)}
+	} else {
+		query = "UPDATE " + b.table + " SET sequence=$2 WHERE id=$1"
+		queryArgs = []interface{}{b.id, int64(v)}
+	}
+
 	result, err := b.tx.tx.Exec(
 		context.TODO(),
-		"UPDATE "+b.table+" SET sequence=$2 WHERE id=$1",
-		b.id, int64(v),
+		query, queryArgs...,
 	)
 	if err != nil {
 		return err
@@ -348,12 +360,23 @@ func (b *readWriteBucket) SetSequence(v uint64) error {
 // Sequence returns the current sequence number for this bucket without
 // incrementing it.
 func (b *readWriteBucket) Sequence() uint64 {
-	var seq int64
+	var (
+		query     string
+		queryArgs []interface{}
+	)
 
+	if b.id == nil {
+		query = "SELECT sequence FROM top_sequences WHERE table_name=$1"
+		queryArgs = []interface{}{b.table}
+	} else {
+		query = "SELECT sequence FROM " + b.table + " WHERE id=$1"
+		queryArgs = []interface{}{b.id}
+	}
+
+	var seq int64
 	err := b.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT sequence FROM "+b.table+" WHERE id=$1",
-		b.id,
+		query, queryArgs...,
 	).Scan(&seq)
 
 	if err == pgx.ErrNoRows {

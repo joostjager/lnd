@@ -38,33 +38,14 @@ func newPostgresBackend(ctx context.Context, cfg Config) (*db, error) {
 	}
 
 	_, err = pool.Exec(context.TODO(), `
-CREATE TABLE IF NOT EXISTS public.kv
-(
-    key bytea NOT NULL,
-    value bytea,
-    parent_id bigint,
-    id bigserial,
-    sequence bigint,
-    CONSTRAINT kv_pkey PRIMARY KEY (id),
-    CONSTRAINT parent FOREIGN KEY (parent_id)
-        REFERENCES public.kv (id) MATCH SIMPLE
-        ON UPDATE NO ACTION
-        ON DELETE CASCADE
-        NOT VALID
-);
+	-- DROP SCHEMA public CASCADE;
+	-- CREATE SCHEMA public;
 
-CREATE INDEX IF NOT EXISTS fki_parent
-    ON public.kv USING btree
-    (parent_id ASC NULLS LAST)
-    TABLESPACE pg_default;
-
-CREATE UNIQUE INDEX IF NOT EXISTS keys
-    ON public.kv USING btree
-    (parent_id ASC NULLS LAST, key ASC NULLS LAST)
-    TABLESPACE pg_default;
-
--- DELETE FROM kv;
-
+	CREATE TABLE IF NOT EXISTS public.top_sequences
+	(
+		table_name TEXT NOT NULL PRIMARY KEY,
+		sequence bigint
+	);
 	`)
 	if err != nil {
 		return nil, err

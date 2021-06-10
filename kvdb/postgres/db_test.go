@@ -26,6 +26,22 @@ func TestDb(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, top)
 
+		// Create second top level bucket with special characters.
+		top2, err := tx.CreateTopLevelBucket([]byte{1, 2, 3})
+		require.NoError(t, err)
+		require.NotNil(t, top2)
+
+		top2 = tx.ReadWriteBucket([]byte{1, 2, 3})
+		require.NotNil(t, top2)
+
+		// Create third top level bucket with special uppercase.
+		top3, err := tx.CreateTopLevelBucket([]byte("UpperBucket"))
+		require.NoError(t, err)
+		require.NotNil(t, top3)
+
+		top3 = tx.ReadWriteBucket([]byte("UpperBucket"))
+		require.NotNil(t, top3)
+
 		// Assert that key doesn't exist.
 		require.Nil(t, top.Get([]byte("key")))
 
@@ -77,6 +93,14 @@ func TestDb(t *testing.T) {
 		// Try to put key with same name as bucket.
 		require.ErrorIs(t, top.Put([]byte("sub2"), []byte("val")), walletdb.ErrIncompatibleValue)
 
+		// Put key into sub bucket.
+		require.NoError(t, sub2.Put([]byte("subkey"), []byte("subval")))
+		require.Equal(t, []byte("subval"), sub2.Get([]byte("subkey")))
+
+		// Overwrite key in sub bucket.
+		require.NoError(t, sub2.Put([]byte("subkey"), []byte("subval2")))
+		require.Equal(t, []byte("subval2"), sub2.Get([]byte("subkey")))
+
 		// Check for each result.
 		kvs := make(map[string][]byte)
 		require.NoError(t, top.ForEach(func(k, v []byte) error {
@@ -107,6 +131,10 @@ func TestDb(t *testing.T) {
 		next, err := top.NextSequence()
 		require.NoError(t, err)
 		require.Equal(t, uint64(102), next)
+
+		next, err = sub2.NextSequence()
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), next)
 
 		// Test cursor.
 		cursor := top.ReadWriteCursor()
@@ -144,7 +172,7 @@ func TestDb(t *testing.T) {
 
 		cursor = sub2.ReadWriteCursor()
 		cursor.First()
-		for i := 0; i < 3; i++ {
+		for i := 0; i < 4; i++ {
 			require.NoError(t, cursor.Delete())
 		}
 		require.NoError(t, sub2.ForEach(func(k, v []byte) error {
@@ -154,10 +182,7 @@ func TestDb(t *testing.T) {
 
 		//Try to delete all data.
 		require.NoError(t, tx.DeleteTopLevelBucket([]byte("top")))
-		require.NoError(t, top.ForEach(func(k, v []byte) error {
-			require.Fail(t, "unexpected data")
-			return nil
-		}))
+		require.Nil(t, tx.ReadBucket([]byte("top")))
 
 		return nil
 	}, func() {})
