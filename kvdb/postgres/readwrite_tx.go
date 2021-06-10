@@ -46,13 +46,17 @@ func newReadWriteTx(db *db, readOnly bool) (*readWriteTx, error) {
 // rooBucket is a helper function to return the always present
 // pseudo root bucket.
 func rootBucket(tx *readWriteTx) *readWriteBucket {
-	return newReadWriteBucket(tx, nil)
+	return newReadWriteBucket(tx, "kv", nil)
 }
 
 // ReadBucket opens the root bucket for read only access.  If the bucket
 // described by the key does not exist, nil is returned.
 func (tx *readWriteTx) ReadBucket(key []byte) walletdb.ReadBucket {
-	return rootBucket(tx).NestedReadWriteBucket(key)
+	bucket := tx.ReadWriteBucket(key)
+	if bucket == nil {
+		return nil
+	}
+	return bucket.(walletdb.ReadBucket)
 }
 
 // ForEachBucket iterates through all top level buckets.
