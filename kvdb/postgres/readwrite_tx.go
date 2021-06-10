@@ -5,12 +5,13 @@ import (
 
 	"github.com/btcsuite/btcwallet/walletdb"
 	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 // readWriteTx holds a reference to an open postgres transaction.
 type readWriteTx struct {
-	tx pgx.Tx
+	readOnly bool
+	db       *db
+	tx       pgx.Tx
 
 	// onCommit gets called upon commit.
 	onCommit func()
@@ -21,16 +22,29 @@ type readWriteTx struct {
 
 // newReadWriteTx creates an rw transaction using a connection from the
 // specified pool.
-func newReadWriteTx(pool *pgxpool.Pool) (*readWriteTx, error) {
+func newReadWriteTx(db *db, readOnly bool) (*readWriteTx, error) {
+	// Obtain the global lock instance. An alternative here is to obtain a
+	// database lock from Postgres. Unfortunately there is no database-level
+	// lock in Postgres, meaning that each table would need to be locked
+	// individually. Perhaps an advisory lock could perform this function
+	// too.
+	if readOnly {
+		db.lock.RLock()
+	} else {
+		db.lock.Lock()
+	}
+
 	ctx := context.TODO()
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := db.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
 	return &readWriteTx{
-		tx:     tx,
-		active: true,
+		db:       db,
+		tx:       tx,
+		active:   true,
+		readOnly: readOnly,
 	}, nil
 }
 
@@ -77,6 +91,12 @@ func (tx *readWriteTx) Rollback() error {
 	}
 	tx.active = false
 
+	if tx.readOnly {
+		tx.db.lock.RUnlock()
+	} else {
+		tx.db.lock.Unlock()
+	}
+
 	return nil
 }
 
@@ -113,6 +133,12 @@ func (tx *readWriteTx) Commit() error {
 
 	if tx.onCommit != nil {
 		tx.onCommit()
+	}
+
+	if tx.readOnly {
+		tx.db.lock.RUnlock()
+	} else {
+		tx.db.lock.Unlock()
 	}
 
 	// Mark the transaction as not active after commit.

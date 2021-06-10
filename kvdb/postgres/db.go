@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/btcsuite/btcwallet/walletdb"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -21,6 +22,8 @@ type db struct {
 	cfg  Config
 	ctx  context.Context
 	pool *pgxpool.Pool
+
+	lock sync.RWMutex
 }
 
 // Enforce db implements the walletdb.DB interface.
@@ -86,7 +89,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS keys
 func (db *db) View(f func(tx walletdb.ReadTx) error, reset func()) error {
 	reset()
 
-	tx, err := newReadWriteTx(db.pool)
+	tx, err := newReadWriteTx(db, true)
 	if err != nil {
 		return err
 	}
@@ -110,13 +113,7 @@ func (db *db) View(f func(tx walletdb.ReadTx) error, reset func()) error {
 func (db *db) Update(f func(tx walletdb.ReadWriteTx) error, reset func()) error {
 	reset()
 
-	tx, err := newReadWriteTx(db.pool)
-	if err != nil {
-		return err
-	}
-
-	// Obtain exclusive lock to remain compatible with bbolt's global write lock.
-	_, err = tx.tx.Exec(context.TODO(), "LOCK TABLE kv IN ACCESS EXCLUSIVE MODE")
+	tx, err := newReadWriteTx(db, false)
 	if err != nil {
 		return err
 	}
@@ -137,12 +134,12 @@ func (db *db) PrintStats() string {
 
 // BeginReadWriteTx opens a database read+write transaction.
 func (db *db) BeginReadWriteTx() (walletdb.ReadWriteTx, error) {
-	return newReadWriteTx(db.pool)
+	return newReadWriteTx(db, false)
 }
 
 // BeginReadTx opens a database read transaction.
 func (db *db) BeginReadTx() (walletdb.ReadTx, error) {
-	return newReadWriteTx(db.pool)
+	return newReadWriteTx(db, true)
 }
 
 // Copy writes a copy of the database to the provided writer.  This call will
