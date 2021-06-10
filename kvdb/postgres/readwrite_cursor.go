@@ -32,7 +32,7 @@ func (c *readWriteCursor) First() ([]byte, []byte) {
 	)
 	err := c.bucket.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT key, value FROM kv WHERE "+parentSelector(c.bucket.id)+" ORDER BY key LIMIT 1",
+		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" ORDER BY key LIMIT 1",
 	).Scan(&key, &value)
 
 	if err == pgx.ErrNoRows {
@@ -55,7 +55,7 @@ func (c *readWriteCursor) Last() ([]byte, []byte) {
 	)
 	err := c.bucket.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT key, value FROM kv WHERE "+parentSelector(c.bucket.id)+" ORDER BY key DESC LIMIT 1",
+		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" ORDER BY key DESC LIMIT 1",
 	).Scan(&key, &value)
 
 	if err == pgx.ErrNoRows {
@@ -80,7 +80,7 @@ func (c *readWriteCursor) Next() ([]byte, []byte) {
 	)
 	err := c.bucket.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT key, value FROM kv WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
+		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
 		c.currKey,
 	).Scan(&key, &value)
 
@@ -104,7 +104,7 @@ func (c *readWriteCursor) Prev() ([]byte, []byte) {
 	)
 	err := c.bucket.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT key, value FROM kv WHERE "+parentSelector(c.bucket.id)+" AND key<$1 ORDER BY key DESC LIMIT 1",
+		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key<$1 ORDER BY key DESC LIMIT 1",
 		c.currKey,
 	).Scan(&key, &value)
 
@@ -134,7 +134,7 @@ func (c *readWriteCursor) Seek(seek []byte) ([]byte, []byte) {
 	)
 	err := c.bucket.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT key, value FROM kv WHERE "+parentSelector(c.bucket.id)+" AND key>=$1 ORDER BY key LIMIT 1",
+		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>=$1 ORDER BY key LIMIT 1",
 		seek,
 	).Scan(&key, &value)
 
@@ -158,7 +158,7 @@ func (c *readWriteCursor) Delete() error {
 	var key []byte
 	err := c.bucket.tx.tx.QueryRow(
 		context.TODO(),
-		"SELECT key FROM kv WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
+		"SELECT key FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
 		c.currKey,
 	).Scan(&key)
 
@@ -170,7 +170,7 @@ func (c *readWriteCursor) Delete() error {
 
 	result, err := c.bucket.tx.tx.Exec(
 		context.TODO(),
-		"DELETE FROM kv WHERE "+parentSelector(c.bucket.id)+" AND key=$1 AND value IS NOT NULL",
+		"DELETE FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key=$1 AND value IS NOT NULL",
 		deleteKey,
 	)
 	if result.RowsAffected() != 1 {

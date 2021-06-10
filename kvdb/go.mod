@@ -11,6 +11,7 @@ require (
 	github.com/google/uuid v1.1.1 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.14.3 // indirect
+	github.com/jackc/pgconn v1.8.1
 	github.com/jackc/pgx/v4 v4.11.0
 	github.com/json-iterator/go v1.1.9 // indirect
 	github.com/lightningnetwork/lnd/healthcheck v1.0.0
