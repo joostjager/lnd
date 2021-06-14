@@ -81,7 +81,8 @@ var (
 	)
 
 	// dbBackendFlag specifies the backend to use
-	dbBackendFlag = flag.String("dbbackend", "bbolt", "Database backend (bbolt, etcd)")
+	dbBackendFlag = flag.String("dbbackend", "bbolt", "Database backend "+
+		"(bbolt, etcd, postgres)")
 )
 
 // getTestCaseSplitTranche returns the sub slice of the test cases that should
@@ -8281,6 +8282,13 @@ func testRevokedCloseRetribution(net *lntest.NetworkHarness, t *harnessTest) {
 		t.Fatalf("unable to copy database files: %v", err)
 	}
 
+	// Reconnect the peers after the restart that was needed for the db
+	// backup.
+	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+	if err := net.ConnectNodes(ctxt, carol, net.Bob); err != nil {
+		t.Fatalf("unable to connect carol to bob: %v", err)
+	}
+
 	// Finally, send payments from Carol to Bob, consuming Bob's remaining
 	// payment hashes.
 	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
@@ -8525,6 +8533,13 @@ func testRevokedCloseRetributionZeroValueRemoteOutput(net *lntest.NetworkHarness
 	// restore this state.
 	if err := net.BackupDb(carol); err != nil {
 		t.Fatalf("unable to copy database files: %v", err)
+	}
+
+	// Reconnect the peers after the restart that was needed for the db
+	// backup.
+	ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+	if err := net.ConnectNodes(ctxt, dave, carol); err != nil {
+		t.Fatalf("unable to connect dave to carol: %v", err)
 	}
 
 	// Finally, send payments from Dave to Carol, consuming Carol's remaining
@@ -9830,6 +9845,13 @@ func testDataLossProtection(net *lntest.NetworkHarness, t *harnessTest) {
 		// updates, we'll restore this state.
 		if err := net.BackupDb(node); err != nil {
 			t.Fatalf("unable to copy database files: %v", err)
+		}
+
+		// Reconnect the peers after the restart that was needed for the db
+		// backup.
+		ctxt, _ = context.WithTimeout(ctxb, defaultTimeout)
+		if err := net.ConnectNodes(ctxt, carol, node); err != nil {
+			t.Fatalf("unable to connect carol to node: %v", err)
 		}
 
 		// Finally, send more payments from , using the remaining
@@ -14015,6 +14037,9 @@ func TestLightningNetworkDaemon(t *testing.T) {
 
 	case "etcd":
 		dbBackend = lntest.BackendEtcd
+
+	case "postgres":
+		dbBackend = lntest.BackendPostgres
 
 	default:
 		require.Fail(t, "unknown db backend")
