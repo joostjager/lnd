@@ -168,6 +168,8 @@ var allTestCases = []*testCase{
 		name: "switch offline delivery outgoing offline",
 		test: testSwitchOfflineDeliveryOutgoingOffline,
 	},
+	// TODO: Re-enable revoked close retribution tests when solution is in
+	// place for postgres db copy,.
 	{
 		// TODO(roasbeef): test always needs to be last as Bob's state
 		// is borked since we trick him into attempting to cheat Alice?

@@ -11,6 +11,13 @@ NUM_TRANCHES=$2
 shift
 shift
 
+# Start postgres
+docker rm -f lnd-postgres
+docker run --name lnd-postgres -e POSTGRES_PASSWORD=postgres -p 6432:5432 -d postgres
+
+# Wait for it to be started
+sleep 3
+
 # Windows insists on having the .exe suffix for an executable, we need to add
 # that here if necessary.
 EXEC="$WORKDIR"/itest.test"$EXEC_SUFFIX"
