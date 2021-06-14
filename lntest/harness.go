@@ -65,9 +65,8 @@ type NetworkHarness struct {
 	Alice *HarnessNode
 	Bob   *HarnessNode
 
-	// embeddedEtcd is set to true if new nodes are to be created with an
-	// embedded etcd backend instead of just bbolt.
-	embeddedEtcd bool
+	// dbBackend sets the database backend to use.
+	dbBackend DatabaseBackend
 
 	// Channel for transmitting stderr output from failed lightning node
 	// to main process.
@@ -82,12 +81,19 @@ type NetworkHarness struct {
 	mtx sync.Mutex
 }
 
+type DatabaseBackend int
+
+const (
+	BackendBbolt DatabaseBackend = iota
+	BackendEtcd
+)
+
 // NewNetworkHarness creates a new network test harness.
 // TODO(roasbeef): add option to use golang's build library to a binary of the
 // current repo. This will save developers from having to manually `go install`
 // within the repo each time before changes
 func NewNetworkHarness(r *rpctest.Harness, b BackendConfig, lndBinary string,
-	embeddedEtcd bool) (*NetworkHarness, error) {
+	dbBackend DatabaseBackend) (*NetworkHarness, error) {
 
 	feeService := startFeeService()
 
@@ -101,7 +107,7 @@ func NewNetworkHarness(r *rpctest.Harness, b BackendConfig, lndBinary string,
 		feeService:   feeService,
 		quit:         make(chan struct{}),
 		lndBinary:    lndBinary,
-		embeddedEtcd: embeddedEtcd,
+		dbBackend:    dbBackend,
 	}
 	return &n, nil
 }
@@ -320,11 +326,11 @@ func (n *NetworkHarness) NewNodeWithSeedEtcd(name string, etcdCfg *etcd.Config,
 	*HarnessNode, []string, []byte, error) {
 
 	// We don't want to use the embedded etcd instance.
-	const embeddedEtcd = false
+	const dbBackend = BackendBbolt
 
 	extraArgs := extraArgsEtcd(etcdCfg, name, cluster)
 	return n.newNodeWithSeed(
-		name, extraArgs, password, entropy, statelessInit, embeddedEtcd,
+		name, extraArgs, password, entropy, statelessInit, dbBackend,
 	)
 }
 
@@ -337,10 +343,10 @@ func (n *NetworkHarness) NewNodeEtcd(name string, etcdCfg *etcd.Config,
 	password []byte, cluster, wait bool) (*HarnessNode, error) {
 
 	// We don't want to use the embedded etcd instance.
-	const embeddedEtcd = false
+	const dbBackend = BackendBbolt
 
 	extraArgs := extraArgsEtcd(etcdCfg, name, cluster)
-	return n.newNode(name, extraArgs, true, password, embeddedEtcd, wait)
+	return n.newNode(name, extraArgs, true, password, dbBackend, wait)
 }
 
 // NewNode fully initializes a returns a new HarnessNode bound to the
@@ -349,7 +355,7 @@ func (n *NetworkHarness) NewNodeEtcd(name string, etcdCfg *etcd.Config,
 func (n *NetworkHarness) NewNode(name string, extraArgs []string) (*HarnessNode,
 	error) {
 
-	return n.newNode(name, extraArgs, false, nil, n.embeddedEtcd, true)
+	return n.newNode(name, extraArgs, false, nil, n.dbBackend, true)
 }
 
 // NewNodeWithSeed fully initializes a new HarnessNode after creating a fresh
@@ -361,16 +367,16 @@ func (n *NetworkHarness) NewNodeWithSeed(name string, extraArgs []string,
 	error) {
 
 	return n.newNodeWithSeed(
-		name, extraArgs, password, nil, statelessInit, n.embeddedEtcd,
+		name, extraArgs, password, nil, statelessInit, n.dbBackend,
 	)
 }
 
 func (n *NetworkHarness) newNodeWithSeed(name string, extraArgs []string,
-	password, entropy []byte, statelessInit, embeddedEtcd bool) (
+	password, entropy []byte, statelessInit bool, dbBackend DatabaseBackend) (
 	*HarnessNode, []string, []byte, error) {
 
 	node, err := n.newNode(
-		name, extraArgs, true, password, embeddedEtcd, true,
+		name, extraArgs, true, password, dbBackend, true,
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -434,7 +440,7 @@ func (n *NetworkHarness) RestoreNodeWithSeed(name string, extraArgs []string,
 	opts ...NodeOption) (*HarnessNode, error) {
 
 	node, err := n.newNode(
-		name, extraArgs, true, password, n.embeddedEtcd, true, opts...,
+		name, extraArgs, true, password, n.dbBackend, true, opts...,
 	)
 	if err != nil {
 		return nil, err
@@ -465,7 +471,7 @@ func (n *NetworkHarness) RestoreNodeWithSeed(name string, extraArgs []string,
 // can be used immediately. Otherwise, the node will require an additional
 // initialization phase where the wallet is either created or restored.
 func (n *NetworkHarness) newNode(name string, extraArgs []string, hasSeed bool,
-	password []byte, embeddedEtcd, wait bool, opts ...NodeOption) (
+	password []byte, dbBackend DatabaseBackend, wait bool, opts ...NodeOption) (
 	*HarnessNode, error) {
 
 	cfg := &NodeConfig{
@@ -477,7 +483,7 @@ func (n *NetworkHarness) newNode(name string, extraArgs []string, hasSeed bool,
 		NetParams:         n.netParams,
 		ExtraArgs:         extraArgs,
 		FeeURL:            n.feeService.url,
-		Etcd:              embeddedEtcd,
+		DbBackend:         dbBackend,
 	}
 	for _, opt := range opts {
 		opt(cfg)
