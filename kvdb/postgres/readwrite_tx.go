@@ -3,19 +3,19 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"strings"
 
 	"github.com/btcsuite/btcwallet/walletdb"
-	"github.com/jackc/pgx/v4"
 )
 
 // readWriteTx holds a reference to an open postgres transaction.
 type readWriteTx struct {
 	readOnly bool
 	db       *db
-	tx       pgx.Tx
+	tx       *sql.Tx
 
 	// onCommit gets called upon commit.
 	onCommit func()
@@ -38,8 +38,7 @@ func newReadWriteTx(db *db, readOnly bool) (*readWriteTx, error) {
 		db.lock.Lock()
 	}
 
-	ctx := context.TODO()
-	tx, err := db.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := db.db.Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +109,7 @@ func (tx *readWriteTx) Rollback() error {
 		return walletdb.ErrTxClosed
 	}
 
-	err := tx.tx.Rollback(context.TODO())
+	err := tx.tx.Rollback()
 	if err != nil {
 		return err
 	}
@@ -131,13 +130,13 @@ func (tx *readWriteTx) ReadWriteBucket(key []byte) walletdb.ReadWriteBucket {
 	table := toTableName(key)
 
 	var value int
-	err := tx.tx.QueryRow(
+	err := tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname='public' and tablename=$1",
 		table,
 	).Scan(&value)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil
 	}
 
@@ -149,7 +148,7 @@ func (tx *readWriteTx) ReadWriteBucket(key []byte) walletdb.ReadWriteBucket {
 func (tx *readWriteTx) CreateTopLevelBucket(key []byte) (walletdb.ReadWriteBucket, error) {
 	table := toTableName(key)
 
-	_, err := tx.tx.Exec(context.TODO(), `
+	_, err := tx.tx.ExecContext(context.TODO(), `
 	
 CREATE TABLE IF NOT EXISTS public.`+table+`
 (
@@ -194,12 +193,12 @@ func (tx *readWriteTx) DeleteTopLevelBucket(key []byte) error {
 
 	table := bucket.(*readWriteBucket).table
 
-	_, err := tx.tx.Exec(context.TODO(), "DROP TABLE public."+table+";")
+	_, err := tx.tx.ExecContext(context.TODO(), "DROP TABLE public."+table+";")
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.tx.Exec(context.TODO(), "DELETE FROM top_sequences WHERE table_name=$1", table)
+	_, err = tx.tx.ExecContext(context.TODO(), "DELETE FROM top_sequences WHERE table_name=$1", table)
 	if err != nil {
 		return err
 	}
@@ -215,7 +214,7 @@ func (tx *readWriteTx) Commit() error {
 	}
 
 	// Try committing the transaction.
-	if err := tx.tx.Commit(context.TODO()); err != nil {
+	if err := tx.tx.Commit(); err != nil {
 		return err
 	}
 

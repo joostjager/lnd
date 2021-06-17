@@ -2,10 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/btcsuite/btcwallet/walletdb"
-
-	"github.com/jackc/pgx/v4"
 )
 
 // readWriteCursor holds a reference to the cursors bucket, the value
@@ -30,12 +29,12 @@ func (c *readWriteCursor) First() ([]byte, []byte) {
 		key   []byte
 		value []byte
 	)
-	err := c.bucket.tx.tx.QueryRow(
+	err := c.bucket.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" ORDER BY key LIMIT 1",
 	).Scan(&key, &value)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 
@@ -53,12 +52,12 @@ func (c *readWriteCursor) Last() ([]byte, []byte) {
 		key   []byte
 		value []byte
 	)
-	err := c.bucket.tx.tx.QueryRow(
+	err := c.bucket.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" ORDER BY key DESC LIMIT 1",
 	).Scan(&key, &value)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 
@@ -78,13 +77,13 @@ func (c *readWriteCursor) Next() ([]byte, []byte) {
 		key   []byte
 		value []byte
 	)
-	err := c.bucket.tx.tx.QueryRow(
+	err := c.bucket.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
 		c.currKey,
 	).Scan(&key, &value)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 
@@ -102,13 +101,13 @@ func (c *readWriteCursor) Prev() ([]byte, []byte) {
 		key   []byte
 		value []byte
 	)
-	err := c.bucket.tx.tx.QueryRow(
+	err := c.bucket.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key<$1 ORDER BY key DESC LIMIT 1",
 		c.currKey,
 	).Scan(&key, &value)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 
@@ -132,13 +131,13 @@ func (c *readWriteCursor) Seek(seek []byte) ([]byte, []byte) {
 		key   []byte
 		value []byte
 	)
-	err := c.bucket.tx.tx.QueryRow(
+	err := c.bucket.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>=$1 ORDER BY key LIMIT 1",
 		seek,
 	).Scan(&key, &value)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 
@@ -156,25 +155,30 @@ func (c *readWriteCursor) Delete() error {
 	deleteKey := c.currKey
 
 	var key []byte
-	err := c.bucket.tx.tx.QueryRow(
+	err := c.bucket.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT key FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
 		c.currKey,
 	).Scan(&key)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		c.currKey = nil
 	} else {
 		c.currKey = key
 	}
 
-	result, err := c.bucket.tx.tx.Exec(
+	result, err := c.bucket.tx.tx.ExecContext(
 		context.TODO(),
 		"DELETE FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key=$1 AND value IS NOT NULL",
 		deleteKey,
 	)
-	if result.RowsAffected() != 1 {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
 		return walletdb.ErrIncompatibleValue
 	}
+
 	return err
 }

@@ -1,6 +1,7 @@
 module github.com/lightningnetwork/lnd/kvdb
 
 require (
+	github.com/JackC/pgx v3.6.2+incompatible
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f
 	github.com/btcsuite/btcwallet/walletdb v1.3.5-0.20210513043850-3a2f12e3a954
 	github.com/coreos/go-semver v0.3.0 // indirect
@@ -11,7 +12,7 @@ require (
 	github.com/google/uuid v1.1.1 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.14.3 // indirect
-	github.com/jackc/pgconn v1.8.1
+	github.com/jackc/pgx v3.6.2+incompatible // indirect
 	github.com/jackc/pgx/v4 v4.11.0
 	github.com/json-iterator/go v1.1.9 // indirect
 	github.com/lightningnetwork/lnd/healthcheck v1.0.0

@@ -2,10 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-
-	"github.com/jackc/pgx/v4"
 
 	"github.com/btcsuite/btcwallet/walletdb"
 )
@@ -50,7 +49,7 @@ func parentSelector(id *int64) string {
 // is nil, but it does not include the key/value pairs within those
 // nested buckets.
 func (b *readWriteBucket) ForEach(cb func(k, v []byte) error) error {
-	rows, err := b.tx.tx.Query(
+	rows, err := b.tx.tx.QueryContext(
 		context.TODO(),
 		"SELECT key,value FROM "+b.table+" WHERE "+parentSelector(b.id)+" ORDER BY key",
 	)
@@ -100,13 +99,13 @@ func (b *readWriteBucket) Get(key []byte) []byte {
 	}
 
 	var value *[]byte
-	err := b.tx.tx.QueryRow(
+	err := b.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT value FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1",
 		key,
 	).Scan(&value)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil
 	}
 
@@ -125,7 +124,7 @@ func (b *readWriteBucket) NestedReadWriteBucket(key []byte) walletdb.ReadWriteBu
 	}
 
 	var id int64
-	err := b.tx.tx.QueryRow(
+	err := b.tx.tx.QueryRowContext(
 		context.TODO(),
 		"SELECT id FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
 		key,
@@ -155,13 +154,13 @@ func (b *readWriteBucket) CreateBucket(key []byte) (
 		value *[]byte
 		id    int64
 	)
-	err := b.tx.tx.QueryRow(
+	err := b.tx.tx.QueryRowContext(
 		context.TODO(),
 		"select id,value from "+b.table+" where "+parentSelector(b.id)+" and key=$1",
 		key).Scan(&id, &value)
 
 	switch {
-	case err == pgx.ErrNoRows:
+	case err == sql.ErrNoRows:
 
 	case err == nil && value == nil:
 		return nil, walletdb.ErrBucketExists
@@ -173,7 +172,7 @@ func (b *readWriteBucket) CreateBucket(key []byte) (
 		return nil, err
 	}
 
-	err = b.tx.tx.QueryRow(
+	err = b.tx.tx.QueryRowContext(
 		context.TODO(),
 		"insert into "+b.table+" (parent_id, key) values($1, $2) RETURNING id",
 		b.id, key,
@@ -201,14 +200,14 @@ func (b *readWriteBucket) CreateBucketIfNotExists(key []byte) (
 		value *[]byte
 		id    int64
 	)
-	err := b.tx.tx.QueryRow(
+	err := b.tx.tx.QueryRowContext(
 		context.TODO(),
 		"select id,value from "+b.table+" where "+parentSelector(b.id)+" and key=$1",
 		key).Scan(&id, &value)
 
 	switch {
-	case err == pgx.ErrNoRows:
-		err = b.tx.tx.QueryRow(
+	case err == sql.ErrNoRows:
+		err = b.tx.tx.QueryRowContext(
 			context.TODO(),
 			"insert into "+b.table+" (parent_id, key) values($1, $2) RETURNING id",
 			b.id, key,
@@ -236,7 +235,7 @@ func (b *readWriteBucket) DeleteNestedBucket(key []byte) error {
 		return walletdb.ErrIncompatibleValue
 	}
 
-	result, err := b.tx.tx.Exec(
+	result, err := b.tx.tx.ExecContext(
 		context.TODO(),
 		"DELETE FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
 		key,
@@ -244,7 +243,11 @@ func (b *readWriteBucket) DeleteNestedBucket(key []byte) error {
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() == 0 {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
 		return walletdb.ErrBucketNotFound
 	}
 
@@ -270,7 +273,7 @@ func (b *readWriteBucket) Put(key, value []byte) error {
 		query = "INSERT INTO " + b.table + " (key, value, parent_id) VALUES($1, $2, $3) ON CONFLICT (key, parent_id) WHERE parent_id IS NOT NULL DO UPDATE SET value=$2 WHERE " + b.table + ".value IS NOT NULL"
 	}
 
-	result, err := b.tx.tx.Exec(
+	result, err := b.tx.tx.ExecContext(
 		context.TODO(),
 		query,
 		key, value, b.id,
@@ -279,7 +282,11 @@ func (b *readWriteBucket) Put(key, value []byte) error {
 		return err
 	}
 
-	if result.RowsAffected() != 1 {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
 		return walletdb.ErrIncompatibleValue
 	}
 
@@ -296,7 +303,7 @@ func (b *readWriteBucket) Delete(key []byte) error {
 		return walletdb.ErrKeyRequired
 	}
 
-	_, err := b.tx.tx.Exec(
+	_, err := b.tx.tx.ExecContext(
 		context.TODO(),
 		"DELETE FROM "+b.table+" WHERE key=$1 AND "+parentSelector(b.id)+" AND value IS NOT NULL",
 		key,
@@ -343,14 +350,19 @@ func (b *readWriteBucket) SetSequence(v uint64) error {
 		queryArgs = []interface{}{b.id, int64(v)}
 	}
 
-	result, err := b.tx.tx.Exec(
+	result, err := b.tx.tx.ExecContext(
 		context.TODO(),
 		query, queryArgs...,
 	)
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() != 1 {
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
 		return errors.New("cannot set sequence")
 	}
 
@@ -374,12 +386,12 @@ func (b *readWriteBucket) Sequence() uint64 {
 	}
 
 	var seq int64
-	err := b.tx.tx.QueryRow(
+	err := b.tx.tx.QueryRowContext(
 		context.TODO(),
 		query, queryArgs...,
 	).Scan(&seq)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return 0
 	}
 
