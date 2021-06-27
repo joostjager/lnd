@@ -7,6 +7,7 @@ require (
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/kkdai/bstream v1.0.0
 	github.com/lightningnetwork/lnd v0.13.0-beta
+	github.com/lightningnetwork/lnd/kvdb v1.0.0
 	google.golang.org/grpc v1.29.1
 	k8s.io/api v0.18.3
 	k8s.io/apimachinery v0.18.3
@@ -14,6 +15,8 @@ require (
 )
 
 replace github.com/lightningnetwork/lnd => ../../
+
+replace github.com/lightningnetwork/lnd/kvdb => ../../kvdb
 
 // Fix incompatibility of etcd go.mod package.
 // See https://github.com/etcd-io/etcd/issues/11154

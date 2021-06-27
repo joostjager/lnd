@@ -1226,6 +1226,9 @@ func ValidateConfig(cfg Config, usageMessage string,
 		cfg.registeredChains.PrimaryChain().String(),
 		lncfg.NormalizeNetwork(cfg.ActiveNetParams.Name),
 	)
+	if err := makeDirectory(cfg.networkDir); err != nil {
+		return nil, err
+	}
 
 	// If a custom macaroon directory wasn't specified and the data
 	// directory has changed from the default path, then we'll also update

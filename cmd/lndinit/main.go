@@ -112,6 +112,7 @@ func registerCommands(parser *flags.Parser) error {
 		newGenSeedCommand(),
 		newLoadSecretCommand(),
 		newInitWalletCommand(),
+		newMigrateDBCommand(),
 		newStoreSecretCommand(),
 		newWaitReadyCommand(),
 	}

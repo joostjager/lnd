@@ -41,7 +41,9 @@ import (
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/chanacceptor"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/keychain"
+	"github.com/lightningnetwork/lnd/kvdb"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -432,7 +434,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 		ltndLog.Infof("Elected as leader (%v)", cfg.Cluster.ID)
 	}
 
-	localChanDB, remoteChanDB, cleanUp, err := initializeDatabases(ctx, cfg)
+	dbs, cleanUp, err := initializeDatabases(ctx, cfg)
 	switch {
 	case err == channeldb.ErrDryRunMigrationOK:
 		ltndLog.Infof("%v, exiting", err)
@@ -444,13 +446,13 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 	defer cleanUp()
 
 	var loaderOpt btcwallet.LoaderOption
-	if cfg.Cluster.EnableLeaderElection {
+	if cfg.Cluster.EnableLeaderElection || cfg.DB.FullyRemote {
 		// The wallet loader will attempt to use/create the wallet in
 		// the replicated remote DB if we're running in a clustered
 		// environment. This will ensure that all members of the cluster
 		// have access to the same wallet state.
 		loaderOpt = btcwallet.LoaderWithExternalWalletDB(
-			remoteChanDB.Backend,
+			dbs.remoteChanDB.Backend,
 		)
 	} else {
 		// When "running locally", LND will use the bbolt wallet.db to
@@ -470,6 +472,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 	}
 
 	pwService.SetLoaderOpts([]btcwallet.LoaderOption{loaderOpt})
+	pwService.SetMacaroonDB(dbs.macaroonDB)
 	walletExists, err := pwService.WalletExists()
 	if err != nil {
 		return err
@@ -569,8 +572,8 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 	if !cfg.NoMacaroons {
 		// Create the macaroon authentication/authorization service.
 		macaroonService, err = macaroons.NewService(
-			cfg.networkDir, "lnd", walletInitParams.StatelessInit,
-			cfg.DB.Bolt.DBTimeout, macaroons.IPLockChecker,
+			dbs.macaroonDB, "lnd", walletInitParams.StatelessInit,
+			macaroons.IPLockChecker,
 		)
 		if err != nil {
 			err := fmt.Errorf("unable to set up macaroon "+
@@ -684,8 +687,8 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 		LitecoindMode:               cfg.LitecoindMode,
 		BtcdMode:                    cfg.BtcdMode,
 		LtcdMode:                    cfg.LtcdMode,
-		LocalChanDB:                 localChanDB,
-		RemoteChanDB:                remoteChanDB,
+		LocalChanDB:                 dbs.localChanDB,
+		RemoteChanDB:                dbs.remoteChanDB,
 		PrivateWalletPw:             privateWalletPw,
 		PublicWalletPw:              publicWalletPw,
 		Birthday:                    walletInitParams.Birthday,
@@ -878,7 +881,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 	// Set up the core server which will listen for incoming peer
 	// connections.
 	server, err := newServer(
-		cfg, cfg.Listeners, localChanDB, remoteChanDB, towerClientDB,
+		cfg, cfg.Listeners, dbs, towerClientDB,
 		activeChainControl, &idKeyDesc, walletInitParams.ChansToRestore,
 		chainedAcceptor, torController,
 	)
@@ -1309,11 +1312,6 @@ type WalletUnlockParams struct {
 // createWalletUnlockerService creates a WalletUnlockerService from the passed
 // config.
 func createWalletUnlockerService(cfg *Config) *walletunlocker.UnlockerService {
-	chainConfig := cfg.Bitcoin
-	if cfg.registeredChains.PrimaryChain() == chainreg.LitecoinChain {
-		chainConfig = cfg.Litecoin
-	}
-
 	// The macaroonFiles are passed to the wallet unlocker so they can be
 	// deleted and recreated in case the root macaroon key is also changed
 	// during the change password operation.
@@ -1322,8 +1320,7 @@ func createWalletUnlockerService(cfg *Config) *walletunlocker.UnlockerService {
 	}
 
 	return walletunlocker.New(
-		chainConfig.ChainDir, cfg.ActiveNetParams.Params,
-		!cfg.SyncFreelist, macaroonFiles, cfg.DB.Bolt.DBTimeout,
+		cfg.ActiveNetParams.Params, macaroonFiles,
 		cfg.ResetWalletTransactions, nil,
 	)
 }
@@ -1595,6 +1592,14 @@ func waitForWalletPassword(cfg *Config,
 	}
 }
 
+type databases struct {
+	localChanDB   *channeldb.DB
+	remoteChanDB  *channeldb.DB
+	macaroonDB    kvdb.Backend
+	towerClientDB kvdb.Backend
+	decayedLogDB  kvdb.Backend
+}
+
 // initializeDatabases extracts the current databases that we'll use for normal
 // operation in the daemon. Two databases are returned: one remote and one
 // local. However, only if the replicated database is active will the remote
@@ -1602,7 +1607,7 @@ func waitForWalletPassword(cfg *Config,
 // both point to the same local database. A function closure that closes all
 // opened databases is also returned.
 func initializeDatabases(ctx context.Context,
-	cfg *Config) (*channeldb.DB, *channeldb.DB, func(), error) {
+	cfg *Config) (*databases, func(), error) {
 
 	ltndLog.Infof("Opening the main database, this might take a few " +
 		"minutes...")
@@ -1615,22 +1620,33 @@ func initializeDatabases(ctx context.Context,
 
 	startOpenTime := time.Now()
 
-	databaseBackends, err := cfg.DB.GetBackends(ctx, cfg.localDatabaseDir())
+	databaseBackends, err := cfg.DB.GetBackends(
+		ctx, cfg.localDatabaseDir(), cfg.DB.FullyRemote,
+		macaroons.NewBoltBackendCreator(
+			cfg.networkDir, macaroons.DBFilename,
+		),
+		htlcswitch.NewBoltBackendCreator(
+			cfg.localDatabaseDir(), defaultSphinxDbName,
+		),
+	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("unable to obtain database "+
+		return nil, nil, fmt.Errorf("unable to obtain database "+
 			"backends: %v", err)
 	}
 
 	// If the remoteDB is nil, then we'll just open a local DB as normal,
 	// having the remote and local pointer be the exact same instance.
 	var (
-		localChanDB, remoteChanDB *channeldb.DB
-		closeFuncs                []func()
+		dbs = &databases{
+			macaroonDB:   databaseBackends.MacaroonDB,
+			decayedLogDB: databaseBackends.DecayedLogDB,
+		}
+		closeFuncs []func()
 	)
 	if databaseBackends.RemoteDB == nil {
 		// Open the channeldb, which is dedicated to storing channel,
 		// and network related metadata.
-		localChanDB, err = channeldb.CreateWithBackend(
+		dbs.localChanDB, err = channeldb.CreateWithBackend(
 			databaseBackends.LocalDB,
 			channeldb.OptionSetRejectCacheSize(cfg.Caches.RejectCacheSize),
 			channeldb.OptionSetChannelCacheSize(cfg.Caches.ChannelCacheSize),
@@ -1639,19 +1655,19 @@ func initializeDatabases(ctx context.Context,
 		)
 		switch {
 		case err == channeldb.ErrDryRunMigrationOK:
-			return nil, nil, nil, err
+			return nil, nil, err
 
 		case err != nil:
 			err := fmt.Errorf("unable to open local channeldb: %v", err)
 			ltndLog.Error(err)
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 
 		closeFuncs = append(closeFuncs, func() {
-			localChanDB.Close()
+			_ = dbs.localChanDB.Close()
 		})
 
-		remoteChanDB = localChanDB
+		dbs.remoteChanDB = dbs.localChanDB
 	} else {
 		ltndLog.Infof("Database replication is available! Creating " +
 			"local and remote channeldb instances")
@@ -1659,7 +1675,7 @@ func initializeDatabases(ctx context.Context,
 		// Otherwise, we'll open two instances, one for the state we
 		// only need locally, and the other for things we want to
 		// ensure are replicated.
-		localChanDB, err = channeldb.CreateWithBackend(
+		dbs.localChanDB, err = channeldb.CreateWithBackend(
 			databaseBackends.LocalDB,
 			channeldb.OptionSetRejectCacheSize(cfg.Caches.RejectCacheSize),
 			channeldb.OptionSetChannelCacheSize(cfg.Caches.ChannelCacheSize),
@@ -1676,47 +1692,49 @@ func initializeDatabases(ctx context.Context,
 		case err != nil:
 			err := fmt.Errorf("unable to open local channeldb: %v", err)
 			ltndLog.Error(err)
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 
 		closeFuncs = append(closeFuncs, func() {
-			localChanDB.Close()
+			_ = dbs.localChanDB.Close()
 		})
 
 		ltndLog.Infof("Opening replicated database instance...")
 
-		remoteChanDB, err = channeldb.CreateWithBackend(
+		dbs.remoteChanDB, err = channeldb.CreateWithBackend(
 			databaseBackends.RemoteDB,
 			channeldb.OptionDryRunMigration(cfg.DryRunMigration),
 			channeldb.OptionSetBatchCommitInterval(cfg.DB.BatchCommitInterval),
 		)
 		switch {
 		case err == channeldb.ErrDryRunMigrationOK:
-			return nil, nil, nil, err
+			return nil, nil, err
 
 		case err != nil:
-			localChanDB.Close()
+			_ = dbs.localChanDB.Close()
 
 			err := fmt.Errorf("unable to open remote channeldb: %v", err)
 			ltndLog.Error(err)
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 
 		closeFuncs = append(closeFuncs, func() {
-			remoteChanDB.Close()
+			_ = dbs.remoteChanDB.Close()
 		})
 	}
 
 	openTime := time.Since(startOpenTime)
-	ltndLog.Infof("Database now open (time_to_open=%v)!", openTime)
+	ltndLog.Infof("Database(s) now open (time_to_open=%v)!", openTime)
 
 	cleanUp := func() {
 		for _, closeFunc := range closeFuncs {
 			closeFunc()
 		}
+		_ = databaseBackends.MacaroonDB.Close()
+		_ = databaseBackends.DecayedLogDB.Close()
 	}
 
-	return localChanDB, remoteChanDB, cleanUp, nil
+	return dbs, cleanUp, nil
 }
 
 // initNeutrinoBackend inits a new instance of the neutrino light client
