@@ -95,7 +95,9 @@ type subCommand interface {
 }
 
 func registerCommands(parser *flags.Parser) error {
-	commands := []subCommand{}
+	commands := []subCommand{
+		newMigrateDBCommand(),
+	}
 
 	for _, command := range commands {
 		if err := command.Register(parser); err != nil {

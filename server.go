@@ -352,7 +352,7 @@ func noiseDial(idKey keychain.SingleKeyECDH,
 // newServer creates a new instance of the server which is to listen using the
 // passed listener address.
 func newServer(cfg *Config, listenAddrs []net.Addr,
-	localChanDB, remoteChanDB *channeldb.DB,
+	dbs *databases,
 	towerClientDB wtclient.DB, cc *chainreg.ChainControl,
 	nodeKeyDesc *keychain.KeyDescriptor,
 	chansToRestore walletunlocker.ChannelsToRecover,
@@ -387,8 +387,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	// the same directory as the channel graph database. We don't need to
 	// replicate this data, so we'll store it locally.
 	replayLog := htlcswitch.NewDecayedLog(
-		cfg.localDatabaseDir(), defaultSphinxDbName, cfg.DB.Bolt,
-		cc.ChainNotifier,
+		dbs.decayedLogDB, cc.ChainNotifier,
 	)
 	sphinxRouter := sphinx.NewRouter(
 		nodeKeyECDH, cfg.ActiveNetParams.Params, replayLog,
@@ -435,15 +434,15 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 
 	s := &server{
 		cfg:            cfg,
-		localChanDB:    localChanDB,
-		remoteChanDB:   remoteChanDB,
+		localChanDB:    dbs.localChanDB,
+		remoteChanDB:   dbs.remoteChanDB,
 		cc:             cc,
 		sigPool:        lnwallet.NewSigPool(cfg.Workers.Sig, cc.Signer),
 		writePool:      writePool,
 		readPool:       readPool,
 		chansToRestore: chansToRestore,
 
-		channelNotifier: channelnotifier.New(remoteChanDB),
+		channelNotifier: channelnotifier.New(dbs.remoteChanDB),
 
 		identityECDH: nodeKeyECDH,
 		nodeSigner:   netann.NewNodeSigner(nodeKeySigner),
@@ -475,7 +474,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	}
 
 	s.witnessBeacon = &preimageBeacon{
-		wCache:      remoteChanDB.NewWitnessCache(),
+		wCache:      dbs.remoteChanDB.NewWitnessCache(),
 		subscribers: make(map[uint64]*preimageSubscriber),
 	}
 
@@ -489,13 +488,13 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		uint32(currentHeight), currentHash, cc.ChainNotifier,
 	)
 	s.invoices = invoices.NewRegistry(
-		remoteChanDB, expiryWatcher, &registryConfig,
+		dbs.remoteChanDB, expiryWatcher, &registryConfig,
 	)
 
 	s.htlcNotifier = htlcswitch.NewHtlcNotifier(time.Now)
 
 	s.htlcSwitch, err = htlcswitch.New(htlcswitch.Config{
-		DB: remoteChanDB,
+		DB: dbs.remoteChanDB,
 		LocalChannelClose: func(pubKey []byte,
 			request *htlcswitch.ChanClose) {
 
@@ -510,7 +509,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 
 			peer.HandleLocalCloseChanReqs(request)
 		},
-		FwdingLog:              remoteChanDB.ForwardingLog(),
+		FwdingLog:              dbs.remoteChanDB.ForwardingLog(),
 		SwitchPackager:         channeldb.NewSwitchPackager(),
 		ExtractErrorEncrypter:  s.sphinx.ExtractErrorEncrypter,
 		FetchLastChannelUpdate: s.fetchLastChanUpdate(),
@@ -537,8 +536,8 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		MessageSigner:            s.nodeSigner,
 		IsChannelActive:          s.htlcSwitch.HasActiveLink,
 		ApplyChannelUpdate:       s.applyChannelUpdate,
-		DB:                       remoteChanDB,
-		Graph:                    localChanDB.ChannelGraph(),
+		DB:                       dbs.remoteChanDB,
+		Graph:                    dbs.localChanDB.ChannelGraph(),
 	}
 
 	chanStatusMgr, err := netann.NewChanStatusManager(chanStatusMgrCfg)
@@ -630,7 +629,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 
 	// As the graph can be obtained at anytime from the network, we won't
 	// replicate it, and instead it'll only be stored locally.
-	chanGraph := localChanDB.ChannelGraph()
+	chanGraph := dbs.localChanDB.ChannelGraph()
 
 	// We'll now reconstruct a node announcement based on our current
 	// configuration so we can send it out as a sort of heart beat within
@@ -697,7 +696,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 
 	// The router will get access to the payment ID sequencer, such that it
 	// can generate unique payment IDs.
-	sequencer, err := htlcswitch.NewPersistentSequencer(remoteChanDB)
+	sequencer, err := htlcswitch.NewPersistentSequencer(dbs.remoteChanDB)
 	if err != nil {
 		return nil, err
 	}
@@ -736,7 +735,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	}
 
 	s.missionControl, err = routing.NewMissionControl(
-		remoteChanDB, selfNode.PubKeyBytes,
+		dbs.remoteChanDB, selfNode.PubKeyBytes,
 		&routing.MissionControlConfig{
 			ProbabilityEstimatorCfg: estimatorCfg,
 			MaxMcHistory:            routingConfig.MaxMcHistory,
@@ -768,7 +767,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		PathFindingConfig: pathFindingConfig,
 	}
 
-	paymentControl := channeldb.NewPaymentControl(remoteChanDB)
+	paymentControl := channeldb.NewPaymentControl(dbs.remoteChanDB)
 
 	s.controlTower = routing.NewControlTower(paymentControl)
 
@@ -844,7 +843,9 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		FetchChannel:              s.remoteChanDB.FetchChannel,
 	}
 
-	utxnStore, err := newNurseryStore(s.cfg.ActiveNetParams.GenesisHash, remoteChanDB)
+	utxnStore, err := newNurseryStore(
+		s.cfg.ActiveNetParams.GenesisHash, dbs.remoteChanDB,
+	)
 	if err != nil {
 		srvrLog.Errorf("unable to create nursery store: %v", err)
 		return nil, err
@@ -854,7 +855,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		sweep.DefaultBatchWindowDuration)
 
 	sweeperStore, err := sweep.NewSweeperStore(
-		remoteChanDB, s.cfg.ActiveNetParams.GenesisHash,
+		dbs.remoteChanDB, s.cfg.ActiveNetParams.GenesisHash,
 	)
 	if err != nil {
 		srvrLog.Errorf("unable to create sweeper store: %v", err)
@@ -881,8 +882,8 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 	s.utxoNursery = newUtxoNursery(&NurseryConfig{
 		ChainIO:             cc.ChainIO,
 		ConfDepth:           1,
-		FetchClosedChannels: remoteChanDB.FetchClosedChannels,
-		FetchClosedChannel:  remoteChanDB.FetchClosedChannel,
+		FetchClosedChannels: dbs.remoteChanDB.FetchClosedChannels,
+		FetchClosedChannel:  dbs.remoteChanDB.FetchClosedChannel,
 		Notifier:            cc.ChainNotifier,
 		PublishTransaction:  cc.Wallet.PublishTransaction,
 		Store:               utxnStore,
@@ -1003,18 +1004,18 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		PaymentsExpirationGracePeriod: cfg.PaymentsExpirationGracePeriod,
 		IsForwardedHTLC:               s.htlcSwitch.IsForwardedHTLC,
 		Clock:                         clock.NewDefaultClock(),
-	}, remoteChanDB)
+	}, dbs.remoteChanDB)
 
 	s.breachArbiter = newBreachArbiter(&BreachConfig{
 		CloseLink:          closeLink,
-		DB:                 remoteChanDB,
+		DB:                 dbs.remoteChanDB,
 		Estimator:          s.cc.FeeEstimator,
 		GenSweepScript:     newSweepPkScriptGen(cc.Wallet),
 		Notifier:           cc.ChainNotifier,
 		PublishTransaction: cc.Wallet.PublishTransaction,
 		ContractBreaches:   contractBreaches,
 		Signer:             cc.Wallet.Cfg.Signer,
-		Store:              newRetributionStore(remoteChanDB),
+		Store:              newRetributionStore(dbs.remoteChanDB),
 	})
 
 	// Select the configuration and furnding parameters for Bitcoin or
@@ -1062,7 +1063,7 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		FindChannel: func(chanID lnwire.ChannelID) (
 			*channeldb.OpenChannel, error) {
 
-			dbChannels, err := remoteChanDB.FetchAllChannels()
+			dbChannels, err := dbs.remoteChanDB.FetchAllChannels()
 			if err != nil {
 				return nil, err
 			}

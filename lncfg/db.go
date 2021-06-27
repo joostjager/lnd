@@ -22,7 +22,9 @@ const (
 type DB struct {
 	Backend string `long:"backend" description:"The selected database backend."`
 
-	BatchCommitInterval time.Duration `long:"batch-commit-interval" description:"The maximum duration the channel graph batch schedulers will wait before attempting to commit a batch of pending updates. This can be tradeoff database contenion for commit latency."`
+	FullyRemote bool `long:"fully-remote" description:"Don't store anything in local bbolt databases when using an etcd or postgres backend'"`
+
+	BatchCommitInterval time.Duration `long:"batch-commit-interval" description:"The maximum duration the channel graph batch schedulers will wait before attempting to commit a batch of pending updates. This can be tradeoff database contention for commit latency."`
 
 	Etcd *etcd.Config `group:"etcd" namespace:"etcd" description:"Etcd settings."`
 
@@ -31,7 +33,7 @@ type DB struct {
 	Postgres *postgres.Config `group:"postgres" namespace:"postgres" description:"Postgres settings."`
 }
 
-// NewDB creates and returns a new default DB config.
+// DefaultDB creates and returns a new default DB config.
 func DefaultDB() *DB {
 	return &DB{
 		Backend:             BoltBackend,
@@ -82,6 +84,8 @@ func (db *DB) Init(ctx context.Context, dbPath string) error {
 	return nil
 }
 
+type boltBackendCreator func(boltCfg *kvdb.BoltConfig) (kvdb.Backend, error)
+
 // DatabaseBackends is a two-tuple that holds the set of active database
 // backends for the daemon. The two backends we expose are the local database
 // backend, and the remote backend. The LocalDB attribute will always be
@@ -94,53 +98,126 @@ type DatabaseBackends struct {
 	// RemoteDB points to a possibly networked replicated backend. If no
 	// replicated backend is active, then this pointer will be nil.
 	RemoteDB kvdb.Backend
+
+	MacaroonDB kvdb.Backend
+
+	TowerClientDB kvdb.Backend
+
+	DecayedLogDB kvdb.Backend
 }
 
 // GetBackends returns a set of kvdb.Backends as set in the DB config.  The
 // local database will ALWAYS be non-nil, while the remote database will only
 // be populated if etcd is specified.
-func (db *DB) GetBackends(ctx context.Context, dbPath string) (
-	*DatabaseBackends, error) {
+func (db *DB) GetBackends(ctx context.Context, graphPath string,
+	fullyRemote bool, macaroonDBCreator,
+	decayedLogDBCreator boltBackendCreator) (*DatabaseBackends, error) {
 
 	var (
-		localDB, remoteDB kvdb.Backend
-		err               error
+		backends = &DatabaseBackends{}
+		err      error
 	)
 
 	switch db.Backend {
 	case EtcdBackend:
-		remoteDB, err = kvdb.Open(
+		backends.RemoteDB, err = kvdb.Open(
 			kvdb.EtcdBackendName, ctx, db.Etcd,
 		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error opening remote DB: %v",
+				err)
+		}
+
+		if fullyRemote {
+			backends.LocalDB, err = kvdb.Open(
+				kvdb.EtcdBackendName, ctx, db.Etcd,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("error opening local "+
+					"DB: %v", err)
+			}
+
+			backends.MacaroonDB, err = kvdb.Open(
+				kvdb.EtcdBackendName, ctx, db.Etcd,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("error opening "+
+					"macaroon DB: %v", err)
+			}
+
+			backends.DecayedLogDB, err = kvdb.Open(
+				kvdb.EtcdBackendName, ctx, db.Etcd,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("error opening "+
+					"decayed log DB: %v", err)
+			}
 		}
 
 	case PostgresBackend:
-		remoteDB, err = kvdb.Open(
+		backends.RemoteDB, err = kvdb.Open(
 			kvdb.PostgresBackendName, ctx, db.Postgres, "lnd",
 		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error opening remote DB: %v",
+				err)
+		}
+
+		if fullyRemote {
+			backends.LocalDB, err = kvdb.Open(
+				kvdb.PostgresBackendName, ctx, db.Postgres,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("error opening local "+
+					"DB: %v", err)
+			}
+
+			backends.MacaroonDB, err = kvdb.Open(
+				kvdb.PostgresBackendName, ctx, db.Postgres,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("error opening "+
+					"macaroon DB: %v", err)
+			}
+
+			backends.DecayedLogDB, err = kvdb.Open(
+				kvdb.PostgresBackendName, ctx, db.Postgres,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("error opening "+
+					"decayed log DB: %v", err)
+			}
 		}
 	}
 
-	localDB, err = kvdb.GetBoltBackend(&kvdb.BoltBackendConfig{
-		DBPath:            dbPath,
-		DBFileName:        dbName,
-		DBTimeout:         db.Bolt.DBTimeout,
-		NoFreelistSync:    !db.Bolt.SyncFreelist,
-		AutoCompact:       db.Bolt.AutoCompact,
-		AutoCompactMinAge: db.Bolt.AutoCompactMinAge,
-	})
-	if err != nil {
-		return nil, err
+	if !fullyRemote {
+		backends.LocalDB, err = kvdb.GetBoltBackend(&kvdb.BoltBackendConfig{
+			DBPath:            graphPath,
+			DBFileName:        dbName,
+			DBTimeout:         db.Bolt.DBTimeout,
+			NoFreelistSync:    !db.Bolt.SyncFreelist,
+			AutoCompact:       db.Bolt.AutoCompact,
+			AutoCompactMinAge: db.Bolt.AutoCompactMinAge,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("error opening local bolt DB: "+
+				"%v", err)
+		}
+
+		backends.MacaroonDB, err = macaroonDBCreator(db.Bolt)
+		if err != nil {
+			return nil, fmt.Errorf("error opening macaroon bolt "+
+				"DB: %v", err)
+		}
+
+		backends.DecayedLogDB, err = decayedLogDBCreator(db.Bolt)
+		if err != nil {
+			return nil, fmt.Errorf("error opening decayed log "+
+				"bolt DB: %v", err)
+		}
 	}
 
-	return &DatabaseBackends{
-		LocalDB:  localDB,
-		RemoteDB: remoteDB,
-	}, nil
+	return backends, nil
 }
 
 // Compile-time constraint to ensure Workers implements the Validator interface.
