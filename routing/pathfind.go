@@ -489,26 +489,26 @@ func findPath(g *graphParams, r *RestrictParams, cfg *PathFindingConfig,
 	// balance available.
 	self := g.graph.sourceNode()
 
-	if source == self {
-		max, total, err := getOutgoingBalance(
-			self, outgoingChanMap, g.bandwidthHints, g.graph,
-		)
-		if err != nil {
-			return nil, err
-		}
+	// if source == self {
+	// 	max, total, err := getOutgoingBalance(
+	// 		self, outgoingChanMap, g.bandwidthHints, g.graph,
+	// 	)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 
-		// If the total outgoing balance isn't sufficient, it will be
-		// impossible to complete the payment.
-		if total < amt {
-			return nil, errInsufficientBalance
-		}
+	// 	// If the total outgoing balance isn't sufficient, it will be
+	// 	// impossible to complete the payment.
+	// 	if total < amt {
+	// 		return nil, errInsufficientBalance
+	// 	}
 
-		// If there is only not enough capacity on a single route, it
-		// may still be possible to complete the payment by splitting.
-		if max < amt {
-			return nil, errNoPathFound
-		}
-	}
+	// 	// If there is only not enough capacity on a single route, it
+	// 	// may still be possible to complete the payment by splitting.
+	// 	if max < amt {
+	// 		return nil, errNoPathFound
+	// 	}
+	// }
 
 	// First we'll initialize an empty heap which'll help us to quickly
 	// locate the next edge we should visit next during our graph
