@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/lightningnetwork/lnd"
@@ -10,6 +11,8 @@ import (
 )
 
 func main() {
+	time.Sleep(5 * time.Second)
+
 	// Hook interceptor for os signals.
 	shutdownInterceptor, err := signal.Intercept()
 	if err != nil {
