@@ -2,9 +2,7 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -64,23 +62,19 @@ func hasSpecialChars(s string) bool {
 }
 
 func toTableName(key []byte) string {
-	// TODO: Find different solution to deal with potential collisions.
-	hashedKey := sha256.Sum256(key)
-	key = hashedKey[:]
-
 	// Max table name length in postgres is 63, but keep some slack for
 	// index postfixes.
 	const maxTableNameLen = 50
 
 	var table string
 	if hasSpecialChars(string(key)) {
-		table = "kvhex_" + hex.EncodeToString(key)
-	} else {
-		table = "kv_" + strings.Replace(string(key), "-", "_", -1)
+		return ""
 	}
 
+	table = strings.Replace(string(key), "-", "_", -1)
+
 	if len(table) > maxTableNameLen {
-		table = table[:maxTableNameLen]
+		return ""
 	}
 
 	return table
@@ -129,6 +123,13 @@ func (tx *readWriteTx) Rollback() error {
 func (tx *readWriteTx) ReadWriteBucket(key []byte) walletdb.ReadWriteBucket {
 	table := toTableName(key)
 
+	// If the key can't be mapped to a table name, open the bucket from the
+	// hex table.
+	if table == "" {
+		bucket := newReadWriteBucket(tx, hexTableName, nil)
+		return bucket.NestedReadWriteBucket(key)
+	}
+
 	var value int
 	err := tx.tx.QueryRowContext(
 		context.TODO(),
@@ -143,38 +144,46 @@ func (tx *readWriteTx) ReadWriteBucket(key []byte) walletdb.ReadWriteBucket {
 	return newReadWriteBucket(tx, table, nil)
 }
 
-// CreateTopLevelBucket creates the top level bucket for a key if it
-// does not exist.  The newly-created bucket it returned.
-func (tx *readWriteTx) CreateTopLevelBucket(key []byte) (walletdb.ReadWriteBucket, error) {
-	table := toTableName(key)
-
-	_, err := tx.tx.ExecContext(context.TODO(), `
-	
-CREATE TABLE IF NOT EXISTS public.`+table+`
+func getCreateTableSql(table string) string {
+	return `
+CREATE TABLE IF NOT EXISTS public.` + table + `
 (
     key bytea NOT NULL,
     value bytea,
     parent_id bigint,
     id bigserial PRIMARY KEY,
     sequence bigint,
-    CONSTRAINT `+table+`_parent FOREIGN KEY (parent_id)
-        REFERENCES public.`+table+` (id) MATCH SIMPLE
+    CONSTRAINT ` + table + `_parent FOREIGN KEY (parent_id)
+        REFERENCES public.` + table + ` (id) MATCH SIMPLE
         ON UPDATE NO ACTION
         ON DELETE CASCADE
         NOT VALID
 );
 
-CREATE INDEX IF NOT EXISTS `+table+`_p
-    ON public.`+table+` USING btree
+CREATE INDEX IF NOT EXISTS ` + table + `_p
+    ON public.` + table + ` USING btree
     (parent_id ASC NULLS LAST);
 
-CREATE UNIQUE INDEX IF NOT EXISTS `+table+`_up
-    ON public.`+table+` USING btree
+CREATE UNIQUE INDEX IF NOT EXISTS ` + table + `_up
+    ON public.` + table + ` USING btree
     (parent_id ASC NULLS LAST, key ASC NULLS LAST) WHERE parent_id IS NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS `+table+`_unp ON public.`+table+` (key) WHERE parent_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ` + table + `_unp ON public.` + table + ` (key) WHERE parent_id IS NULL;
+`
+}
 
-`)
+// CreateTopLevelBucket creates the top level bucket for a key if it
+// does not exist.  The newly-created bucket it returned.
+func (tx *readWriteTx) CreateTopLevelBucket(key []byte) (walletdb.ReadWriteBucket, error) {
+	table := toTableName(key)
+
+	if table == "" {
+		bucket := newReadWriteBucket(tx, hexTableName, nil)
+		return bucket.CreateBucketIfNotExists(key)
+	}
+
+	createTableSql := getCreateTableSql(table)
+	_, err := tx.tx.ExecContext(context.TODO(), createTableSql)
 	if err != nil {
 		return nil, err
 	}

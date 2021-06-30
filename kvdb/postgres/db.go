@@ -12,6 +12,8 @@ import (
 	_ "github.com/jackc/pgx/v4/stdlib"
 )
 
+const hexTableName = "hex"
+
 // KV stores a key/value pair.
 type KV struct {
 	key string
@@ -38,16 +40,18 @@ func newPostgresBackend(ctx context.Context, cfg Config) (*db, error) {
 		log.Fatal(err)
 	}
 
+	hexCreateTableSql := getCreateTableSql(hexTableName)
+
 	_, err = dbConn.ExecContext(context.TODO(), `
-	-- DROP SCHEMA public CASCADE;
-	-- CREATE SCHEMA public;
+	DROP SCHEMA public CASCADE;
+	CREATE SCHEMA public;
 
 	CREATE TABLE IF NOT EXISTS public.top_sequences
 	(
 		table_name TEXT NOT NULL PRIMARY KEY,
 		sequence bigint
 	);
-	`)
+	`+hexCreateTableSql)
 	if err != nil {
 		return nil, err
 	}
