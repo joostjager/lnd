@@ -2458,6 +2458,53 @@ func (c *ChannelGraph) HasLightningNode(nodePub [33]byte) (time.Time, bool, erro
 	return updateTime, exists, nil
 }
 
+func (c *ChannelGraph) GetFullGraph(tx kvdb.RTx) error {
+	var nodeCount, edgeCount, edgeIndexCount int
+
+	start := time.Now()
+
+	nodes := tx.ReadBucket(nodeBucket)
+	if nodes == nil {
+		return ErrGraphNotFound
+	}
+
+	err := nodes.ForEach(func(k, v []byte) error {
+		nodeCount++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	edges := tx.ReadBucket(edgeBucket)
+	if edges == nil {
+		return ErrGraphNotFound
+	}
+	err = edges.ForEach(func(k, v []byte) error {
+		edgeCount++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	edgeIndex := edges.NestedReadBucket(edgeIndexBucket)
+	if edgeIndex == nil {
+		return ErrGraphNoEdgesFound
+	}
+	err = edgeIndex.ForEach(func(k, v []byte) error {
+		edgeIndexCount++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("DEBUG STATS: nodes=%v, edges=%v, edgeindices=%v, elapsed=%v\n", nodeCount, edgeCount, edgeIndexCount, time.Since(start))
+
+	return nil
+}
+
 // nodeTraversal is used to traverse all channels of a node given by its
 // public key and passes channel information into the specified callback.
 func nodeTraversal(tx kvdb.RTx, nodePub []byte, db *DB,

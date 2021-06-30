@@ -43,6 +43,10 @@ func newDbRoutingTx(graph *channeldb.ChannelGraph) (*dbRoutingTx, error) {
 		return nil, err
 	}
 
+	if err := graph.GetFullGraph(tx); err != nil {
+		return nil, err
+	}
+
 	return &dbRoutingTx{
 		graph:  graph,
 		tx:     tx,
