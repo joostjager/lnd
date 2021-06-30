@@ -61,7 +61,7 @@ func hasSpecialChars(s string) bool {
 	return false
 }
 
-func toTableName(key []byte) string {
+func (tx *readWriteTx) toTableName(key []byte) string {
 	// Max table name length in postgres is 63, but keep some slack for
 	// index postfixes.
 	const maxTableNameLen = 50
@@ -72,6 +72,7 @@ func toTableName(key []byte) string {
 	}
 
 	table = strings.Replace(string(key), "-", "_", -1)
+	table = tx.db.getPrefixedTableName(table)
 
 	if len(table) > maxTableNameLen {
 		return ""
@@ -121,12 +122,12 @@ func (tx *readWriteTx) Rollback() error {
 // ReadWriteBucket opens the root bucket for read/write access.  If the
 // bucket described by the key does not exist, nil is returned.
 func (tx *readWriteTx) ReadWriteBucket(key []byte) walletdb.ReadWriteBucket {
-	table := toTableName(key)
+	table := tx.toTableName(key)
 
 	// If the key can't be mapped to a table name, open the bucket from the
 	// hex table.
 	if table == "" {
-		bucket := newReadWriteBucket(tx, hexTableName, nil)
+		bucket := newReadWriteBucket(tx, tx.db.hexTableName, nil)
 		return bucket.NestedReadWriteBucket(key)
 	}
 
@@ -175,10 +176,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ` + table + `_unp ON public.` + table + ` (key
 // CreateTopLevelBucket creates the top level bucket for a key if it
 // does not exist.  The newly-created bucket it returned.
 func (tx *readWriteTx) CreateTopLevelBucket(key []byte) (walletdb.ReadWriteBucket, error) {
-	table := toTableName(key)
+	table := tx.toTableName(key)
 
 	if table == "" {
-		bucket := newReadWriteBucket(tx, hexTableName, nil)
+		bucket := newReadWriteBucket(tx, tx.db.hexTableName, nil)
 		return bucket.CreateBucketIfNotExists(key)
 	}
 
@@ -207,7 +208,7 @@ func (tx *readWriteTx) DeleteTopLevelBucket(key []byte) error {
 		return err
 	}
 
-	_, err = tx.tx.ExecContext(context.TODO(), "DELETE FROM top_sequences WHERE table_name=$1", table)
+	_, err = tx.tx.ExecContext(context.TODO(), "DELETE FROM "+tx.db.sequenceTableName+" WHERE table_name=$1", table)
 	if err != nil {
 		return err
 	}

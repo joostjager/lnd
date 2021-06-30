@@ -343,7 +343,7 @@ func (b *readWriteBucket) SetSequence(v uint64) error {
 	)
 
 	if b.id == nil {
-		query = "INSERT INTO top_sequences (table_name, sequence) values($1, $2) ON CONFLICT (table_name) DO UPDATE SET sequence=$2"
+		query = "INSERT INTO " + b.tx.db.sequenceTableName + " (table_name, sequence) values($1, $2) ON CONFLICT (table_name) DO UPDATE SET sequence=$2"
 		queryArgs = []interface{}{b.table, int64(v)}
 	} else {
 		query = "UPDATE " + b.table + " SET sequence=$2 WHERE id=$1"
@@ -378,7 +378,7 @@ func (b *readWriteBucket) Sequence() uint64 {
 	)
 
 	if b.id == nil {
-		query = "SELECT sequence FROM top_sequences WHERE table_name=$1"
+		query = "SELECT sequence FROM " + b.tx.db.sequenceTableName + " WHERE table_name=$1"
 		queryArgs = []interface{}{b.table}
 	} else {
 		query = "SELECT sequence FROM " + b.table + " WHERE id=$1"

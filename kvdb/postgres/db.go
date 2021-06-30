@@ -4,15 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
-	"log"
 	"sync"
 
 	"github.com/btcsuite/btcwallet/walletdb"
 	_ "github.com/jackc/pgx/v4/stdlib"
 )
 
-const hexTableName = "hex"
+const (
+	hexTableId      = "hex"
+	sequenceTableId = "sequence"
+
+	systemTablePrefixExtension = "sys"
+)
 
 // KV stores a key/value pair.
 type KV struct {
@@ -22,11 +27,21 @@ type KV struct {
 
 // db holds a reference to the postgres connection connection.
 type db struct {
-	cfg Config
+	dsn string
+
+	// Table name prefix to simulate namespaces. We don't use schemas
+	// because at least sqlite does not support that.
+	prefix string
+
+	// TODO: Copied from etcd, but is an anti-pattern.
 	ctx context.Context
-	db  *sql.DB
+
+	db *sql.DB
 
 	lock sync.RWMutex
+
+	hexTableName      string
+	sequenceTableName string
 }
 
 // Enforce db implements the walletdb.DB interface.
@@ -34,11 +49,20 @@ var _ walletdb.DB = (*db)(nil)
 
 // newPostgresBackend returns a db object initialized with the passed backend
 // config. If etcd connection cannot be estabished, then returns error.
-func newPostgresBackend(ctx context.Context, cfg Config) (*db, error) {
-	dbConn, err := sql.Open("pgx", cfg.Dsn)
+func newPostgresBackend(ctx context.Context, dsn, prefix string) (*db, error) {
+	dbConn, err := sql.Open("pgx", dsn)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
+
+	if prefix == "" {
+		return nil, errors.New("empty postgres prefix")
+	}
+
+	// Use extended prefix to prevent clashes between system tables and app
+	// buckets.
+	hexTableName := fmt.Sprintf("%s%s_%s", prefix, systemTablePrefixExtension, hexTableId)
+	sequenceTableName := fmt.Sprintf("%s%s_%s", prefix, systemTablePrefixExtension, sequenceTableId)
 
 	hexCreateTableSql := getCreateTableSql(hexTableName)
 
@@ -46,7 +70,7 @@ func newPostgresBackend(ctx context.Context, cfg Config) (*db, error) {
 	DROP SCHEMA public CASCADE;
 	CREATE SCHEMA public;
 
-	CREATE TABLE IF NOT EXISTS public.top_sequences
+	CREATE TABLE IF NOT EXISTS public.`+sequenceTableName+`
 	(
 		table_name TEXT NOT NULL PRIMARY KEY,
 		sequence bigint
@@ -57,12 +81,19 @@ func newPostgresBackend(ctx context.Context, cfg Config) (*db, error) {
 	}
 
 	backend := &db{
-		cfg: cfg,
-		ctx: ctx,
-		db:  dbConn,
+		dsn:               dsn,
+		prefix:            prefix,
+		ctx:               ctx,
+		db:                dbConn,
+		hexTableName:      hexTableName,
+		sequenceTableName: sequenceTableName,
 	}
 
 	return backend, nil
+}
+
+func (db *db) getPrefixedTableName(table string) string {
+	return fmt.Sprintf("%s_%s", db.prefix, table)
 }
 
 // View opens a database read transaction and executes the function f with the

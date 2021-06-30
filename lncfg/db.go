@@ -118,7 +118,7 @@ func (db *DB) GetBackends(ctx context.Context, dbPath string) (
 
 	case PostgresBackend:
 		remoteDB, err = kvdb.Open(
-			kvdb.PostgresBackendName, ctx, db.Postgres,
+			kvdb.PostgresBackendName, ctx, db.Postgres, "lnd",
 		)
 		if err != nil {
 			return nil, err

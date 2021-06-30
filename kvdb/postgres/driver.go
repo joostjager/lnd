@@ -13,10 +13,10 @@ const (
 
 // parseArgs parses the arguments from the walletdb Open/Create methods.
 func parseArgs(funcName string, args ...interface{}) (context.Context,
-	*Config, error) {
+	*Config, string, error) {
 
-	if len(args) != 2 {
-		return nil, nil, fmt.Errorf("invalid number of arguments to "+
+	if len(args) != 3 {
+		return nil, nil, "", fmt.Errorf("invalid number of arguments to "+
 			"%s.%s -- expected: context.Context, postgres.Config",
 			dbType, funcName,
 		)
@@ -24,7 +24,7 @@ func parseArgs(funcName string, args ...interface{}) (context.Context,
 
 	ctx, ok := args[0].(context.Context)
 	if !ok {
-		return nil, nil, fmt.Errorf("argument 0 to %s.%s is invalid "+
+		return nil, nil, "", fmt.Errorf("argument 0 to %s.%s is invalid "+
 			"-- expected: context.Context",
 			dbType, funcName,
 		)
@@ -32,35 +32,42 @@ func parseArgs(funcName string, args ...interface{}) (context.Context,
 
 	config, ok := args[1].(*Config)
 	if !ok {
-		return nil, nil, fmt.Errorf("argument 1 to %s.%s is invalid -- "+
+		return nil, nil, "", fmt.Errorf("argument 1 to %s.%s is invalid -- "+
 			"expected: postgres.Config",
 			dbType, funcName,
 		)
 	}
 
-	return ctx, config, nil
+	prefix, ok := args[2].(string)
+	if !ok {
+		return nil, nil, "", fmt.Errorf("argument 2 to %s.%s is "+
+			"invalid -- expected prefix", dbType,
+			funcName)
+	}
+
+	return ctx, config, prefix, nil
 }
 
 // createDBDriver is the callback provided during driver registration that
 // creates, initializes, and opens a database for use.
 func createDBDriver(args ...interface{}) (walletdb.DB, error) {
-	ctx, config, err := parseArgs("Create", args...)
+	ctx, config, prefix, err := parseArgs("Create", args...)
 	if err != nil {
 		return nil, err
 	}
 
-	return newPostgresBackend(ctx, *config)
+	return newPostgresBackend(ctx, config.Dsn, prefix)
 }
 
 // openDBDriver is the callback provided during driver registration that opens
 // an existing database for use.
 func openDBDriver(args ...interface{}) (walletdb.DB, error) {
-	ctx, config, err := parseArgs("Open", args...)
+	ctx, config, prefix, err := parseArgs("Open", args...)
 	if err != nil {
 		return nil, err
 	}
 
-	return newPostgresBackend(ctx, *config)
+	return newPostgresBackend(ctx, config.Dsn, prefix)
 }
 
 func init() {

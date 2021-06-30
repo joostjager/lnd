@@ -9,11 +9,12 @@ import (
 )
 
 func TestDb(t *testing.T) {
-	cfg := Config{
-		Dsn: "postgres://bottle:bottle@localhost:45432/lnd?sslmode=disable",
-	}
+	const (
+		dsn    = "postgres://bottle:bottle@localhost:45432/lnd?sslmode=disable"
+		prefix = "test"
+	)
 
-	db, err := newPostgresBackend(context.Background(), cfg)
+	db, err := newPostgresBackend(context.Background(), dsn, prefix)
 	require.NoError(t, err)
 
 	err = db.Update(func(tx walletdb.ReadWriteTx) error {
