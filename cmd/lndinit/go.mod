@@ -1,6 +1,7 @@
 module github.com/lightningnetwork/lnd/cmd/lndinit
 
 require (
+	github.com/btcsuite/btcwallet/walletdb v1.3.5
 	github.com/gogo/protobuf v1.3.1 // indirect
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/kkdai/bstream v1.0.0 // indirect
