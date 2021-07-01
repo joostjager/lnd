@@ -104,6 +104,8 @@ type DatabaseBackends struct {
 	TowerClientDB kvdb.Backend
 
 	DecayedLogDB kvdb.Backend
+
+	WalletDB kvdb.Backend
 }
 
 // GetBackends returns a set of kvdb.Backends as set in the DB config.  The
@@ -165,7 +167,7 @@ func (db *DB) GetBackends(ctx context.Context, graphPath string,
 
 		if fullyRemote {
 			backends.LocalDB, err = kvdb.Open(
-				kvdb.PostgresBackendName, ctx, db.Postgres,
+				kvdb.PostgresBackendName, ctx, db.Postgres, "lnd",
 			)
 			if err != nil {
 				return nil, fmt.Errorf("error opening local "+
@@ -173,7 +175,7 @@ func (db *DB) GetBackends(ctx context.Context, graphPath string,
 			}
 
 			backends.MacaroonDB, err = kvdb.Open(
-				kvdb.PostgresBackendName, ctx, db.Postgres,
+				kvdb.PostgresBackendName, ctx, db.Postgres, "macaroon",
 			)
 			if err != nil {
 				return nil, fmt.Errorf("error opening "+
@@ -181,11 +183,19 @@ func (db *DB) GetBackends(ctx context.Context, graphPath string,
 			}
 
 			backends.DecayedLogDB, err = kvdb.Open(
-				kvdb.PostgresBackendName, ctx, db.Postgres,
+				kvdb.PostgresBackendName, ctx, db.Postgres, "replay",
 			)
 			if err != nil {
 				return nil, fmt.Errorf("error opening "+
 					"decayed log DB: %v", err)
+			}
+
+			backends.WalletDB, err = kvdb.Open(
+				kvdb.PostgresBackendName, ctx, db.Postgres, "wallet",
+			)
+			if err != nil {
+				return nil, fmt.Errorf("error opening "+
+					"wallet DB: %v", err)
 			}
 		}
 	}

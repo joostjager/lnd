@@ -452,7 +452,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 		// environment. This will ensure that all members of the cluster
 		// have access to the same wallet state.
 		loaderOpt = btcwallet.LoaderWithExternalWalletDB(
-			dbs.remoteChanDB.Backend,
+			dbs.walletDB,
 		)
 	} else {
 		// When "running locally", LND will use the bbolt wallet.db to
@@ -1598,6 +1598,7 @@ type databases struct {
 	macaroonDB    kvdb.Backend
 	towerClientDB kvdb.Backend
 	decayedLogDB  kvdb.Backend
+	walletDB      kvdb.Backend
 }
 
 // initializeDatabases extracts the current databases that we'll use for normal
@@ -1640,6 +1641,7 @@ func initializeDatabases(ctx context.Context,
 		dbs = &databases{
 			macaroonDB:   databaseBackends.MacaroonDB,
 			decayedLogDB: databaseBackends.DecayedLogDB,
+			walletDB:     databaseBackends.WalletDB,
 		}
 		closeFuncs []func()
 	)
