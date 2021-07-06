@@ -1,23 +1,41 @@
 package postgres
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/btcsuite/btcwallet/walletdb"
+	"github.com/btcsuite/btcwallet/walletdb/walletdbtest"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/context"
 )
 
-func TestDb(t *testing.T) {
-	const (
-		dsn    = "postgres://bottle:bottle@localhost:45432/lnd?sslmode=disable"
-		prefix = "test"
-	)
+const (
+	dsn    = "postgres://bottle:bottle@localhost:45432/lnd?sslmode=disable"
+	prefix = "test"
+)
+
+func clearTestDb(t *testing.T) {
+	dbConn, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+
+	_, err = dbConn.ExecContext(context.Background(), "DROP SCHEMA public CASCADE;")
+	require.NoError(t, err)
+}
+
+func openTestDb(t *testing.T) *db {
+	clearTestDb(t)
 
 	db, err := newPostgresBackend(context.Background(), dsn, prefix)
 	require.NoError(t, err)
 
-	err = db.Update(func(tx walletdb.ReadWriteTx) error {
+	return db
+}
+
+func TestDb(t *testing.T) {
+	db := openTestDb(t)
+
+	err := db.Update(func(tx walletdb.ReadWriteTx) error {
 		// Try to delete all data (there is none).
 		err := tx.DeleteTopLevelBucket([]byte("top"))
 		require.ErrorIs(t, walletdb.ErrBucketNotFound, err)
@@ -196,4 +214,21 @@ func TestDb(t *testing.T) {
 		return nil
 	}, func() {})
 	require.NoError(t, err)
+}
+
+// TestInterface performs all interfaces tests for this database driver.
+func TestInterface(t *testing.T) {
+	clearTestDb(t)
+
+	const (
+		// dbType is the database type name for this driver.
+		dbType = "postgres"
+	)
+
+	ctx := context.Background()
+	cfg := &Config{
+		Dsn: dsn,
+	}
+
+	walletdbtest.TestInterface(t, dbType, ctx, cfg, prefix)
 }
