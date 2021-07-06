@@ -151,25 +151,12 @@ func (c *readWriteCursor) Seek(seek []byte) ([]byte, []byte) {
 // invalidating the cursor.  Returns ErrIncompatibleValue if attempted
 // when the cursor points to a nested bucket.
 func (c *readWriteCursor) Delete() error {
-	deleteKey := c.currKey
-
-	var key []byte
-	err := c.bucket.tx.tx.QueryRowContext(
-		c.bucket.tx.db.ctx,
-		"SELECT key FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
-		c.currKey,
-	).Scan(&key)
-
-	if err == sql.ErrNoRows {
-		c.currKey = nil
-	} else {
-		c.currKey = key
-	}
+	// TODO: Check exact behavior in bbolt.
 
 	result, err := c.bucket.tx.tx.ExecContext(
 		c.bucket.tx.db.ctx,
 		"DELETE FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key=$1 AND value IS NOT NULL",
-		deleteKey,
+		c.currKey,
 	)
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -178,6 +165,8 @@ func (c *readWriteCursor) Delete() error {
 	if rows != 1 {
 		return walletdb.ErrIncompatibleValue
 	}
+
+	_, _ = c.Next()
 
 	return err
 }
