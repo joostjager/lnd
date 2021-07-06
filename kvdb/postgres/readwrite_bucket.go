@@ -49,42 +49,16 @@ func parentSelector(id *int64) string {
 // is nil, but it does not include the key/value pairs within those
 // nested buckets.
 func (b *readWriteBucket) ForEach(cb func(k, v []byte) error) error {
-	rows, err := b.tx.tx.QueryContext(
-		context.TODO(),
-		"SELECT key,value FROM "+b.table+" WHERE "+parentSelector(b.id)+" ORDER BY key",
-	)
-	if err != nil {
-		return err
-	}
+	cursor := b.ReadWriteCursor()
 
-	type kv struct {
-		k, v []byte
-	}
-
-	// Read all data in memory, to unblock the connection (nested queries).
-	//
-	// TODO: Convert to paginated reads to prevent OOM on large tables.
-	var kvs []kv
-	for rows.Next() {
-		var (
-			key   []byte
-			value []byte
-		)
-		err := rows.Scan(&key, &value)
-		if err != nil {
-			rows.Close()
-			return err
-		}
-
-		kvs = append(kvs, kv{k: key, v: value})
-	}
-	rows.Close()
-
-	for _, kv := range kvs {
-		err = cb(kv.k, kv.v)
+	k, v := cursor.First()
+	for k != nil {
+		err := cb(k, v)
 		if err != nil {
 			return err
 		}
+
+		k, v = cursor.Next()
 	}
 
 	return nil
