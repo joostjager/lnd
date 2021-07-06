@@ -115,7 +115,7 @@ func (f *EtcdTestFixture) Get(key string) string {
 }
 
 // Dump scans and returns all key/values from the test etcd database.
-func (f *EtcdTestFixture) Dump() map[string]string {
+func (f *EtcdTestFixture) Check(expected map[string]interface{}) {
 	ctx, cancel := context.WithTimeout(context.TODO(), testEtcdTimeout)
 	defer cancel()
 
@@ -129,7 +129,36 @@ func (f *EtcdTestFixture) Dump() map[string]string {
 		result[string(kv.Key)] = string(kv.Value)
 	}
 
-	return result
+	expectedKvs := make(map[string]string)
+
+	var process func(parents []string, b map[string]interface{})
+	process = func(parents []string, b map[string]interface{}) {
+		for k, v := range b {
+			switch value := v.(type) {
+			case string:
+				key := f.Vkey(k, parents...)
+				expectedKvs[key] = value
+
+			case map[string]interface{}:
+				// Create a copy of the parents slice with the
+				// new bucket appended.
+				bParents := make([]string, len(parents))
+				copy(bParents, parents)
+				bParents = append(bParents, k)
+
+				key := f.Bkey(bParents...)
+				bValue := f.Bval(bParents...)
+
+				expectedKvs[key] = bValue
+
+				process(bParents, value)
+			}
+		}
+	}
+
+	process(nil, expected)
+
+	require.Equal(f.t, expectedKvs, result)
 }
 
 // BackendConfig returns the backend config for connecting to theembedded

@@ -13,10 +13,7 @@ import (
 type testFixture interface {
 	NewBackend() walletdb.DB
 
-	Dump() map[string]string
-	Bkey(buckets ...string) string
-	Bval(buckets ...string) string
-	Vkey(key string, buckets ...string) string
+	Check(map[string]interface{})
 
 	Cleanup()
 }
@@ -301,16 +298,24 @@ func testReadWriteCursor(t *testing.T, f testFixture) {
 
 	require.NoError(t, err)
 
-	expected := map[string]string{
-		f.Bkey("apple"):       f.Bval("apple"),
-		f.Vkey("a", "apple"):  "0",
-		f.Vkey("c", "apple"):  "3",
-		f.Vkey("cx", "apple"): "x",
-		f.Vkey("cy", "apple"): "y",
-		f.Vkey("da", "apple"): "3",
-		f.Vkey("f", "apple"):  "5",
+	expected := map[string]interface{}{
+		"apple": map[string]interface{}{
+			"a":  "0",
+			"c":  "3",
+			"cx": "x",
+			"cy": "y",
+			"da": "3",
+			"f":  "5",
+		},
 	}
-	require.Equal(t, expected, f.Dump())
+	f.Check(expected)
+}
+
+func TestReadWriteCursorWithBucketAndValue(t *testing.T) {
+	f := etcd.NewEtcdTestFixture(t)
+	defer f.Cleanup()
+
+	testReadWriteCursorWithBucketAndValue(t, f)
 }
 
 // testReadWriteCursorWithBucketAndValue tests that cursors are able to iterate
@@ -375,11 +380,12 @@ func testReadWriteCursorWithBucketAndValue(t *testing.T, f testFixture) {
 
 	require.NoError(t, err)
 
-	expected := map[string]string{
-		f.Bkey("apple"):           f.Bval("apple"),
-		f.Bkey("apple", "banana"): f.Bval("apple", "banana"),
-		f.Bkey("apple", "pear"):   f.Bval("apple", "pear"),
-		f.Vkey("key", "apple"):    "val",
+	expected := map[string]interface{}{
+		"apple": map[string]interface{}{
+			"banana": map[string]interface{}{},
+			"pear":   map[string]interface{}{},
+			"key":    "val",
+		},
 	}
-	require.Equal(t, expected, f.Dump())
+	f.Check(expected)
 }
