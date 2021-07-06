@@ -10,11 +10,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReadCursorEmptyInterval(t *testing.T) {
-	t.Parallel()
+type testFixture interface {
+	NewBackend() walletdb.DB
 
+	Dump() map[string]string
+	Bkey(buckets ...string) string
+	Bval(buckets ...string) string
+	Vkey(key string, buckets ...string) string
+
+	Cleanup()
+}
+
+func TestReadCursorEmptyInterval(t *testing.T) {
 	f := etcd.NewEtcdTestFixture(t)
 	defer f.Cleanup()
+
+	testReadCursorEmptyInterval(t, f)
+}
+
+func testReadCursorEmptyInterval(t *testing.T, f testFixture) {
+	t.Parallel()
 
 	db := f.NewBackend().(ExtendedBackend)
 
@@ -54,10 +69,14 @@ func TestReadCursorEmptyInterval(t *testing.T) {
 }
 
 func TestReadCursorNonEmptyInterval(t *testing.T) {
-	t.Parallel()
-
 	f := etcd.NewEtcdTestFixture(t)
 	defer f.Cleanup()
+
+	testReadCursorNonEmptyInterval(t, f)
+}
+
+func testReadCursorNonEmptyInterval(t *testing.T, f testFixture) {
+	t.Parallel()
 
 	db := f.NewBackend().(ExtendedBackend)
 
@@ -130,10 +149,14 @@ func TestReadCursorNonEmptyInterval(t *testing.T) {
 }
 
 func TestReadWriteCursor(t *testing.T) {
-	t.Parallel()
-
 	f := etcd.NewEtcdTestFixture(t)
 	defer f.Cleanup()
+
+	testReadWriteCursor(t, f)
+}
+
+func testReadWriteCursor(t *testing.T, f testFixture) {
+	t.Parallel()
 
 	db := f.NewBackend().(ExtendedBackend)
 
@@ -290,13 +313,10 @@ func TestReadWriteCursor(t *testing.T) {
 	require.Equal(t, expected, f.Dump())
 }
 
-// TestReadWriteCursorWithBucketAndValue tests that cursors are able to iterate
+// testReadWriteCursorWithBucketAndValue tests that cursors are able to iterate
 // over both bucket and value keys if both are present in the iterated bucket.
-func TestReadWriteCursorWithBucketAndValue(t *testing.T) {
+func testReadWriteCursorWithBucketAndValue(t *testing.T, f testFixture) {
 	t.Parallel()
-
-	f := etcd.NewEtcdTestFixture(t)
-	defer f.Cleanup()
 
 	db := f.NewBackend().(ExtendedBackend)
 
