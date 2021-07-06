@@ -61,6 +61,8 @@ func hasSpecialChars(s string) bool {
 	return false
 }
 
+// toTableName attempts to convert a binary key to a sql-compatible table name.
+// If the mapping can't be made, an empty string is returned.
 func (tx *readWriteTx) toTableName(key []byte) string {
 	// Max table name length in postgres is 63, but keep some slack for
 	// index postfixes.
@@ -220,6 +222,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ` + table + `_unp ON public.` + table + ` (key
 func (tx *readWriteTx) CreateTopLevelBucket(key []byte) (walletdb.ReadWriteBucket, error) {
 	table := tx.toTableName(key)
 
+	// If the key can't be mapped to a table name, open the bucket from the
+	// hex table.
 	if table == "" {
 		bucket := newReadWriteBucket(tx, tx.db.hexTableName, nil)
 		return bucket.CreateBucketIfNotExists(key)
