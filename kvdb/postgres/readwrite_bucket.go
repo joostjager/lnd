@@ -82,6 +82,9 @@ func (b *readWriteBucket) Get(key []byte) []byte {
 		return nil
 	}
 
+	// TODO: In the error case, it is probably not a safe behavior to return
+	// nil. Also applies to etcd.
+
 	return *value
 }
 
