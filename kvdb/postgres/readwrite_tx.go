@@ -150,18 +150,16 @@ func (tx *readWriteTx) Rollback() error {
 	}
 
 	err := tx.tx.Rollback()
-	if err != nil {
-		return err
-	}
-	tx.active = false
 
+	// Unlock the transaction regardless of the error result.
+	tx.active = false
 	if tx.readOnly {
 		tx.db.lock.RUnlock()
 	} else {
 		tx.db.lock.Unlock()
 	}
 
-	return nil
+	return err
 }
 
 // ReadWriteBucket opens the root bucket for read/write access.  If the
@@ -268,22 +266,18 @@ func (tx *readWriteTx) Commit() error {
 	}
 
 	// Try committing the transaction.
-	if err := tx.tx.Commit(); err != nil {
-		return err
-	}
-
-	if tx.onCommit != nil {
+	err := tx.tx.Commit()
+	if err == nil && tx.onCommit != nil {
 		tx.onCommit()
 	}
 
+	// Unlock the transaction regardless of the error result.
+	tx.active = false
 	if tx.readOnly {
 		tx.db.lock.RUnlock()
 	} else {
 		tx.db.lock.Unlock()
 	}
-
-	// Mark the transaction as not active after commit.
-	tx.active = false
 
 	return nil
 }
