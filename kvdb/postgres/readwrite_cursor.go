@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 
 	"github.com/btcsuite/btcwallet/walletdb"
@@ -30,7 +29,7 @@ func (c *readWriteCursor) First() ([]byte, []byte) {
 		value []byte
 	)
 	err := c.bucket.tx.tx.QueryRowContext(
-		context.TODO(),
+		c.bucket.tx.db.ctx,
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" ORDER BY key LIMIT 1",
 	).Scan(&key, &value)
 
@@ -53,7 +52,7 @@ func (c *readWriteCursor) Last() ([]byte, []byte) {
 		value []byte
 	)
 	err := c.bucket.tx.tx.QueryRowContext(
-		context.TODO(),
+		c.bucket.tx.db.ctx,
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" ORDER BY key DESC LIMIT 1",
 	).Scan(&key, &value)
 
@@ -78,7 +77,7 @@ func (c *readWriteCursor) Next() ([]byte, []byte) {
 		value []byte
 	)
 	err := c.bucket.tx.tx.QueryRowContext(
-		context.TODO(),
+		c.bucket.tx.db.ctx,
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
 		c.currKey,
 	).Scan(&key, &value)
@@ -102,7 +101,7 @@ func (c *readWriteCursor) Prev() ([]byte, []byte) {
 		value []byte
 	)
 	err := c.bucket.tx.tx.QueryRowContext(
-		context.TODO(),
+		c.bucket.tx.db.ctx,
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key<$1 ORDER BY key DESC LIMIT 1",
 		c.currKey,
 	).Scan(&key, &value)
@@ -132,7 +131,7 @@ func (c *readWriteCursor) Seek(seek []byte) ([]byte, []byte) {
 		value []byte
 	)
 	err := c.bucket.tx.tx.QueryRowContext(
-		context.TODO(),
+		c.bucket.tx.db.ctx,
 		"SELECT key, value FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>=$1 ORDER BY key LIMIT 1",
 		seek,
 	).Scan(&key, &value)
@@ -156,7 +155,7 @@ func (c *readWriteCursor) Delete() error {
 
 	var key []byte
 	err := c.bucket.tx.tx.QueryRowContext(
-		context.TODO(),
+		c.bucket.tx.db.ctx,
 		"SELECT key FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key>$1 ORDER BY key LIMIT 1",
 		c.currKey,
 	).Scan(&key)
@@ -168,7 +167,7 @@ func (c *readWriteCursor) Delete() error {
 	}
 
 	result, err := c.bucket.tx.tx.ExecContext(
-		context.TODO(),
+		c.bucket.tx.db.ctx,
 		"DELETE FROM "+c.bucket.table+" WHERE "+parentSelector(c.bucket.id)+" AND key=$1 AND value IS NOT NULL",
 		deleteKey,
 	)

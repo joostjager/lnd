@@ -66,7 +66,7 @@ func newPostgresBackend(ctx context.Context, dsn, prefix string) (*db, error) {
 
 	hexCreateTableSql := getCreateTableSql(hexTableName)
 
-	_, err = dbConn.ExecContext(context.TODO(), `
+	_, err = dbConn.ExecContext(ctx, `
 	CREATE SCHEMA IF NOT EXISTS public;
 
 	CREATE TABLE IF NOT EXISTS public.`+sequenceTableName+`

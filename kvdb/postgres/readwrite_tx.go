@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"sort"
 	"strings"
@@ -96,7 +95,7 @@ func (tx *readWriteTx) ReadBucket(key []byte) walletdb.ReadBucket {
 func (tx *readWriteTx) ForEachBucket(fn func(key []byte) error) error {
 	// Fetch human-readable top level buckets.
 	rows, err := tx.tx.QueryContext(
-		context.TODO(),
+		tx.db.ctx,
 		"SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public'",
 	)
 	if err != nil {
@@ -179,7 +178,7 @@ func (tx *readWriteTx) ReadWriteBucket(key []byte) walletdb.ReadWriteBucket {
 
 	var value int
 	err := tx.tx.QueryRowContext(
-		context.TODO(),
+		tx.db.ctx,
 		"SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname='public' and tablename=$1",
 		table,
 	).Scan(&value)
@@ -229,7 +228,7 @@ func (tx *readWriteTx) CreateTopLevelBucket(key []byte) (walletdb.ReadWriteBucke
 	}
 
 	createTableSql := getCreateTableSql(table)
-	_, err := tx.tx.ExecContext(context.TODO(), createTableSql)
+	_, err := tx.tx.ExecContext(tx.db.ctx, createTableSql)
 	if err != nil {
 		return nil, err
 	}
@@ -248,12 +247,12 @@ func (tx *readWriteTx) DeleteTopLevelBucket(key []byte) error {
 
 	table := bucket.(*readWriteBucket).table
 
-	_, err := tx.tx.ExecContext(context.TODO(), "DROP TABLE public."+table+";")
+	_, err := tx.tx.ExecContext(tx.db.ctx, "DROP TABLE public."+table+";")
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.tx.ExecContext(context.TODO(), "DELETE FROM "+tx.db.sequenceTableName+" WHERE table_name=$1", table)
+	_, err = tx.tx.ExecContext(tx.db.ctx, "DELETE FROM "+tx.db.sequenceTableName+" WHERE table_name=$1", table)
 	if err != nil {
 		return err
 	}

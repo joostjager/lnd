@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -74,7 +73,7 @@ func (b *readWriteBucket) Get(key []byte) []byte {
 
 	var value *[]byte
 	err := b.tx.tx.QueryRowContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		"SELECT value FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1",
 		key,
 	).Scan(&value)
@@ -99,7 +98,7 @@ func (b *readWriteBucket) NestedReadWriteBucket(key []byte) walletdb.ReadWriteBu
 
 	var id int64
 	err := b.tx.tx.QueryRowContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		"SELECT id FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
 		key,
 	).Scan(&id)
@@ -129,7 +128,7 @@ func (b *readWriteBucket) CreateBucket(key []byte) (
 		id    int64
 	)
 	err := b.tx.tx.QueryRowContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		"select id,value from "+b.table+" where "+parentSelector(b.id)+" and key=$1",
 		key).Scan(&id, &value)
 
@@ -147,7 +146,7 @@ func (b *readWriteBucket) CreateBucket(key []byte) (
 	}
 
 	err = b.tx.tx.QueryRowContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		"insert into "+b.table+" (parent_id, key) values($1, $2) RETURNING id",
 		b.id, key,
 	).Scan(&id)
@@ -175,14 +174,14 @@ func (b *readWriteBucket) CreateBucketIfNotExists(key []byte) (
 		id    int64
 	)
 	err := b.tx.tx.QueryRowContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		"select id,value from "+b.table+" where "+parentSelector(b.id)+" and key=$1",
 		key).Scan(&id, &value)
 
 	switch {
 	case err == sql.ErrNoRows:
 		err = b.tx.tx.QueryRowContext(
-			context.TODO(),
+			b.tx.db.ctx,
 			"insert into "+b.table+" (parent_id, key) values($1, $2) RETURNING id",
 			b.id, key,
 		).Scan(&id)
@@ -210,7 +209,7 @@ func (b *readWriteBucket) DeleteNestedBucket(key []byte) error {
 	}
 
 	result, err := b.tx.tx.ExecContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		"DELETE FROM "+b.table+" WHERE "+parentSelector(b.id)+" AND key=$1 AND value IS NULL",
 		key,
 	)
@@ -248,7 +247,7 @@ func (b *readWriteBucket) Put(key, value []byte) error {
 	}
 
 	result, err := b.tx.tx.ExecContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		query,
 		key, value, b.id,
 	)
@@ -278,7 +277,7 @@ func (b *readWriteBucket) Delete(key []byte) error {
 	}
 
 	_, err := b.tx.tx.ExecContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		"DELETE FROM "+b.table+" WHERE key=$1 AND "+parentSelector(b.id)+" AND value IS NOT NULL",
 		key,
 	)
@@ -325,7 +324,7 @@ func (b *readWriteBucket) SetSequence(v uint64) error {
 	}
 
 	result, err := b.tx.tx.ExecContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		query, queryArgs...,
 	)
 	if err != nil {
@@ -361,7 +360,7 @@ func (b *readWriteBucket) Sequence() uint64 {
 
 	var seq int64
 	err := b.tx.tx.QueryRowContext(
-		context.TODO(),
+		b.tx.db.ctx,
 		query, queryArgs...,
 	).Scan(&seq)
 
