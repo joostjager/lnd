@@ -1,25 +1,24 @@
 // +build kvdb_etcd
 
-package etcd
+package kvdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/btcsuite/btcwallet/walletdb"
+	"github.com/lightningnetwork/lnd/kvdb/etcd"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReadCursorEmptyInterval(t *testing.T) {
 	t.Parallel()
 
-	f := NewEtcdTestFixture(t)
+	f := etcd.NewEtcdTestFixture(t)
 	defer f.Cleanup()
 
-	db, err := newEtcdBackend(context.TODO(), f.BackendConfig())
-	require.NoError(t, err)
+	db := f.NewBackend().(ExtendedBackend)
 
-	err = db.Update(func(tx walletdb.ReadWriteTx) error {
+	err := db.Update(func(tx walletdb.ReadWriteTx) error {
 		b, err := tx.CreateTopLevelBucket([]byte("apple"))
 		require.NoError(t, err)
 		require.NotNil(t, b)
@@ -57,11 +56,10 @@ func TestReadCursorEmptyInterval(t *testing.T) {
 func TestReadCursorNonEmptyInterval(t *testing.T) {
 	t.Parallel()
 
-	f := NewEtcdTestFixture(t)
+	f := etcd.NewEtcdTestFixture(t)
 	defer f.Cleanup()
 
-	db, err := newEtcdBackend(context.TODO(), f.BackendConfig())
-	require.NoError(t, err)
+	db := f.NewBackend().(ExtendedBackend)
 
 	testKeyValues := []KV{
 		{"b", "1"},
@@ -70,7 +68,7 @@ func TestReadCursorNonEmptyInterval(t *testing.T) {
 		{"e", "4"},
 	}
 
-	err = db.Update(func(tx walletdb.ReadWriteTx) error {
+	err := db.Update(func(tx walletdb.ReadWriteTx) error {
 		b, err := tx.CreateTopLevelBucket([]byte("apple"))
 		require.NoError(t, err)
 		require.NotNil(t, b)
@@ -134,11 +132,10 @@ func TestReadCursorNonEmptyInterval(t *testing.T) {
 func TestReadWriteCursor(t *testing.T) {
 	t.Parallel()
 
-	f := NewEtcdTestFixture(t)
+	f := etcd.NewEtcdTestFixture(t)
 	defer f.Cleanup()
 
-	db, err := newEtcdBackend(context.TODO(), f.BackendConfig())
-	require.NoError(t, err)
+	db := f.NewBackend().(ExtendedBackend)
 
 	testKeyValues := []KV{
 		{"b", "1"},
@@ -165,13 +162,13 @@ func TestReadWriteCursor(t *testing.T) {
 		return nil
 	}, func() {}))
 
-	err = db.Update(func(tx walletdb.ReadWriteTx) error {
+	err := db.Update(func(tx walletdb.ReadWriteTx) error {
 		b := tx.ReadWriteBucket([]byte("apple"))
 		require.NotNil(t, b)
 
 		// Store the second half of the interval.
 		for i := count / 2; i < count; i++ {
-			err = b.Put(
+			err := b.Put(
 				[]byte(testKeyValues[i].key),
 				[]byte(testKeyValues[i].val),
 			)
@@ -282,13 +279,13 @@ func TestReadWriteCursor(t *testing.T) {
 	require.NoError(t, err)
 
 	expected := map[string]string{
-		bkey("apple"):       bval("apple"),
-		vkey("a", "apple"):  "0",
-		vkey("c", "apple"):  "3",
-		vkey("cx", "apple"): "x",
-		vkey("cy", "apple"): "y",
-		vkey("da", "apple"): "3",
-		vkey("f", "apple"):  "5",
+		f.Bkey("apple"):       f.Bval("apple"),
+		f.Vkey("a", "apple"):  "0",
+		f.Vkey("c", "apple"):  "3",
+		f.Vkey("cx", "apple"): "x",
+		f.Vkey("cy", "apple"): "y",
+		f.Vkey("da", "apple"): "3",
+		f.Vkey("f", "apple"):  "5",
 	}
 	require.Equal(t, expected, f.Dump())
 }
@@ -298,11 +295,10 @@ func TestReadWriteCursor(t *testing.T) {
 func TestReadWriteCursorWithBucketAndValue(t *testing.T) {
 	t.Parallel()
 
-	f := NewEtcdTestFixture(t)
+	f := etcd.NewEtcdTestFixture(t)
 	defer f.Cleanup()
 
-	db, err := newEtcdBackend(context.TODO(), f.BackendConfig())
-	require.NoError(t, err)
+	db := f.NewBackend().(ExtendedBackend)
 
 	// Pre-store the first half of the interval.
 	require.NoError(t, db.Update(func(tx walletdb.ReadWriteTx) error {
@@ -323,7 +319,7 @@ func TestReadWriteCursorWithBucketAndValue(t *testing.T) {
 		return nil
 	}, func() {}))
 
-	err = db.View(func(tx walletdb.ReadTx) error {
+	err := db.View(func(tx walletdb.ReadTx) error {
 		b := tx.ReadBucket([]byte("apple"))
 		require.NotNil(t, b)
 
@@ -360,10 +356,10 @@ func TestReadWriteCursorWithBucketAndValue(t *testing.T) {
 	require.NoError(t, err)
 
 	expected := map[string]string{
-		bkey("apple"):           bval("apple"),
-		bkey("apple", "banana"): bval("apple", "banana"),
-		bkey("apple", "pear"):   bval("apple", "pear"),
-		vkey("key", "apple"):    "val",
+		f.Bkey("apple"):           f.Bval("apple"),
+		f.Bkey("apple", "banana"): f.Bval("apple", "banana"),
+		f.Bkey("apple", "pear"):   f.Bval("apple", "pear"),
+		f.Vkey("key", "apple"):    "val",
 	}
 	require.Equal(t, expected, f.Dump())
 }

@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcwallet/walletdb"
+	"github.com/stretchr/testify/require"
+
 	"go.etcd.io/etcd/clientv3"
 	"go.etcd.io/etcd/clientv3/namespace"
 )
@@ -76,6 +79,13 @@ func NewEtcdTestFixture(t *testing.T) *EtcdTestFixture {
 	}
 }
 
+func (f *EtcdTestFixture) NewBackend() walletdb.DB {
+	db, err := newEtcdBackend(context.TODO(), f.BackendConfig())
+	require.NoError(f.t, err)
+
+	return db
+}
+
 // Put puts a string key/value into the test etcd database.
 func (f *EtcdTestFixture) Put(key, value string) {
 	ctx, cancel := context.WithTimeout(context.TODO(), testEtcdTimeout)
@@ -132,4 +142,16 @@ func (f *EtcdTestFixture) BackendConfig() Config {
 // etcd instance and remove all temp db files form the filesystem.
 func (f *EtcdTestFixture) Cleanup() {
 	f.cleanup()
+}
+
+func (f *EtcdTestFixture) Bkey(buckets ...string) string {
+	return bkey(buckets...)
+}
+
+func (f *EtcdTestFixture) Bval(buckets ...string) string {
+	return bval(buckets...)
+}
+
+func (f *EtcdTestFixture) Vkey(key string, buckets ...string) string {
+	return vkey(key, buckets...)
 }
