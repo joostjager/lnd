@@ -446,25 +446,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 
 	defer cleanUp()
 
-	var loaderOpt btcwallet.LoaderOption
-	if dbs.replicated {
-		// The wallet loader will attempt to use/create the wallet in
-		// the replicated remote DB if we're running in a clustered
-		// environment. This will ensure that all members of the cluster
-		// have access to the same wallet state.
-		loaderOpt = btcwallet.LoaderWithExternalWalletDB(
-			dbs.chanStateDB.Backend,
-		)
-	} else {
-		// When "running locally", LND will use the bbolt wallet.db to
-		// store the wallet located in the chain data dir, parametrized
-		// by the active network.
-		loaderOpt = btcwallet.LoaderWithLocalWalletDB(
-			cfg.networkDir, !cfg.SyncFreelist, cfg.DB.Bolt.DBTimeout,
-		)
-	}
-
-	pwService.SetLoaderOpts([]btcwallet.LoaderOption{loaderOpt})
+	pwService.SetLoaderOpts([]btcwallet.LoaderOption{dbs.walletDB})
 	pwService.SetMacaroonDB(dbs.macaroonDB)
 	walletExists, err := pwService.WalletExists()
 	if err != nil {
@@ -540,7 +522,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 	// over RPC.
 	default:
 		params, err := waitForWalletPassword(
-			cfg, pwService, []btcwallet.LoaderOption{loaderOpt},
+			cfg, pwService, []btcwallet.LoaderOption{dbs.walletDB},
 			interceptor.ShutdownChannel(),
 		)
 		if err != nil {
@@ -699,9 +681,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, interceptor signal.Interceptor) error
 			return cfg.net.Dial("tcp", addr, cfg.ConnectionTimeout)
 		},
 		BlockCacheSize: cfg.BlockCacheSize,
-		LoaderOptions: []btcwallet.LoaderOption{
-			loaderOpt,
-		},
+		LoaderOptions:  []btcwallet.LoaderOption{dbs.walletDB},
 	}
 
 	// Parse coin selection strategy.
@@ -1563,6 +1543,7 @@ type databaseInstances struct {
 	decayedLogDB  kvdb.Backend
 	towerClientDB wtclient.DB
 	towerServerDB watchtower.DB
+	walletDB      btcwallet.LoaderOption
 	replicated    bool
 }
 
@@ -1584,7 +1565,7 @@ func initializeDatabases(ctx context.Context,
 	startOpenTime := time.Now()
 
 	databaseBackends, err := cfg.DB.GetBackends(
-		ctx, cfg.graphDatabaseDir(),
+		ctx, cfg.graphDatabaseDir(), cfg.networkDir,
 		macaroons.NewBoltBackendCreator(
 			cfg.networkDir, macaroons.DBFilename,
 		),
@@ -1617,6 +1598,7 @@ func initializeDatabases(ctx context.Context,
 		dbs = &databaseInstances{
 			macaroonDB:   databaseBackends.MacaroonDB,
 			decayedLogDB: databaseBackends.DecayedLogDB,
+			walletDB:     databaseBackends.WalletDB,
 			replicated:   databaseBackends.Replicated,
 		}
 		closeFuncs = map[string]func() error{

@@ -7,6 +7,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/kvdb"
 	"github.com/lightningnetwork/lnd/kvdb/etcd"
+	"github.com/lightningnetwork/lnd/lnwallet/btcwallet"
 )
 
 const (
@@ -111,13 +112,17 @@ type DatabaseBackends struct {
 	// server data. This might be nil if the watchtower server is disabled.
 	TowerServerDB kvdb.Backend
 
+	// WalletDB is an option that instructs the wallet loader where to load
+	// the underlying wallet database from.
+	WalletDB btcwallet.LoaderOption
+
 	// Replicated indicates whether the database backends are remote, data
 	// replicated instances or local bbolt backed databases.
 	Replicated bool
 }
 
 // GetBackends returns a set of kvdb.Backends as set in the DB config.
-func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
+func (db *DB) GetBackends(ctx context.Context, chanDBPath, walletDBPath string,
 	makeMacaroonBoltDB boltBackendCreator,
 	makeDecayedLogBoltDB boltBackendCreator,
 	makeTowerClientBoltDB boltBackendCreator,
@@ -139,7 +144,15 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
 			DecayedLogDB:  etcdBackend,
 			TowerClientDB: etcdBackend,
 			TowerServerDB: etcdBackend,
-			Replicated:    true,
+			// The wallet loader will attempt to use/create the
+			// wallet in the replicated remote DB if we're running
+			// in a clustered environment. This will ensure that all
+			// members of the cluster have access to the same wallet
+			// state.
+			WalletDB: btcwallet.LoaderWithExternalWalletDB(
+				etcdBackend,
+			),
+			Replicated: true,
 		}, nil
 	}
 
@@ -185,7 +198,14 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
 		DecayedLogDB:  decayedLogBackend,
 		TowerClientDB: towerClientBackend,
 		TowerServerDB: towerServerBackend,
+		// When "running locally", LND will use the bbolt wallet.db to
+		// store the wallet located in the chain data dir, parametrized
+		// by the active network.
+		WalletDB: btcwallet.LoaderWithLocalWalletDB(
+			walletDBPath, !db.Bolt.SyncFreelist, db.Bolt.DBTimeout,
+		),
 	}, nil
+
 }
 
 // Compile-time constraint to ensure Workers implements the Validator interface.
