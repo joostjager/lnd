@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"database/sql"
 	"testing"
 
 	"github.com/btcsuite/btcwallet/walletdb"
@@ -9,28 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/context"
 )
-
-const (
-	dsn    = "postgres://bottle:bottle@localhost:45432/lnd?sslmode=disable"
-	prefix = "test"
-)
-
-func clearTestDb(t *testing.T) {
-	dbConn, err := sql.Open("pgx", dsn)
-	require.NoError(t, err)
-
-	_, err = dbConn.ExecContext(context.Background(), "DROP SCHEMA public CASCADE;")
-	require.NoError(t, err)
-}
-
-func openTestDb(t *testing.T) *db {
-	clearTestDb(t)
-
-	db, err := newPostgresBackend(context.Background(), dsn, prefix)
-	require.NoError(t, err)
-
-	return db
-}
 
 func TestDb(t *testing.T) {
 	db := openTestDb(t)
