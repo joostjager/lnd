@@ -99,6 +99,10 @@ type DatabaseBackends struct {
 	// keys.
 	MacaroonDB kvdb.Backend
 
+	// DecayedLogDB points to a database backend that stores the decayed log
+	// data.
+	DecayedLogDB kvdb.Backend
+
 	// Replicated indicates whether the database backends are remote, data
 	// replicated instances or local bbolt backed databases.
 	Replicated bool
@@ -106,7 +110,8 @@ type DatabaseBackends struct {
 
 // GetBackends returns a set of kvdb.Backends as set in the DB config.
 func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
-	makeMacaroonBoltDB boltBackendCreator) (
+	makeMacaroonBoltDB boltBackendCreator,
+	makeDecayedLogBoltDB boltBackendCreator) (
 	*DatabaseBackends, error) {
 
 	if db.Backend == EtcdBackend {
@@ -118,10 +123,11 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
 		}
 
 		return &DatabaseBackends{
-			GraphDB:     etcdBackend,
-			ChanStateDB: etcdBackend,
-			MacaroonDB:  etcdBackend,
-			Replicated:  true,
+			GraphDB:      etcdBackend,
+			ChanStateDB:  etcdBackend,
+			MacaroonDB:   etcdBackend,
+			DecayedLogDB: etcdBackend,
+			Replicated:   true,
 		}, nil
 	}
 
@@ -143,10 +149,16 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
 		return nil, fmt.Errorf("error opening macaroon DB: %v", err)
 	}
 
+	decayedLogBackend, err := makeDecayedLogBoltDB(db.Bolt)
+	if err != nil {
+		return nil, fmt.Errorf("error opening decayed log DB: %v", err)
+	}
+
 	return &DatabaseBackends{
-		GraphDB:     boltBackend,
-		ChanStateDB: boltBackend,
-		MacaroonDB:  macaroonBackend,
+		GraphDB:      boltBackend,
+		ChanStateDB:  boltBackend,
+		MacaroonDB:   macaroonBackend,
+		DecayedLogDB: decayedLogBackend,
 	}, nil
 }
 

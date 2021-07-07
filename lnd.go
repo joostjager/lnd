@@ -41,6 +41,7 @@ import (
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/chanacceptor"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/kvdb"
 	"github.com/lightningnetwork/lnd/lncfg"
@@ -1591,10 +1592,11 @@ func waitForWalletPassword(cfg *Config,
 // databaseInstances is a struct that holds all instances to the actual
 // databases that are used in lnd.
 type databaseInstances struct {
-	graphDB     *channeldb.DB
-	chanStateDB *channeldb.DB
-	macaroonDB  kvdb.Backend
-	replicated  bool
+	graphDB      *channeldb.DB
+	chanStateDB  *channeldb.DB
+	macaroonDB   kvdb.Backend
+	decayedLogDB kvdb.Backend
+	replicated   bool
 }
 
 // initializeDatabases extracts the current databases that we'll use for normal
@@ -1619,6 +1621,9 @@ func initializeDatabases(ctx context.Context,
 		macaroons.NewBoltBackendCreator(
 			cfg.networkDir, macaroons.DBFilename,
 		),
+		htlcswitch.NewBoltBackendCreator(
+			cfg.graphDatabaseDir(), defaultSphinxDbName,
+		),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to obtain database "+
@@ -1630,8 +1635,9 @@ func initializeDatabases(ctx context.Context,
 	// really know whether we're using a replicated or local DB.
 	var (
 		dbs = &databaseInstances{
-			macaroonDB: databaseBackends.MacaroonDB,
-			replicated: databaseBackends.Replicated,
+			macaroonDB:   databaseBackends.MacaroonDB,
+			decayedLogDB: databaseBackends.DecayedLogDB,
+			replicated:   databaseBackends.Replicated,
 		}
 		closeFuncs = map[string]func() error{
 			// We use the non-decorated kvdb based close functions
@@ -1642,6 +1648,7 @@ func initializeDatabases(ctx context.Context,
 			"graph":         databaseBackends.GraphDB.Close,
 			"channel state": databaseBackends.ChanStateDB.Close,
 			"macaroon":      databaseBackends.MacaroonDB.Close,
+			"sphinxreplay":  databaseBackends.DecayedLogDB.Close,
 		}
 		cleanUp = func() {
 			for name, closeFunc := range closeFuncs {
