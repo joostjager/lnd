@@ -103,6 +103,14 @@ type DatabaseBackends struct {
 	// data.
 	DecayedLogDB kvdb.Backend
 
+	// TowerClientDB points to a database backend that stores the watchtower
+	// client data. This might be nil if the watchtower client is disabled.
+	TowerClientDB kvdb.Backend
+
+	// TowerServerDB points to a database backend that stores the watchtower
+	// server data. This might be nil if the watchtower server is disabled.
+	TowerServerDB kvdb.Backend
+
 	// Replicated indicates whether the database backends are remote, data
 	// replicated instances or local bbolt backed databases.
 	Replicated bool
@@ -111,7 +119,9 @@ type DatabaseBackends struct {
 // GetBackends returns a set of kvdb.Backends as set in the DB config.
 func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
 	makeMacaroonBoltDB boltBackendCreator,
-	makeDecayedLogBoltDB boltBackendCreator) (
+	makeDecayedLogBoltDB boltBackendCreator,
+	makeTowerClientBoltDB boltBackendCreator,
+	makeTowerServerBoltDB boltBackendCreator) (
 	*DatabaseBackends, error) {
 
 	if db.Backend == EtcdBackend {
@@ -123,11 +133,13 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
 		}
 
 		return &DatabaseBackends{
-			GraphDB:      etcdBackend,
-			ChanStateDB:  etcdBackend,
-			MacaroonDB:   etcdBackend,
-			DecayedLogDB: etcdBackend,
-			Replicated:   true,
+			GraphDB:       etcdBackend,
+			ChanStateDB:   etcdBackend,
+			MacaroonDB:    etcdBackend,
+			DecayedLogDB:  etcdBackend,
+			TowerClientDB: etcdBackend,
+			TowerServerDB: etcdBackend,
+			Replicated:    true,
 		}, nil
 	}
 
@@ -154,11 +166,25 @@ func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
 		return nil, fmt.Errorf("error opening decayed log DB: %v", err)
 	}
 
+	// This DB could actually be nil if the watchtower client isn't enabled.
+	towerClientBackend, err := makeTowerClientBoltDB(db.Bolt)
+	if err != nil {
+		return nil, fmt.Errorf("error opening tower client DB: %v", err)
+	}
+
+	// This DB could actually be nil if the watchtower server isn't enabled.
+	towerServerBackend, err := makeTowerServerBoltDB(db.Bolt)
+	if err != nil {
+		return nil, fmt.Errorf("error opening tower server DB: %v", err)
+	}
+
 	return &DatabaseBackends{
-		GraphDB:      boltBackend,
-		ChanStateDB:  boltBackend,
-		MacaroonDB:   macaroonBackend,
-		DecayedLogDB: decayedLogBackend,
+		GraphDB:       boltBackend,
+		ChanStateDB:   boltBackend,
+		MacaroonDB:    macaroonBackend,
+		DecayedLogDB:  decayedLogBackend,
+		TowerClientDB: towerClientBackend,
+		TowerServerDB: towerServerBackend,
 	}, nil
 }
 
