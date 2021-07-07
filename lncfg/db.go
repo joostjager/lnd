@@ -78,6 +78,10 @@ func (db *DB) Init(ctx context.Context, dbPath string) error {
 	return nil
 }
 
+// boltBackendCreator is a type alias for a function that returns a bolt DB
+// backend with the given bolt specific configuration.
+type boltBackendCreator func(boltCfg *kvdb.BoltConfig) (kvdb.Backend, error)
+
 // DatabaseBackends is a two-tuple that holds the set of active database
 // backends for the daemon. The two backends we expose are the graph database
 // backend, and the channel state backend.
@@ -91,13 +95,18 @@ type DatabaseBackends struct {
 	// contains the critical channel state related data.
 	ChanStateDB kvdb.Backend
 
+	// MacaroonDB points to a database backend that stores the macaroon root
+	// keys.
+	MacaroonDB kvdb.Backend
+
 	// Replicated indicates whether the database backends are remote, data
 	// replicated instances or local bbolt backed databases.
 	Replicated bool
 }
 
 // GetBackends returns a set of kvdb.Backends as set in the DB config.
-func (db *DB) GetBackends(ctx context.Context, dbPath string) (
+func (db *DB) GetBackends(ctx context.Context, chanDBPath string,
+	makeMacaroonBoltDB boltBackendCreator) (
 	*DatabaseBackends, error) {
 
 	if db.Backend == EtcdBackend {
@@ -105,19 +114,20 @@ func (db *DB) GetBackends(ctx context.Context, dbPath string) (
 			kvdb.EtcdBackendName, ctx, db.Etcd,
 		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error opening etcd DB: %v", err)
 		}
 
 		return &DatabaseBackends{
 			GraphDB:     etcdBackend,
 			ChanStateDB: etcdBackend,
+			MacaroonDB:  etcdBackend,
 			Replicated:  true,
 		}, nil
 	}
 
 	// We're using all bbolt based databases by default.
 	boltBackend, err := kvdb.GetBoltBackend(&kvdb.BoltBackendConfig{
-		DBPath:            dbPath,
+		DBPath:            chanDBPath,
 		DBFileName:        dbName,
 		DBTimeout:         db.Bolt.DBTimeout,
 		NoFreelistSync:    !db.Bolt.SyncFreelist,
@@ -125,12 +135,18 @@ func (db *DB) GetBackends(ctx context.Context, dbPath string) (
 		AutoCompactMinAge: db.Bolt.AutoCompactMinAge,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error opening bolt DB: %v", err)
+	}
+
+	macaroonBackend, err := makeMacaroonBoltDB(db.Bolt)
+	if err != nil {
+		return nil, fmt.Errorf("error opening macaroon DB: %v", err)
 	}
 
 	return &DatabaseBackends{
 		GraphDB:     boltBackend,
 		ChanStateDB: boltBackend,
+		MacaroonDB:  macaroonBackend,
 	}, nil
 }
 
