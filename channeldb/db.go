@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/wire"
@@ -194,6 +195,10 @@ var (
 			// queried by individual htlc sets.
 			number:    22,
 			migration: mig.CreateTLB(setIDIndexBucket),
+		},
+		{
+			number:    23,
+			migration: funnyInvoiceDatabaseMigration,
 		},
 	}
 
@@ -1364,4 +1369,47 @@ func MakeTestDB(modifiers ...OptionModifier) (*DB, func(), error) {
 	}
 
 	return cdb, cleanUp, nil
+}
+
+func funnyInvoiceDatabaseMigration(tx kvdb.RwTx) error {
+	log.Infof("Funny invoice database migration")
+
+	start := time.Now()
+
+	invoiceB := tx.ReadWriteBucket(invoiceBucket)
+	if invoiceB == nil {
+		return nil
+	}
+
+	var keys [][]byte
+	err := invoiceB.ForEach(func(k, v []byte) error {
+		if v == nil {
+			return nil
+		}
+
+		keys = append(keys, k)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	log.Infof("Invoices to migrate: %v", len(keys))
+
+	for _, k := range keys {
+		data := invoiceB.Get(k)
+		if data == nil {
+			return errors.New("unexpected nil value")
+		}
+		data = append(data, 1)
+		err := invoiceB.Put(k, data)
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Infof("Migration complete in %v", time.Since(start))
+
+	// return errors.New("not implemented")
+	return nil
 }
