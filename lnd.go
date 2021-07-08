@@ -1629,6 +1629,28 @@ func initializeDatabases(ctx context.Context,
 			"instances")
 	}
 
+	ltndLog.Infof("Opening channel state database instance...")
+
+	dbs.chanStateDB, err = channeldb.CreateWithBackend(
+		databaseBackends.ChanStateDB,
+		channeldb.OptionDryRunMigration(cfg.DryRunMigration),
+		channeldb.OptionSetBatchCommitInterval(cfg.DB.BatchCommitInterval),
+	)
+	switch {
+	case err == channeldb.ErrDryRunMigrationOK:
+		return nil, nil, err
+
+	case err != nil:
+		cleanUp()
+
+		err := fmt.Errorf("unable to open channel state DB: %v", err)
+		ltndLog.Error(err)
+		return nil, nil, err
+	}
+
+	// Success, let's overwrite the close function with the decorated one.
+	closeFuncs["channel state"] = dbs.chanStateDB.Close
+
 	// Otherwise, we'll open two instances, one for the state we only need
 	// locally, and the other for things we want to ensure are replicated.
 	dbs.graphDB, err = channeldb.CreateWithBackend(
@@ -1655,28 +1677,6 @@ func initializeDatabases(ctx context.Context,
 
 	// Success, let's overwrite the close function with the decorated one.
 	closeFuncs["graph"] = dbs.graphDB.Close
-
-	ltndLog.Infof("Opening channel state database instance...")
-
-	dbs.chanStateDB, err = channeldb.CreateWithBackend(
-		databaseBackends.ChanStateDB,
-		channeldb.OptionDryRunMigration(cfg.DryRunMigration),
-		channeldb.OptionSetBatchCommitInterval(cfg.DB.BatchCommitInterval),
-	)
-	switch {
-	case err == channeldb.ErrDryRunMigrationOK:
-		return nil, nil, err
-
-	case err != nil:
-		cleanUp()
-
-		err := fmt.Errorf("unable to open channel state DB: %v", err)
-		ltndLog.Error(err)
-		return nil, nil, err
-	}
-
-	// Success, let's overwrite the close function with the decorated one.
-	closeFuncs["channel state"] = dbs.chanStateDB.Close
 
 	openTime := time.Since(startOpenTime)
 	ltndLog.Infof("Database(s) now open (time_to_open=%v)!", openTime)
