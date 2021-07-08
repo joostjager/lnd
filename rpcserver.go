@@ -4855,19 +4855,25 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		addInvoiceData.Preimage = &preimage
 	}
 
-	hash, dbInvoice, err := invoicesrpc.AddInvoice(
-		ctx, addInvoiceCfg, addInvoiceData,
-	)
-	if err != nil {
-		return nil, err
-	}
+	i := 0
+	for {
+		i++
+		hash, dbInvoice, err := invoicesrpc.AddInvoice(
+			ctx, addInvoiceCfg, addInvoiceData,
+		)
+		if err != nil {
+			return nil, err
+		}
 
-	return &lnrpc.AddInvoiceResponse{
-		AddIndex:       dbInvoice.AddIndex,
-		PaymentRequest: string(dbInvoice.PaymentRequest),
-		RHash:          hash[:],
-		PaymentAddr:    dbInvoice.Terms.PaymentAddr[:],
-	}, nil
+		if i == 100 {
+			return &lnrpc.AddInvoiceResponse{
+				AddIndex:       dbInvoice.AddIndex,
+				PaymentRequest: string(dbInvoice.PaymentRequest),
+				RHash:          hash[:],
+				PaymentAddr:    dbInvoice.Terms.PaymentAddr[:],
+			}, nil
+		}
+	}
 }
 
 // LookupInvoice attempts to look up an invoice according to its payment hash.

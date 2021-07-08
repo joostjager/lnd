@@ -368,37 +368,6 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 		forcedHints[h[0].ChannelID] = struct{}{}
 	}
 
-	// If we were requested to include routing hints in the invoice, then
-	// we'll fetch all of our available private channels and create routing
-	// hints for them.
-	if invoice.Private {
-		openChannels, err := cfg.ChanDB.FetchAllChannels()
-		if err != nil {
-			return nil, nil, fmt.Errorf("could not fetch all channels")
-		}
-
-		if len(openChannels) > 0 {
-			// We filter the channels by excluding the ones that were specified by
-			// the caller and were already added.
-			var filteredChannels []*channeldb.OpenChannel
-			for _, c := range openChannels {
-				if _, ok := forcedHints[c.ShortChanID().ToUint64()]; ok {
-					continue
-				}
-				filteredChannels = append(filteredChannels, c)
-			}
-
-			// We'll restrict the number of individual route hints
-			// to 20 to avoid creating overly large invoices.
-			numMaxHophints := 20 - len(forcedHints)
-			hopHints := selectHopHints(
-				amtMSat, cfg, filteredChannels, numMaxHophints,
-			)
-
-			options = append(options, hopHints...)
-		}
-	}
-
 	// Set our desired invoice features and add them to our list of options.
 	var invoiceFeatures *lnwire.FeatureVector
 	if invoice.Amp {
@@ -429,8 +398,14 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 	payReqString, err := payReq.Encode(
 		zpay32.MessageSigner{
 			SignCompact: func(msg []byte) ([]byte, error) {
+				if lastSig != nil {
+					return lastSig, nil
+				}
+
 				hash := chainhash.HashB(msg)
-				return cfg.NodeSigner.SignDigestCompact(hash)
+				sig, err := cfg.NodeSigner.SignDigestCompact(hash)
+				lastSig = sig
+				return sig, err
 			},
 		},
 	)
@@ -467,6 +442,8 @@ func AddInvoice(ctx context.Context, cfg *AddInvoiceConfig,
 
 	return &paymentHash, newInvoice, nil
 }
+
+var lastSig []byte
 
 // chanCanBeHopHint returns true if the target channel is eligible to be a hop
 // hint.
