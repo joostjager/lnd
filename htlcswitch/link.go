@@ -1238,6 +1238,8 @@ func (l *channelLink) processHtlcResolution(resolution invoices.HtlcResolution,
 		l.log.Debugf("received settle resolution for %v "+
 			"with outcome: %v", circuitKey, res.Outcome)
 
+		time.Sleep(time.Second)
+
 		return l.settleHTLC(res.Preimage, htlc.pd)
 
 	// For htlc failures, we get the relevant failure message based
