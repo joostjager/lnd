@@ -1560,11 +1560,11 @@ func messageSummary(msg lnwire.Message) string {
 			msg.PendingChannelID[:], msg.FundingPoint)
 
 	case *lnwire.FundingSigned:
-		return fmt.Sprintf("chan_id=%v", msg.ChanID)
+		return fmt.Sprintf("chan_id=%v", chainhash.Hash(msg.ChanID))
 
 	case *lnwire.FundingLocked:
 		return fmt.Sprintf("chan_id=%v, next_point=%x",
-			msg.ChanID, msg.NextPerCommitmentPoint.SerializeCompressed())
+			chainhash.Hash(msg.ChanID), msg.NextPerCommitmentPoint.SerializeCompressed())
 
 	case *lnwire.Shutdown:
 		return fmt.Sprintf("chan_id=%v, script=%x", msg.ChannelID,
@@ -1576,28 +1576,28 @@ func messageSummary(msg lnwire.Message) string {
 
 	case *lnwire.UpdateAddHTLC:
 		return fmt.Sprintf("chan_id=%v, id=%v, amt=%v, expiry=%v, hash=%x",
-			msg.ChanID, msg.ID, msg.Amount, msg.Expiry, msg.PaymentHash[:])
+			chainhash.Hash(msg.ChanID), msg.ID, msg.Amount, msg.Expiry, msg.PaymentHash[:])
 
 	case *lnwire.UpdateFailHTLC:
-		return fmt.Sprintf("chan_id=%v, id=%v, reason=%x", msg.ChanID,
+		return fmt.Sprintf("chan_id=%v, id=%v, reason=%x", chainhash.Hash(msg.ChanID),
 			msg.ID, msg.Reason)
 
 	case *lnwire.UpdateFulfillHTLC:
 		return fmt.Sprintf("chan_id=%v, id=%v, pre_image=%x",
-			msg.ChanID, msg.ID, msg.PaymentPreimage[:])
+			chainhash.Hash(msg.ChanID), msg.ID, msg.PaymentPreimage[:])
 
 	case *lnwire.CommitSig:
-		return fmt.Sprintf("chan_id=%v, num_htlcs=%v", msg.ChanID,
+		return fmt.Sprintf("chan_id=%v, num_htlcs=%v", chainhash.Hash(msg.ChanID),
 			len(msg.HtlcSigs))
 
 	case *lnwire.RevokeAndAck:
 		return fmt.Sprintf("chan_id=%v, rev=%x, next_point=%x",
-			msg.ChanID, msg.Revocation[:],
+			chainhash.Hash(msg.ChanID), msg.Revocation[:],
 			msg.NextRevocationKey.SerializeCompressed())
 
 	case *lnwire.UpdateFailMalformedHTLC:
 		return fmt.Sprintf("chan_id=%v, id=%v, fail_code=%v",
-			msg.ChanID, msg.ID, msg.FailureCode)
+			chainhash.Hash(msg.ChanID), msg.ID, msg.FailureCode)
 
 	case *lnwire.Error:
 		return fmt.Sprintf("%v", msg.Error())
